@@ -166,7 +166,7 @@ func (r *mutationResolver) VerifyMagicLink(ctx context.Context, input types.Veri
 
 	email, err := r.iam.AuthService.GetMagicLinkEmail(ctx, input.Token)
 	if err != nil {
-		return nil, r.magicLinkError(ctx, err, "cannot get magic link email")
+		return nil, magicLinkError(ctx, r.logger, err, "cannot get magic link email")
 	}
 
 	// Already signed in as the link's owner: nothing to do, and leaving the
@@ -186,33 +186,13 @@ func (r *mutationResolver) VerifyMagicLink(ctx context.Context, input types.Veri
 
 	_, session, continueURL, err := r.iam.AuthService.OpenSessionWithMagicLink(ctx, input.Token)
 	if err != nil {
-		return nil, r.magicLinkError(ctx, err, "cannot open session with magic link")
+		return nil, magicLinkError(ctx, r.logger, err, "cannot open session with magic link")
 	}
 
 	w := gqlutils.HTTPResponseWriterFromContext(ctx)
 	r.sessionCookie.Set(w, session)
 
 	return &types.VerifyMagicLinkPayload{Continue: continueURL}, nil
-}
-
-// magicLinkError maps token failures onto the GraphQL error codes the console
-// uses to route to the expired and already-used pages.
-func (r *mutationResolver) magicLinkError(ctx context.Context, err error, logMsg string) error {
-	if _, ok := errors.AsType[*iam.ErrExpiredToken](err); ok {
-		return gqlutils.TokenExpired(ctx, err)
-	}
-
-	if _, ok := errors.AsType[*iam.ErrTokenAlreadyUsed](err); ok {
-		return gqlutils.TokenAlreadyUsed(ctx, err)
-	}
-
-	if _, ok := errors.AsType[*iam.ErrInvalidToken](err); ok {
-		return gqlutils.Invalid(ctx, err)
-	}
-
-	r.logger.ErrorCtx(ctx, logMsg, log.Error(err))
-
-	return gqlutils.Internal(ctx)
 }
 
 // SignOut is the resolver for the signOut field.
