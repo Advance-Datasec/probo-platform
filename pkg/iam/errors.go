@@ -52,6 +52,19 @@ func (e ErrExpiredToken) Error() string {
 	return e.message
 }
 
+// ErrNoActiveAccount is returned when a magic link is redeemed for an address
+// that has no active membership: never invited, invitation still pending, or
+// since deactivated.
+type ErrNoActiveAccount struct{ message string }
+
+func NewNoActiveAccountError() error {
+	return &ErrNoActiveAccount{"no active account for this email address"}
+}
+
+func (e ErrNoActiveAccount) Error() string {
+	return e.message
+}
+
 type ErrInvitationAlreadyAccepted struct{ InvitationID gid.GID }
 
 func NewInvitationAlreadyAcceptedError(invitationID gid.GID) error {

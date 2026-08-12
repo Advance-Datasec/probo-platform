@@ -43,6 +43,14 @@ func magicLinkError(ctx context.Context, logger *log.Logger, err error, logMsg s
 		return gqlutils.Invalid(ctx, err)
 	}
 
+	// Deliberately reported as an invalid token: telling the caller the address
+	// has no active account would leak membership to anyone holding a stale link.
+	if _, ok := errors.AsType[*iam.ErrNoActiveAccount](err); ok {
+		logger.WarnCtx(ctx, "magic link redeemed without an active profile", log.Error(err))
+
+		return gqlutils.Invalid(ctx, iam.NewInvalidTokenError())
+	}
+
 	logger.ErrorCtx(ctx, logMsg, log.Error(err))
 
 	return gqlutils.Internal(ctx)

@@ -147,6 +147,10 @@ func (r *mutationResolver) SendMagicLink(ctx context.Context, input types.SendMa
 		OrganizationID: input.OrganizationID,
 		URLPath:        "auth/verify-magic-link",
 		Continue:       input.Continue,
+		// Console magic links are a sign-in method for existing members, not a
+		// self-registration path: only users who accepted an invitation and are
+		// still active get one.
+		RequireActiveProfile: true,
 	}
 
 	if err := r.iam.AuthService.SendMagicLink(ctx, req); err != nil {

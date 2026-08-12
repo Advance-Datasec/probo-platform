@@ -64,6 +64,12 @@ type (
 		Continue       *string
 		// If users tries to connect to compliance page, we must brand the emails accordingly
 		CompliancePageID *gid.GID
+		// Restricts the link to identities with an active membership profile, i.e.
+		// people who accepted an invitation and have not been deactivated. Set by
+		// the console, where magic links are a sign-in method rather than a way to
+		// self-register; the compliance page leaves it false so visitors can still
+		// provision themselves on first use.
+		RequireActiveProfile bool
 	}
 
 	PasswordResetData struct {
@@ -73,6 +79,10 @@ type (
 	MagicLinkData struct {
 		Email    mail.Addr `json:"email"`
 		Continue *string   `json:"continue"`
+		// Carried in the signed token rather than passed to the redeeming call so
+		// the restriction cannot be dropped by redeeming a console-issued link
+		// through the compliance page endpoint.
+		RequireActiveProfile bool `json:"requireActiveProfile,omitempty"`
 	}
 )
 
@@ -550,14 +560,37 @@ func (s AuthService) OpenSessionWithPassword(ctx context.Context, identityID gid
 	return session, nil
 }
 
+// hasActiveProfile reports whether the identity belongs to at least one
+// organization with an active membership profile. Invitations create the
+// profile as INACTIVE and flip it to ACTIVE on acceptance, and deactivating a
+// user flips it back, so this is the test for "accepted and still allowed in".
+func hasActiveProfile(ctx context.Context, conn pg.Querier, identityID gid.GID) (bool, error) {
+	profiles := &coredata.MembershipProfiles{}
+
+	count, err := profiles.CountByIdentityID(
+		ctx,
+		conn,
+		identityID,
+		coredata.NewMembershipProfileFilter(nil).
+			WithMembership().
+			WithState(coredata.ProfileStateActive),
+	)
+	if err != nil {
+		return false, fmt.Errorf("cannot count active membership profiles: %w", err)
+	}
+
+	return count > 0, nil
+}
+
 func (s AuthService) SendMagicLink(ctx context.Context, req *SendMagicLinkRequest) error {
 	tokenString, err := statelesstoken.NewToken(
 		s.tokenSecret,
 		TokenTypeMagicLink,
 		s.magicLinkTokenValidity,
 		MagicLinkData{
-			Email:    req.Email,
-			Continue: req.Continue,
+			Email:                req.Email,
+			Continue:             req.Continue,
+			RequireActiveProfile: req.RequireActiveProfile,
 		},
 	)
 	if err != nil {
@@ -567,19 +600,9 @@ func (s AuthService) SendMagicLink(ctx context.Context, req *SendMagicLinkReques
 	return s.pg.WithTx(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
-			hashedToken := HashToken(tokenString)
-
-			token := &coredata.Token{
-				ID:          gid.New(gid.NilTenant, coredata.TokenEntityType),
-				HashedValue: hashedToken,
-				CreatedAt:   time.Now(),
-			}
-			if err := token.Insert(ctx, tx); err != nil {
-				return fmt.Errorf("cannot insert token: %w", err)
-			}
-
 			fullName := req.Email.Username()
 			identity := &coredata.Identity{}
+			identityFound := true
 
 			if err := identity.LoadByEmail(ctx, tx, req.Email); err == nil {
 				if identity.FullName != "" {
@@ -589,6 +612,38 @@ func (s AuthService) SendMagicLink(ctx context.Context, req *SendMagicLinkReques
 				if !errors.Is(err, coredata.ErrResourceNotFound) {
 					return fmt.Errorf("cannot load identity: %w", err)
 				}
+
+				identityFound = false
+			}
+
+			// Callers that require an active profile get no email and no token row
+			// for unknown, pending, or deactivated addresses. Returning nil rather
+			// than an error keeps the caller's response identical either way, so it
+			// cannot be used to enumerate accounts.
+			if req.RequireActiveProfile {
+				if !identityFound {
+					return nil
+				}
+
+				active, err := hasActiveProfile(ctx, tx, identity.ID)
+				if err != nil {
+					return err
+				}
+
+				if !active {
+					return nil
+				}
+			}
+
+			hashedToken := HashToken(tokenString)
+
+			token := &coredata.Token{
+				ID:          gid.New(gid.NilTenant, coredata.TokenEntityType),
+				HashedValue: hashedToken,
+				CreatedAt:   time.Now(),
+			}
+			if err := token.Insert(ctx, tx); err != nil {
+				return fmt.Errorf("cannot insert token: %w", err)
 			}
 
 			organizationName := ""
@@ -697,20 +752,39 @@ func (s AuthService) OpenSessionWithMagicLink(ctx context.Context, tokenString s
 
 			err := identity.LoadByEmail(ctx, tx, payload.Data.Email)
 			if err != nil {
-				if errors.Is(err, coredata.ErrResourceNotFound) {
-					identity = &coredata.Identity{
-						ID:                   gid.New(gid.NilTenant, coredata.IdentityEntityType),
-						EmailAddress:         payload.Data.Email,
-						EmailAddressVerified: true,
-						CreatedAt:            now,
-						UpdatedAt:            now,
-					}
-
-					if err := identity.Insert(ctx, tx); err != nil {
-						return fmt.Errorf("cannot create identity: %w", err)
-					}
-				} else {
+				if !errors.Is(err, coredata.ErrResourceNotFound) {
 					return fmt.Errorf("cannot load identity by email: %w", err)
+				}
+
+				// Tokens restricted to active profiles never provision an account:
+				// creating one here would let anyone holding a link sign themselves up.
+				if payload.Data.RequireActiveProfile {
+					return NewNoActiveAccountError()
+				}
+
+				identity = &coredata.Identity{
+					ID:                   gid.New(gid.NilTenant, coredata.IdentityEntityType),
+					EmailAddress:         payload.Data.Email,
+					EmailAddressVerified: true,
+					CreatedAt:            now,
+					UpdatedAt:            now,
+				}
+
+				if err := identity.Insert(ctx, tx); err != nil {
+					return fmt.Errorf("cannot create identity: %w", err)
+				}
+			}
+
+			// Re-checked at redemption, not just at send time, so a user deactivated
+			// while a valid link is still in their inbox cannot use it.
+			if payload.Data.RequireActiveProfile {
+				active, err := hasActiveProfile(ctx, tx, identity.ID)
+				if err != nil {
+					return err
+				}
+
+				if !active {
+					return NewNoActiveAccountError()
 				}
 			}
 
