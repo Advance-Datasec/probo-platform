@@ -21,6 +21,9 @@
 -- Measures are internal controls. Rename the tables, columns, enum types,
 -- and stored values. Security and supplementary measures stay as they are.
 
+-- NOT NULL constraints only have names on PostgreSQL 18 and later; the
+-- renames below are skipped on older servers, where there is nothing to rename.
+
 ALTER TABLE measures RENAME TO internal_controls;
 ALTER TABLE measures_documents RENAME TO internal_controls_documents;
 ALTER TABLE measures_third_parties RENAME TO internal_controls_third_parties;
@@ -46,9 +49,17 @@ ALTER TYPE treatment_plan_event_type RENAME VALUE 'MEASURE_LINKED' TO 'INTERNAL_
 ALTER TYPE treatment_plan_event_type RENAME VALUE 'MEASURE_UNLINKED' TO 'INTERNAL_CONTROL_UNLINKED';
 
 ALTER TABLE evidences RENAME CONSTRAINT evidences_measure_id_fkey TO evidences_internal_control_id_fkey;
-ALTER TABLE evidences RENAME CONSTRAINT evidences_measure_id_not_null TO evidences_internal_control_id_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'evidences_measure_id_not_null' AND conrelid = 'evidences'::regclass) THEN
+        ALTER TABLE evidences RENAME CONSTRAINT evidences_measure_id_not_null TO evidences_internal_control_id_not_null;
+    END IF;
+END $$;
 
-ALTER TABLE internal_controls RENAME CONSTRAINT measures_implementation_status_not_null TO internal_controls_implementation_status_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measures_implementation_status_not_null' AND conrelid = 'internal_controls'::regclass) THEN
+        ALTER TABLE internal_controls RENAME CONSTRAINT measures_implementation_status_not_null TO internal_controls_implementation_status_not_null;
+    END IF;
+END $$;
 ALTER TABLE internal_controls RENAME CONSTRAINT measures_operating_frequency_shape_check TO internal_controls_operating_frequency_shape_check;
 ALTER TABLE internal_controls RENAME CONSTRAINT measures_organization_id_code_key TO internal_controls_organization_id_code_key;
 ALTER TABLE internal_controls RENAME CONSTRAINT measures_owner_profile_id_fkey TO internal_controls_owner_profile_id_fkey;
@@ -56,54 +67,162 @@ ALTER TABLE internal_controls RENAME CONSTRAINT measures_owner_reviewer_distinct
 ALTER TABLE internal_controls RENAME CONSTRAINT measures_reviewer_profile_id_fkey TO internal_controls_reviewer_profile_id_fkey;
 ALTER TABLE internal_controls RENAME CONSTRAINT mitigations_org_ref_unique TO internal_controls_organization_id_reference_id_key;
 
-ALTER TABLE controls_internal_controls RENAME CONSTRAINT controls_measures_organization_id_not_null TO controls_internal_controls_organization_id_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'controls_measures_organization_id_not_null' AND conrelid = 'controls_internal_controls'::regclass) THEN
+        ALTER TABLE controls_internal_controls RENAME CONSTRAINT controls_measures_organization_id_not_null TO controls_internal_controls_organization_id_not_null;
+    END IF;
+END $$;
 ALTER TABLE controls_internal_controls RENAME CONSTRAINT controls_mitigations_pkey TO controls_internal_controls_pkey;
 ALTER TABLE controls_internal_controls RENAME CONSTRAINT fk_controls_mitigations_mitigation_id TO controls_internal_controls_internal_control_id_fkey;
 
-ALTER TABLE risks_internal_controls RENAME CONSTRAINT risks_measures_organization_id_not_null TO risks_internal_controls_organization_id_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'risks_measures_organization_id_not_null' AND conrelid = 'risks_internal_controls'::regclass) THEN
+        ALTER TABLE risks_internal_controls RENAME CONSTRAINT risks_measures_organization_id_not_null TO risks_internal_controls_organization_id_not_null;
+    END IF;
+END $$;
 ALTER TABLE risks_internal_controls RENAME CONSTRAINT risks_mitigations_pkey TO risks_internal_controls_pkey;
 ALTER TABLE risks_internal_controls DROP CONSTRAINT risks_mesures_mesure_id_fkey;
 ALTER TABLE risks_internal_controls RENAME CONSTRAINT risks_mitigations_mitigation_id_fkey TO risks_internal_controls_internal_control_id_fkey;
 
-ALTER TABLE internal_controls_documents RENAME CONSTRAINT measures_documents_created_at_not_null TO internal_controls_documents_created_at_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measures_documents_created_at_not_null' AND conrelid = 'internal_controls_documents'::regclass) THEN
+        ALTER TABLE internal_controls_documents RENAME CONSTRAINT measures_documents_created_at_not_null TO internal_controls_documents_created_at_not_null;
+    END IF;
+END $$;
 ALTER TABLE internal_controls_documents RENAME CONSTRAINT measures_documents_document_id_fkey TO internal_controls_documents_document_id_fkey;
-ALTER TABLE internal_controls_documents RENAME CONSTRAINT measures_documents_document_id_not_null TO internal_controls_documents_document_id_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measures_documents_document_id_not_null' AND conrelid = 'internal_controls_documents'::regclass) THEN
+        ALTER TABLE internal_controls_documents RENAME CONSTRAINT measures_documents_document_id_not_null TO internal_controls_documents_document_id_not_null;
+    END IF;
+END $$;
 ALTER TABLE internal_controls_documents RENAME CONSTRAINT measures_documents_measure_id_fkey TO internal_controls_documents_internal_control_id_fkey;
-ALTER TABLE internal_controls_documents RENAME CONSTRAINT measures_documents_measure_id_not_null TO internal_controls_documents_internal_control_id_not_null;
-ALTER TABLE internal_controls_documents RENAME CONSTRAINT measures_documents_organization_id_not_null TO internal_controls_documents_organization_id_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measures_documents_measure_id_not_null' AND conrelid = 'internal_controls_documents'::regclass) THEN
+        ALTER TABLE internal_controls_documents RENAME CONSTRAINT measures_documents_measure_id_not_null TO internal_controls_documents_internal_control_id_not_null;
+    END IF;
+END $$;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measures_documents_organization_id_not_null' AND conrelid = 'internal_controls_documents'::regclass) THEN
+        ALTER TABLE internal_controls_documents RENAME CONSTRAINT measures_documents_organization_id_not_null TO internal_controls_documents_organization_id_not_null;
+    END IF;
+END $$;
 ALTER TABLE internal_controls_documents RENAME CONSTRAINT measures_documents_pkey TO internal_controls_documents_pkey;
-ALTER TABLE internal_controls_documents RENAME CONSTRAINT measures_documents_tenant_id_not_null TO internal_controls_documents_tenant_id_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measures_documents_tenant_id_not_null' AND conrelid = 'internal_controls_documents'::regclass) THEN
+        ALTER TABLE internal_controls_documents RENAME CONSTRAINT measures_documents_tenant_id_not_null TO internal_controls_documents_tenant_id_not_null;
+    END IF;
+END $$;
 
-ALTER TABLE internal_controls_third_parties RENAME CONSTRAINT measures_third_parties_created_at_not_null TO internal_controls_third_parties_created_at_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measures_third_parties_created_at_not_null' AND conrelid = 'internal_controls_third_parties'::regclass) THEN
+        ALTER TABLE internal_controls_third_parties RENAME CONSTRAINT measures_third_parties_created_at_not_null TO internal_controls_third_parties_created_at_not_null;
+    END IF;
+END $$;
 ALTER TABLE internal_controls_third_parties RENAME CONSTRAINT measures_third_parties_measure_id_fkey TO internal_controls_third_parties_internal_control_id_fkey;
-ALTER TABLE internal_controls_third_parties RENAME CONSTRAINT measures_third_parties_measure_id_not_null TO internal_controls_third_parties_internal_control_id_not_null;
-ALTER TABLE internal_controls_third_parties RENAME CONSTRAINT measures_third_parties_organization_id_not_null TO internal_controls_third_parties_organization_id_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measures_third_parties_measure_id_not_null' AND conrelid = 'internal_controls_third_parties'::regclass) THEN
+        ALTER TABLE internal_controls_third_parties RENAME CONSTRAINT measures_third_parties_measure_id_not_null TO internal_controls_third_parties_internal_control_id_not_null;
+    END IF;
+END $$;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measures_third_parties_organization_id_not_null' AND conrelid = 'internal_controls_third_parties'::regclass) THEN
+        ALTER TABLE internal_controls_third_parties RENAME CONSTRAINT measures_third_parties_organization_id_not_null TO internal_controls_third_parties_organization_id_not_null;
+    END IF;
+END $$;
 ALTER TABLE internal_controls_third_parties RENAME CONSTRAINT measures_third_parties_pkey TO internal_controls_third_parties_pkey;
-ALTER TABLE internal_controls_third_parties RENAME CONSTRAINT measures_third_parties_tenant_id_not_null TO internal_controls_third_parties_tenant_id_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measures_third_parties_tenant_id_not_null' AND conrelid = 'internal_controls_third_parties'::regclass) THEN
+        ALTER TABLE internal_controls_third_parties RENAME CONSTRAINT measures_third_parties_tenant_id_not_null TO internal_controls_third_parties_tenant_id_not_null;
+    END IF;
+END $$;
 ALTER TABLE internal_controls_third_parties RENAME CONSTRAINT measures_third_parties_third_party_id_fkey TO internal_controls_third_parties_third_party_id_fkey;
-ALTER TABLE internal_controls_third_parties RENAME CONSTRAINT measures_third_parties_third_party_id_not_null TO internal_controls_third_parties_third_party_id_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measures_third_parties_third_party_id_not_null' AND conrelid = 'internal_controls_third_parties'::regclass) THEN
+        ALTER TABLE internal_controls_third_parties RENAME CONSTRAINT measures_third_parties_third_party_id_not_null TO internal_controls_third_parties_third_party_id_not_null;
+    END IF;
+END $$;
 
-ALTER TABLE treatment_plans_internal_controls RENAME CONSTRAINT treatment_plans_measures_created_at_not_null TO treatment_plans_internal_controls_created_at_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'treatment_plans_measures_created_at_not_null' AND conrelid = 'treatment_plans_internal_controls'::regclass) THEN
+        ALTER TABLE treatment_plans_internal_controls RENAME CONSTRAINT treatment_plans_measures_created_at_not_null TO treatment_plans_internal_controls_created_at_not_null;
+    END IF;
+END $$;
 ALTER TABLE treatment_plans_internal_controls RENAME CONSTRAINT treatment_plans_measures_measure_id_fkey TO treatment_plans_internal_controls_internal_control_id_fkey;
-ALTER TABLE treatment_plans_internal_controls RENAME CONSTRAINT treatment_plans_measures_measure_id_not_null TO treatment_plans_internal_controls_internal_control_id_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'treatment_plans_measures_measure_id_not_null' AND conrelid = 'treatment_plans_internal_controls'::regclass) THEN
+        ALTER TABLE treatment_plans_internal_controls RENAME CONSTRAINT treatment_plans_measures_measure_id_not_null TO treatment_plans_internal_controls_internal_control_id_not_null;
+    END IF;
+END $$;
 ALTER TABLE treatment_plans_internal_controls RENAME CONSTRAINT treatment_plans_measures_organization_id_fkey TO treatment_plans_internal_controls_organization_id_fkey;
-ALTER TABLE treatment_plans_internal_controls RENAME CONSTRAINT treatment_plans_measures_organization_id_not_null TO treatment_plans_internal_controls_organization_id_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'treatment_plans_measures_organization_id_not_null' AND conrelid = 'treatment_plans_internal_controls'::regclass) THEN
+        ALTER TABLE treatment_plans_internal_controls RENAME CONSTRAINT treatment_plans_measures_organization_id_not_null TO treatment_plans_internal_controls_organization_id_not_null;
+    END IF;
+END $$;
 ALTER TABLE treatment_plans_internal_controls RENAME CONSTRAINT treatment_plans_measures_pkey TO treatment_plans_internal_controls_pkey;
-ALTER TABLE treatment_plans_internal_controls RENAME CONSTRAINT treatment_plans_measures_tenant_id_not_null TO treatment_plans_internal_controls_tenant_id_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'treatment_plans_measures_tenant_id_not_null' AND conrelid = 'treatment_plans_internal_controls'::regclass) THEN
+        ALTER TABLE treatment_plans_internal_controls RENAME CONSTRAINT treatment_plans_measures_tenant_id_not_null TO treatment_plans_internal_controls_tenant_id_not_null;
+    END IF;
+END $$;
 ALTER TABLE treatment_plans_internal_controls RENAME CONSTRAINT treatment_plans_measures_treatment_plan_id_fkey TO treatment_plans_internal_controls_treatment_plan_id_fkey;
-ALTER TABLE treatment_plans_internal_controls RENAME CONSTRAINT treatment_plans_measures_treatment_plan_id_not_null TO treatment_plans_internal_controls_treatment_plan_id_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'treatment_plans_measures_treatment_plan_id_not_null' AND conrelid = 'treatment_plans_internal_controls'::regclass) THEN
+        ALTER TABLE treatment_plans_internal_controls RENAME CONSTRAINT treatment_plans_measures_treatment_plan_id_not_null TO treatment_plans_internal_controls_treatment_plan_id_not_null;
+    END IF;
+END $$;
 
-ALTER TABLE treatment_plan_events RENAME CONSTRAINT treatment_plan_events_measure_ids_not_null TO treatment_plan_events_internal_control_ids_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'treatment_plan_events_measure_ids_not_null' AND conrelid = 'treatment_plan_events'::regclass) THEN
+        ALTER TABLE treatment_plan_events RENAME CONSTRAINT treatment_plan_events_measure_ids_not_null TO treatment_plan_events_internal_control_ids_not_null;
+    END IF;
+END $$;
 
-ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_category_not_null TO internal_control_events_category_not_null;
-ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_created_at_not_null TO internal_control_events_created_at_not_null;
-ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_event_type_not_null TO internal_control_events_event_type_not_null;
-ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_measure_created_at_not_null TO internal_control_events_internal_control_created_at_not_null;
-ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_measure_id_not_null TO internal_control_events_internal_control_id_not_null;
-ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_name_not_null TO internal_control_events_name_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measure_events_category_not_null' AND conrelid = 'internal_control_events'::regclass) THEN
+        ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_category_not_null TO internal_control_events_category_not_null;
+    END IF;
+END $$;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measure_events_created_at_not_null' AND conrelid = 'internal_control_events'::regclass) THEN
+        ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_created_at_not_null TO internal_control_events_created_at_not_null;
+    END IF;
+END $$;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measure_events_event_type_not_null' AND conrelid = 'internal_control_events'::regclass) THEN
+        ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_event_type_not_null TO internal_control_events_event_type_not_null;
+    END IF;
+END $$;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measure_events_measure_created_at_not_null' AND conrelid = 'internal_control_events'::regclass) THEN
+        ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_measure_created_at_not_null TO internal_control_events_internal_control_created_at_not_null;
+    END IF;
+END $$;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measure_events_measure_id_not_null' AND conrelid = 'internal_control_events'::regclass) THEN
+        ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_measure_id_not_null TO internal_control_events_internal_control_id_not_null;
+    END IF;
+END $$;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measure_events_name_not_null' AND conrelid = 'internal_control_events'::regclass) THEN
+        ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_name_not_null TO internal_control_events_name_not_null;
+    END IF;
+END $$;
 ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_organization_id_fkey TO internal_control_events_organization_id_fkey;
-ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_organization_id_not_null TO internal_control_events_organization_id_not_null;
-ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_state_not_null TO internal_control_events_state_not_null;
-ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_tenant_id_not_null TO internal_control_events_tenant_id_not_null;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measure_events_organization_id_not_null' AND conrelid = 'internal_control_events'::regclass) THEN
+        ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_organization_id_not_null TO internal_control_events_organization_id_not_null;
+    END IF;
+END $$;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measure_events_state_not_null' AND conrelid = 'internal_control_events'::regclass) THEN
+        ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_state_not_null TO internal_control_events_state_not_null;
+    END IF;
+END $$;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'measure_events_tenant_id_not_null' AND conrelid = 'internal_control_events'::regclass) THEN
+        ALTER TABLE internal_control_events RENAME CONSTRAINT measure_events_tenant_id_not_null TO internal_control_events_tenant_id_not_null;
+    END IF;
+END $$;
 
 ALTER INDEX measures_search_idx RENAME TO internal_controls_search_idx;
