@@ -1,21 +1,26 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package list
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -24,7 +29,7 @@ import (
 )
 
 const listQuery = `
-query($id: ID!, $first: Int, $after: CursorKey) {
+query CookieCategoryList($id: ID!, $first: Int, $after: CursorKey) {
   node(id: $id) {
     __typename
     ... on CookieBanner {
@@ -61,6 +66,7 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	var (
 		flagBannerID string
 		flagLimit    int
+		flagAfter    string
 		flagOutput   *string
 	)
 
@@ -74,88 +80,54 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
+			if err := cmdutil.ValidateLimit(flagLimit); err != nil {
+				return err
+			}
+
 			if flagBannerID == "" {
 				return fmt.Errorf("banner-id is required; pass --banner-id")
 			}
 
-			cfg, err := f.Config()
+			client, _, err := f.GraphQLClient(cmdutil.ConsoleEndpoint)
 			if err != nil {
 				return err
 			}
-
-			host, hc, err := cfg.DefaultHost()
-			if err != nil {
-				return err
-			}
-
-			client := api.NewClient(
-				host,
-				hc.Token,
-				"/api/console/v1/graphql",
-				cfg.HTTPTimeoutDuration(),
-				cmdutil.TokenRefreshOption(cfg, host, hc),
-			)
 
 			variables := map[string]any{"id": flagBannerID}
 
-			categories, totalCount, err := api.Paginate(
+			categories, totalCount, nextCursor, err := api.Paginate(
 				client,
 				listQuery,
 				variables,
 				flagLimit,
-				func(data json.RawMessage) (*api.Connection[category], error) {
-					var resp struct {
-						Node *struct {
-							Typename   string                   `json:"__typename"`
-							Categories api.Connection[category] `json:"categories"`
-						} `json:"node"`
-					}
-					if err := json.Unmarshal(data, &resp); err != nil {
-						return nil, err
-					}
-
-					if resp.Node == nil {
-						return nil, fmt.Errorf("cookie banner %s not found", flagBannerID)
-					}
-
-					if resp.Node.Typename != "CookieBanner" {
-						return nil, fmt.Errorf("expected CookieBanner node, got %s", resp.Node.Typename)
-					}
-
-					return &resp.Node.Categories, nil
-				},
+				flagAfter,
+				api.NodeConnection[category]("categories", "CookieBanner", fmt.Sprintf("cookie banner %s not found", flagBannerID)),
 			)
 			if err != nil {
 				return err
 			}
 
-			if *flagOutput == cmdutil.OutputJSON {
-				return cmdutil.PrintJSON(f.IOStreams.Out, categories)
-			}
-
-			if len(categories) == 0 {
-				_, _ = fmt.Fprintln(f.IOStreams.Out, "No cookie categories found.")
-				return nil
-			}
-
-			rows := make([][]string, 0, len(categories))
-			for _, c := range categories {
-				rows = append(rows, []string{c.ID, c.Name, c.Slug, c.Kind, fmt.Sprintf("%d", c.Rank)})
-			}
-
-			t := cmdutil.NewTable("ID", "NAME", "SLUG", "KIND", "RANK").Rows(rows...)
-			_, _ = fmt.Fprintln(f.IOStreams.Out, t)
-
-			if totalCount > len(categories) {
-				_, _ = fmt.Fprintf(f.IOStreams.ErrOut, "\nShowing %d of %d cookie categories\n", len(categories), totalCount)
-			}
-
-			return nil
+			return cmdutil.PrintList(
+				f.IOStreams,
+				*flagOutput,
+				categories,
+				totalCount,
+				cmdutil.ListView[category]{
+					Empty:      "No cookie categories found.",
+					Noun:       "cookie categories",
+					NextCursor: nextCursor,
+					Headers:    []string{"ID", "NAME", "SLUG", "KIND", "RANK"},
+					Row: func(c category) ([]string, error) {
+						return []string{c.ID, c.Name, c.Slug, c.Kind, fmt.Sprintf("%d", c.Rank)}, nil
+					},
+				},
+			)
 		},
 	}
 
 	cmd.Flags().StringVar(&flagBannerID, "banner-id", "", "Cookie banner ID (required)")
 	cmd.Flags().IntVarP(&flagLimit, "limit", "L", 30, "Maximum number of items")
+	cmdutil.AddAfterFlag(cmd, &flagAfter)
 	flagOutput = cmdutil.AddOutputFlag(cmd)
 
 	_ = cmd.MarkFlagRequired("banner-id")

@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
-// Use of this source code is governed by the ISC license
+// Use of this source code is governed by the MIT license
 // that can be found in the LICENSE file.
 
-import { tv } from "tailwind-variants";
+import { tv } from "tailwind-variants/lite";
 
 export const tableColumnMenuVariants = tv({
   slots: {

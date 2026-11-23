@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -26,7 +32,8 @@ import (
 )
 
 const (
-	neonAPIBaseURL = "https://console.neon.tech/api/v2"
+	neonOrganizationsPath = "organizations"
+	neonMembersPath       = "members"
 
 	// neonMembersPageLimit is the largest page size the Neon
 	// list-members endpoint documents (limit: 1..500).
@@ -36,6 +43,7 @@ const (
 type NeonDriver struct {
 	httpClient     *http.Client
 	organizationID string
+	baseURL        string
 }
 
 var _ Driver = (*NeonDriver)(nil)
@@ -61,10 +69,13 @@ type neonOrgMember struct {
 	} `json:"user"`
 }
 
-func NewNeonDriver(httpClient *http.Client, organizationID string) *NeonDriver {
+// NewNeonDriver builds a driver against baseURL, the versioned Neon API
+// origin (e.g. https://console.neon.tech/api/v2).
+func NewNeonDriver(httpClient *http.Client, organizationID, baseURL string) *NeonDriver {
 	return &NeonDriver{
 		httpClient:     httpClient,
 		organizationID: organizationID,
+		baseURL:        baseURL,
 	}
 }
 
@@ -93,7 +104,7 @@ func (d *NeonDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error) 
 				Roles:    neonRoles(m.Member.Role),
 				// deactivated_at is absent for active accounts.
 				Active:      new(m.User.DeactivatedAt == ""),
-				IsAdmin:     neonIsAdmin(m.Member.Role),
+				IsAdmin:     new(neonIsAdmin(m.Member.Role)),
 				MFAStatus:   neonMFAStatus(m.User.HasMFA),
 				AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
 				AccountType: coredata.AccessReviewEntryAccountTypeUser,
@@ -114,10 +125,10 @@ func (d *NeonDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error) 
 
 func (d *NeonDriver) queryMembers(ctx context.Context, cursor string) (*neonMembersResponse, error) {
 	endpoint, err := url.JoinPath(
-		neonAPIBaseURL,
-		"organizations",
+		d.baseURL,
+		neonOrganizationsPath,
 		url.PathEscape(d.organizationID),
-		"members",
+		neonMembersPath,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("cannot build neon members URL: %w", err)
@@ -206,4 +217,60 @@ func neonExternalID(m neonOrgMember) string {
 	}
 
 	return m.Member.ID
+}
+
+// neonNameResolver resolves the Neon organization name.
+type neonNameResolver struct {
+	httpClient     *http.Client
+	organizationID string
+	baseURL        string
+}
+
+func NewNeonNameResolver(httpClient *http.Client, organizationID, baseURL string) NameResolver {
+	return &neonNameResolver{
+		httpClient:     httpClient,
+		organizationID: organizationID,
+		baseURL:        baseURL,
+	}
+}
+
+func (r *neonNameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
+	if r.organizationID == "" {
+		return "", nil
+	}
+
+	endpoint, err := url.JoinPath(r.baseURL, neonOrganizationsPath, url.PathEscape(r.organizationID))
+	if err != nil {
+		return "", fmt.Errorf("cannot build neon organization URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("cannot create neon organization request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	httpResp, err := r.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("cannot execute neon organization request: %w", err)
+	}
+
+	defer func() { _ = httpResp.Body.Close() }()
+
+	// Best-effort: a non-2xx (revoked key, deleted org, stale ID) must not
+	// make the source-name worker retry forever. Give up gracefully and keep
+	// the generic source name; a dead key surfaces on the next ListAccounts.
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return "", nil
+	}
+
+	var resp struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		return "", fmt.Errorf("cannot decode neon organization response: %w", err)
+	}
+
+	return resp.Name, nil
 }

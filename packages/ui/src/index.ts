@@ -1,19 +1,25 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 // Layouts
-export { Drawer, Layout } from "./Layouts/Layout";
+export { Drawer, Layout, LayoutContext } from "./Layouts/Layout";
 export {
   ErrorDetailMessage,
   ErrorDetails,
@@ -29,8 +35,6 @@ export * from "./Atoms/Icons";
 export { Logo } from "./Atoms/Logo/Logo";
 export { FrameworkLogo } from "./Atoms/FrameworkLogo/FrameworkLogo";
 export { SidebarItem } from "./Atoms/Sidebar/SidebarItem";
-export { ThemeProvider, useTheme } from "./Atoms/ThemeProvider/ThemeProvider";
-export { ThemeToggle } from "./Atoms/ThemeToggle/ThemeToggle";
 export { Button } from "./Atoms/Button/Button";
 export { Card } from "./Atoms/Card/Card";
 export { Breadcrumb } from "./Atoms/Breadcrumb/Breadcrumb";
@@ -39,6 +43,7 @@ export { Spinner } from "./Atoms/Spinner/Spinner";
 export {
   ActionDropdown,
   Dropdown,
+  DropdownCheckboxItem,
   DropdownItem,
   DropdownSeparator,
 } from "./Atoms/Dropdown/Dropdown";
@@ -47,18 +52,25 @@ export { Field } from "./Molecules/Field/Field";
 export { Input } from "./Atoms/Input/Input";
 export { DurationInput } from "./Atoms/Input/DurationInput";
 export { Textarea } from "./Atoms/Textarea/Textarea";
-export { Option, Select, SelectGroup, SelectLabel } from "./Atoms/Select/Select";
+export {
+  Option,
+  Select,
+  SelectGroup,
+  SelectLabel,
+} from "./Atoms/Select/Select";
 export { Label } from "./Atoms/Label/Label";
 export { PropertyRow } from "./Atoms/PropertyRow/PropertyRow";
 export { Table, Tbody, Td, Th, Thead, Tr, TrButton } from "./Atoms/Table/Table";
 export { TabBadge, TabItem, TabLink, Tabs } from "./Atoms/Tabs/Tabs";
-export { Markdown } from "./Atoms/Markdown/Markdown";
+export {
+  isAllowedMarkdownImageSrc,
+  Markdown,
+} from "./Atoms/Markdown/Markdown";
 export { MermaidDiagram } from "./Atoms/Markdown/MermaidDiagram";
 export { Dropzone } from "./Atoms/Dropzone/Dropzone";
 export { ControlItem } from "./Atoms/ControlItem/ControlItem";
 export { InfiniteScrollTrigger } from "./Atoms/InfiniteScrollTrigger/InfiniteScrollTrigger";
 export { PriorityLevel } from "./Atoms/PriorityLevel/PriorityLevel";
-export { TaskStateIcon } from "./Atoms/Icons/TaskStateIcon";
 export { Checkbox } from "./Atoms/Checkbox/Checkbox";
 export { Toggle } from "./Atoms/Toggle/Toggle";
 export {
@@ -90,11 +102,12 @@ export { RiskBadge } from "./Molecules/Badge/RiskBadge";
 export { SeverityBadge } from "./Molecules/Badge/SeverityBadge";
 export { DocumentVersionBadge } from "./Molecules/Badge/DocumentVersionBadge";
 export { RisksChart } from "./Molecules/Risks/RisksChart";
+export { levelColors } from "./Molecules/Risks/constants";
 export { RiskOverview } from "./Molecules/Risks/RiskOverview";
 export { Combobox, ComboboxItem } from "./Molecules/Combobox/Combobox";
 export { FileButton } from "./Molecules/FileButton/FileButton";
-export { MeasureBadge } from "./Molecules/Badge/MeasureBadge";
-export { MeasureImplementation } from "./Molecules/MeasureImplementation/MeasureImplementation";
+export { InternalControlBadge } from "./Molecules/Badge/InternalControlBadge";
+export { InternalControlImplementation } from "./Molecules/InternalControlImplementation/InternalControlImplementation";
 export { FrameworkSelector } from "./Molecules/FrameworkSelector/FrameworkSelector";
 export { DocumentTypeBadge } from "./Molecules/Badge/DocumentTypeBadge";
 export { DocumentClassificationBadge } from "./Molecules/Badge/DocumentClassificationBadge";
@@ -110,8 +123,35 @@ export {
 } from "./Molecules/Table/SelectCell";
 export { EditableRow } from "./Molecules/Table/EditableRow";
 
-// Hooks
-export { Toasts, useToast } from "./Atoms/Toasts/Toasts";
-
-// Rich editor
+// Rich editor. Automerge modules stay off this barrel: Vite dev evaluates
+// every export, which instantiated that WebAssembly on every console page.
+export type { MentionItem, MentionSource } from "./RichEditor/MentionExtension";
+export { CommentEditor } from "./RichEditor/CommentEditor";
 export { RichEditor } from "./RichEditor/RichEditor";
+export type { RichEditorAutomergeDocument } from "./RichEditor/collaboration";
+export type { RichEditorHistoryHighlight } from "./RichEditor/historyDecorations";
+export type {
+  RichEditorCollaborationHandle,
+  RichEditorPresence,
+} from "./RichEditor/presence";
+export {
+  decorationsForPresences,
+  presenceColor,
+  presenceHighlightColor,
+} from "./RichEditor/presence";
+export {
+  AUTOMERGE_URL_PREFIX,
+  automergeUrl,
+  decodeDocumentId,
+  deriveAutomergeUrl,
+  deriveDocumentId,
+  DOCUMENT_ID_BYTE_LENGTH,
+  encodeDocumentId,
+  parseAutomergeUrl,
+  validDocumentId,
+} from "./RichEditor/repoDocumentId";
+export type {
+  ResolvedSelection,
+  TextSelection,
+} from "./RichEditor/repoSelection";
+export type { PmPresenceSelection } from "./RichEditor/repoPresence";

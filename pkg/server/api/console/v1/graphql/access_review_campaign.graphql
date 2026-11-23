@@ -136,22 +136,6 @@ enum AccessReviewEntryDecision
         )
 }
 
-enum AccessReviewEntryIncrementalTag
-    @goModel(model: "go.probo.inc/probo/pkg/coredata.AccessReviewEntryIncrementalTag") {
-    NEW
-        @goEnum(
-            value: "go.probo.inc/probo/pkg/coredata.AccessReviewEntryIncrementalTagNew"
-        )
-    REMOVED
-        @goEnum(
-            value: "go.probo.inc/probo/pkg/coredata.AccessReviewEntryIncrementalTagRemoved"
-        )
-    UNCHANGED
-        @goEnum(
-            value: "go.probo.inc/probo/pkg/coredata.AccessReviewEntryIncrementalTagUnchanged"
-        )
-}
-
 enum MfaStatus
     @goModel(model: "go.probo.inc/probo/pkg/coredata.MFAStatus") {
     ENABLED
@@ -183,6 +167,14 @@ enum AccessReviewEntryAuthMethod
     API_KEY
         @goEnum(
             value: "go.probo.inc/probo/pkg/coredata.AccessReviewEntryAuthMethodAPIKey"
+        )
+    OAUTH2
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.AccessReviewEntryAuthMethodOAuth2"
+        )
+    SSH
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.AccessReviewEntryAuthMethodSSH"
         )
     SERVICE_ACCOUNT
         @goEnum(
@@ -247,6 +239,12 @@ input AccessReviewCampaignSourceFetchAttemptOrder {
 enum AccessReviewSourceConnectionStatus {
     CONNECTED
     DISCONNECTED
+    """
+    NOT_AUTHORIZED mirrors ConnectorConnectionStatus.NOT_AUTHORIZED: the
+    provider accepted the credential and refused the operation anyway.
+    """
+    NOT_AUTHORIZED
+    RECONNECT_REQUIRED
     NOT_APPLICABLE
 }
 
@@ -271,7 +269,6 @@ input AccessReviewEntryFilter
     ) {
     decision: AccessReviewEntryDecision
     flag: AccessReviewEntryFlag
-    incrementalTag: AccessReviewEntryIncrementalTag
     isAdmin: Boolean
     active: Boolean
     authMethod: AccessReviewEntryAuthMethod
@@ -283,14 +280,69 @@ type ProviderOrganization {
     displayName: String!
 }
 
+enum ProviderOrganizationsStatus {
+    """
+    The provider returned at least one organization.
+    """
+    AVAILABLE
+
+    """
+    The provider has no organization picker: its organization is captured
+    during the OAuth callback rather than chosen by the user (PagerDuty's
+    subdomain, Vercel's team, Datadog's domain, Zendesk's subdomain). An empty
+    list here is normal and says nothing about the health of the connection.
+    """
+    NOT_APPLICABLE
+
+    """
+    The call succeeded and returned no organization.
+    """
+    EMPTY
+
+    """
+    The call failed.
+    """
+    UNAVAILABLE
+}
+
+"""
+Organizations the connected provider exposes, together with why the list
+looks the way it does.
+
+EMPTY and UNAVAILABLE are deliberately distinct, and neither is fixable by
+typing an organization slug by hand: whatever prevented the listing also
+prevents the member listing that the access review actually runs.
+
+- EMPTY means the provider answered and owns no organization we can see.
+  On GitHub this is usually an organization that enabled OAuth App access
+  restrictions without approving Probo, or a personal account (which never
+  appears in the org listing). The user acts on remediationUrl.
+- UNAVAILABLE means the call itself failed: revoked or expired credential,
+  a missing scope, or a provider outage. The user must reconnect or retry;
+  the underlying error stays server-side.
+"""
+type ProviderOrganizations {
+    status: ProviderOrganizationsStatus!
+    nodes: [ProviderOrganization!]!
+
+    """
+    Where the user can act when the list is EMPTY — for GitHub, the page
+    listing their authorized OAuth Apps, where an org owner can be asked
+    to approve Probo. Null when we know of no such page.
+    """
+    remediationUrl: String
+}
+
 type AccessReviewSource implements Node {
     id: ID!
     organization: Organization! @goField(forceResolver: true)
-    connectorId: ID
+    connectorId: ID @goField(forceResolver: true)
     connector: Connector @goField(forceResolver: true)
+    connectorAccountId: ID
+    connectorAccount: ConnectorAccount @goField(forceResolver: true)
     name: String!
     csvData: String
-    providerOrganizations: [ProviderOrganization!]! @goField(forceResolver: true)
+    providerOrganizations: ProviderOrganizations! @goField(forceResolver: true)
     needsConfiguration: Boolean! @goField(forceResolver: true)
     connectionStatus: AccessReviewSourceConnectionStatus! @goField(forceResolver: true)
     selectedOrganization: String @goField(forceResolver: true)
@@ -376,7 +428,7 @@ type AccessReviewEntry implements Node {
     fullName: String!
     roles: [String!]!
     jobTitle: String!
-    isAdmin: Boolean!
+    isAdmin: Boolean
     active: Boolean
     mfaStatus: MfaStatus!
     authMethod: AccessReviewEntryAuthMethod!
@@ -384,7 +436,6 @@ type AccessReviewEntry implements Node {
     lastLogin: Datetime
     accountCreatedAt: Datetime
     externalId: String!
-    incrementalTag: AccessReviewEntryIncrementalTag!
     flags: [AccessReviewEntryFlag!]!
     flagReasons: [String!]!
     decision: AccessReviewEntryDecision!
@@ -468,7 +519,6 @@ type AccessReviewStatistics {
     totalCount: Int!
     decisionCounts: [AccessReviewEntryDecisionCount!]!
     flagCounts: [AccessReviewEntryFlagCount!]!
-    incrementalTagCounts: [AccessReviewEntryIncrementalTagCount!]!
 }
 
 type AccessReviewEntryDecisionCount {
@@ -481,15 +531,10 @@ type AccessReviewEntryFlagCount {
     count: Int!
 }
 
-type AccessReviewEntryIncrementalTagCount {
-    incrementalTag: AccessReviewEntryIncrementalTag!
-    count: Int!
-}
-
 extend type Mutation {
-    createAccessReviewSource(
-        input: CreateAccessReviewSourceInput!
-    ): CreateAccessReviewSourcePayload!
+    createAccessReviewSources(
+        input: CreateAccessReviewSourcesInput!
+    ): CreateAccessReviewSourcesPayload!
     updateAccessReviewSource(
         input: UpdateAccessReviewSourceInput!
     ): UpdateAccessReviewSourcePayload!
@@ -523,6 +568,9 @@ extend type Mutation {
     removeAccessReviewCampaignSource(
         input: RemoveAccessReviewCampaignSourceInput!
     ): RemoveAccessReviewCampaignSourcePayload!
+    retryAccessReviewCampaignSourceFetch(
+        input: RetryAccessReviewCampaignSourceFetchInput!
+    ): RetryAccessReviewCampaignSourceFetchPayload!
     recordAccessReviewEntryDecision(
         input: RecordAccessReviewEntryDecisionInput!
     ): RecordAccessReviewEntryDecisionPayload!
@@ -534,15 +582,30 @@ extend type Mutation {
     ): FlagAccessReviewEntryPayload!
 }
 
-input CreateAccessReviewSourceInput {
+input CreateAccessReviewSourcesInput {
     organizationId: ID!
+    sources: [AccessReviewSourceCreateInput!]!
+}
+
+input AccessReviewSourceCreateInput {
     connectorId: ID
+    connectorAccountId: ID
     name: String!
     csvData: String
 }
 
-type CreateAccessReviewSourcePayload {
+type CreateAccessReviewSourcesPayload {
+    results: [CreateAccessReviewSourceResult!]!
+}
+
+type CreateAccessReviewSourceResult {
     accessReviewSourceEdge: AccessReviewSourceEdge!
+    """
+    created is false when this connector account already has a source.
+    The existing source is returned instead of a duplicate. CSV items
+    always insert.
+    """
+    created: Boolean!
 }
 
 input UpdateAccessReviewSourceInput {
@@ -588,6 +651,7 @@ input UpdateAccessReviewCampaignInput {
     accessReviewCampaignId: ID!
     name: String @goField(omittable: true)
     description: String @goField(omittable: true)
+    accessReviewSourceIds: [ID!] @goField(omittable: true)
 }
 
 type UpdateAccessReviewCampaignPayload {
@@ -641,6 +705,15 @@ input RemoveAccessReviewCampaignSourceInput {
 }
 
 type RemoveAccessReviewCampaignSourcePayload {
+    accessReviewCampaign: AccessReviewCampaign!
+}
+
+input RetryAccessReviewCampaignSourceFetchInput {
+    accessReviewCampaignId: ID!
+    accessReviewSourceId: ID!
+}
+
+type RetryAccessReviewCampaignSourceFetchPayload {
     accessReviewCampaign: AccessReviewCampaign!
 }
 

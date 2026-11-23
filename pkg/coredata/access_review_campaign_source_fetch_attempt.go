@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -413,15 +419,59 @@ WHERE
 	return count, nil
 }
 
-// RecoverStale fails attempts stuck in FETCHING past the threshold and queues a
-// fresh retry attempt for each, preserving the stale attempt's history. It is
-// intentionally cross-tenant. Returns the number of recovered attempts.
-func (attempts *AccessReviewCampaignSourceFetchAttempts) RecoverStale(
+// FailQueuedByCampaignID fails every queued attempt of the campaign's sources
+// so the worker never claims them.
+func (attempts *AccessReviewCampaignSourceFetchAttempts) FailQueuedByCampaignID(
 	ctx context.Context,
 	conn pg.Tx,
-	staleThreshold time.Time,
+	scope Scoper,
+	campaignID gid.GID,
+	message string,
 	now time.Time,
-) (int, error) {
+) error {
+	q := `
+UPDATE access_review_campaign_source_fetch_attempts
+SET
+    status = @failed_status,
+    error = @error,
+    completed_at = @now,
+    updated_at = @now
+WHERE
+    %s
+    AND status = @queued_status
+    AND access_review_campaign_source_id IN (
+        SELECT id
+        FROM access_review_campaign_sources
+        WHERE access_review_campaign_id = @campaign_id
+    )
+`
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"failed_status": AccessReviewCampaignSourceFetchStatusFailed,
+		"queued_status": AccessReviewCampaignSourceFetchStatusQueued,
+		"error":         message,
+		"now":           now,
+		"campaign_id":   campaignID,
+	}
+	maps.Copy(args, scope.SQLArguments())
+
+	if _, err := conn.Exec(ctx, q, args); err != nil {
+		return fmt.Errorf("cannot fail queued fetch attempts: %w", err)
+	}
+
+	return nil
+}
+
+// LoadStaleByCampaignIDForUpdateSkipLocked locks the campaign's attempts stuck
+// in FETCHING since before staleThreshold, skipping attempts locked elsewhere.
+func (attempts *AccessReviewCampaignSourceFetchAttempts) LoadStaleByCampaignIDForUpdateSkipLocked(
+	ctx context.Context,
+	conn pg.Tx,
+	scope Scoper,
+	campaignID gid.GID,
+	staleThreshold time.Time,
+) error {
 	q := `
 SELECT
 	id,
@@ -437,48 +487,37 @@ SELECT
 	created_at,
 	updated_at
 FROM access_review_campaign_source_fetch_attempts
-WHERE status = 'FETCHING'
+WHERE
+	%s
+	AND status = @fetching_status
 	AND updated_at < @stale_threshold
+	AND access_review_campaign_source_id IN (
+		SELECT id
+		FROM access_review_campaign_sources
+		WHERE access_review_campaign_id = @campaign_id
+	)
 FOR UPDATE SKIP LOCKED
 `
+	q = fmt.Sprintf(q, scope.SQLFragment())
 
-	rows, err := conn.Query(ctx, q, pgx.StrictNamedArgs{"stale_threshold": staleThreshold})
+	args := pgx.StrictNamedArgs{
+		"fetching_status": AccessReviewCampaignSourceFetchStatusFetching,
+		"stale_threshold": staleThreshold,
+		"campaign_id":     campaignID,
+	}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
 	if err != nil {
-		return 0, fmt.Errorf("cannot query stale fetch attempts: %w", err)
+		return fmt.Errorf("cannot query stale fetch attempts: %w", err)
 	}
 
-	stale, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[AccessReviewCampaignSourceFetchAttempt])
+	result, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[AccessReviewCampaignSourceFetchAttempt])
 	if err != nil {
-		return 0, fmt.Errorf("cannot collect stale fetch attempts: %w", err)
+		return fmt.Errorf("cannot collect stale fetch attempts: %w", err)
 	}
 
-	staleMessage := "fetch timed out"
+	*attempts = result
 
-	for _, attempt := range stale {
-		scope := NewScope(attempt.TenantID)
-
-		attempt.Status = AccessReviewCampaignSourceFetchStatusFailed
-		attempt.Error = &staleMessage
-		attempt.CompletedAt = &now
-		attempt.UpdatedAt = now
-
-		if err := attempt.Update(ctx, conn, scope); err != nil {
-			return 0, fmt.Errorf("cannot fail stale fetch attempt: %w", err)
-		}
-
-		retry := &AccessReviewCampaignSourceFetchAttempt{
-			ID:                           gid.New(attempt.TenantID, AccessReviewCampaignSourceFetchAttemptEntityType),
-			OrganizationID:               attempt.OrganizationID,
-			AccessReviewCampaignSourceID: attempt.AccessReviewCampaignSourceID,
-			Status:                       AccessReviewCampaignSourceFetchStatusQueued,
-			CreatedAt:                    now,
-			UpdatedAt:                    now,
-		}
-
-		if err := retry.Insert(ctx, conn, scope); err != nil {
-			return 0, fmt.Errorf("cannot queue retry fetch attempt: %w", err)
-		}
-	}
-
-	return len(stale), nil
+	return nil
 }

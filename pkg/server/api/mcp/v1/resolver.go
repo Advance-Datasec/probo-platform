@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 //go:generate go run go.probo.inc/mcpgen generate
 
@@ -21,38 +27,88 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+
+	"net/http"
 
 	"go.gearno.de/kit/log"
 	"go.probo.inc/probo/pkg/accessreview"
 	"go.probo.inc/probo/pkg/baseurl"
+	"go.probo.inc/probo/pkg/certmanager"
+	cloudaws "go.probo.inc/probo/pkg/cloud/aws"
+	cloudazure "go.probo.inc/probo/pkg/cloud/azure"
+	cloudgcp "go.probo.inc/probo/pkg/cloud/gcp"
+	"go.probo.inc/probo/pkg/collaboration"
+	"go.probo.inc/probo/pkg/complianceportal/management"
 	"go.probo.inc/probo/pkg/cookiebanner"
 	"go.probo.inc/probo/pkg/coredata"
+	employeeportalmgmt "go.probo.inc/probo/pkg/employeeportal/management"
 	"go.probo.inc/probo/pkg/filemanager"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/iam"
+	"go.probo.inc/probo/pkg/identityfederation"
+	"go.probo.inc/probo/pkg/itam"
+	"go.probo.inc/probo/pkg/mailman"
 	"go.probo.inc/probo/pkg/probo"
-	"go.probo.inc/probo/pkg/prosemirror"
+	"go.probo.inc/probo/pkg/probot"
+	slackchannel "go.probo.inc/probo/pkg/probot/channel/slack"
 	"go.probo.inc/probo/pkg/resourcealias"
+	"go.probo.inc/probo/pkg/richtext"
 	"go.probo.inc/probo/pkg/riskmanagement"
 	"go.probo.inc/probo/pkg/server/api/authn"
+	"go.probo.inc/probo/pkg/server/api/authz"
+	"go.probo.inc/probo/pkg/server/api/mcp/v1/types"
+	"go.probo.inc/probo/pkg/server/gqlx"
+	"go.probo.inc/probo/pkg/tag"
+	"go.probo.inc/probo/pkg/task"
 	"go.probo.inc/probo/pkg/thirdparty"
 )
 
+// maxDeviceListSize caps the listDevices page size: with include_postures the
+// resolver runs one posture query per returned device.
+const maxDeviceListSize = 100
+
+// SlackDestinations reads the Slack channel bound to a delivery target.
+type SlackDestinations interface {
+	GetDestination(
+		ctx context.Context,
+		scope coredata.Scoper,
+		organizationID gid.GID,
+		target probot.DeliveryTarget,
+	) (*coredata.BotDeliveryDestination, error)
+}
+
 type Resolver struct {
-	proboSvc       *probo.Service
-	resourceAlias  *resourcealias.Service
-	thirdPartySvc  *thirdparty.Service
-	iamSvc         *iam.Service
-	accessReview   *accessreview.Service
-	cookieBanner   *cookiebanner.Service
-	riskManagement *riskmanagement.Service
-	logger         *log.Logger
-	fileManager    *filemanager.Service
-	baseURL        *baseurl.BaseURL
+	proboSvc              *probo.Service
+	management            *management.Service
+	certManager           *certmanager.Service
+	resourceAlias         *resourcealias.Service
+	tag                   *tag.Service
+	thirdPartySvc         *thirdparty.Service
+	iamSvc                *iam.Service
+	accessReview          *accessreview.Service
+	cookieBanner          *cookiebanner.Service
+	employeePortal        *employeeportalmgmt.Service
+	riskManagement        *riskmanagement.Service
+	itamSvc               *itam.Service
+	task                  *task.Service
+	mailman               *mailman.Service
+	logger                *log.Logger
+	fileManager           *filemanager.Service
+	baseURL               *baseurl.BaseURL
+	identityFederation    *identityfederation.Issuer
+	awsConnectorInstall   cloudaws.ConnectorInstallConfig
+	gcpConnectorInstall   cloudgcp.ConnectorInstallConfig
+	azureConnectorInstall cloudazure.ConnectorInstallConfig
+	customDomainCname     string
+	slackbotInstallations *slackchannel.InstallationService
+	slackDestinations     SlackDestinations
+	feedback              FeedbackConfig
+	feedbackClient        *http.Client
 }
 
 func markdownToProseMirrorJSON(markdown string) (string, error) {
-	node, err := prosemirror.ParseMarkdown(markdown)
+	node, err := richtext.ParseMarkdown(markdown)
 	if err != nil {
 		return "", fmt.Errorf("cannot parse markdown: %w", err)
 	}
@@ -65,17 +121,54 @@ func markdownToProseMirrorJSON(markdown string) (string, error) {
 	return string(out), nil
 }
 
-func (r *Resolver) Authorize(ctx context.Context, entityID gid.GID, action iam.Action) (*coredata.Scope, error) {
+func optionalMarkdownToProseMirrorJSON(markdown *string) (*string, error) {
+	if markdown == nil || strings.TrimSpace(*markdown) == "" {
+		return nil, nil
+	}
+
+	converted, err := markdownToProseMirrorJSON(*markdown)
+	if err != nil {
+		return nil, err
+	}
+
+	return &converted, nil
+}
+
+func omittableMarkdownToProseMirrorJSON(field **string) (**string, error) {
+	if field == nil || *field == nil {
+		return field, nil
+	}
+
+	if strings.TrimSpace(**field) == "" {
+		cleared := (*string)(nil)
+
+		return &cleared, nil
+	}
+
+	converted, err := markdownToProseMirrorJSON(**field)
+	if err != nil {
+		return nil, err
+	}
+
+	return optionalPtr(&converted), nil
+}
+
+func (r *Resolver) Authorize(ctx context.Context, entityID gid.GID, action iam.Action, opts ...authz.AuthorizeFuncOption) (*coredata.Scope, error) {
 	identity := authn.IdentityFromContext(ctx)
 
-	scope, err := r.iamSvc.Authorizer.Authorize(
-		ctx,
-		iam.AuthorizeParams{
-			Principal: identity.ID,
-			Resource:  entityID,
-			Action:    action,
-		},
-	)
+	params := iam.AuthorizeParams{
+		Principal:          identity.ID,
+		Resource:           entityID,
+		Action:             action,
+		ResourceAttributes: make(map[string]string),
+		Request:            authz.RequestMetadataFromHTTP(gqlx.HTTPRequestFromContext(ctx)),
+	}
+
+	for _, opt := range opts {
+		opt(&params)
+	}
+
+	scope, err := r.iamSvc.Authorizer.Authorize(ctx, params)
 	if err == nil {
 		return scope, nil
 	}
@@ -110,6 +203,7 @@ func (r *Resolver) AuthorizeBatch(ctx context.Context, entityIDs []gid.GID, acti
 			Principal: identity.ID,
 			Resources: entityIDs,
 			Action:    action,
+			Request:   authz.RequestMetadataFromHTTP(gqlx.HTTPRequestFromContext(ctx)),
 		},
 	)
 	if err == nil {
@@ -147,4 +241,112 @@ func (r *Resolver) AuthorizeBatch(ctx context.Context, entityIDs []gid.GID, acti
 	r.logger.ErrorCtx(ctx, "cannot batch authorize MCP request", log.Error(err))
 
 	return nil, fmt.Errorf("internal server error")
+}
+
+func authorizationDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	switch err.Error() {
+	case "permission denied", "insufficient scope", "assumption required":
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *Resolver) compliancePortalAccessWithIdentity(
+	ctx context.Context,
+	access *coredata.CompliancePortalAccess,
+) (*types.CompliancePortalAccess, error) {
+	identity, err := r.iamSvc.AccountService.GetIdentity(ctx, access.IdentityID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot load identity: %w", err)
+	}
+
+	return types.NewCompliancePortalAccess(access, identity), nil
+}
+
+func (r *Resolver) fillSourceConnectorIDs(
+	ctx context.Context,
+	scope coredata.Scoper,
+	rows []*coredata.AccessReviewSource,
+	mapped []*types.AccessReviewSource,
+) error {
+	accountIDs := make([]gid.GID, 0, len(rows))
+	for _, row := range rows {
+		if row.ConnectorAccountID != nil {
+			accountIDs = append(accountIDs, *row.ConnectorAccountID)
+		}
+	}
+
+	if len(accountIDs) == 0 {
+		return nil
+	}
+
+	connectorIDs, err := r.accessReview.ConnectorIDsByAccountIDs(ctx, scope, accountIDs)
+	if err != nil {
+		return err
+	}
+
+	types.ApplySourceConnectorIDs(mapped, rows, connectorIDs)
+
+	return nil
+}
+
+func validateMCPDocumentContent(content string) error {
+	if err := richtext.DocumentSchema.ValidateJSON(content); err != nil {
+		return fmt.Errorf("invalid document content: %w", err)
+	}
+
+	if strings.TrimSpace(content) == "" {
+		return fmt.Errorf("invalid document content: empty")
+	}
+
+	return nil
+}
+
+func (r *Resolver) documentWithHeads(
+	ctx context.Context,
+	scope *coredata.Scope,
+	document *coredata.Document,
+) (*types.Document, error) {
+	heads, err := r.proboSvc.Documents.CollaborationHeads(ctx, scope, document.ID)
+	if err != nil {
+		if errors.Is(err, coredata.ErrResourceNotFound) ||
+			errors.Is(err, collaboration.ErrDocumentCollaborationNotFound) {
+			return types.NewDocument(document), nil
+		}
+
+		return nil, fmt.Errorf("cannot load document collaboration heads: %w", err)
+	}
+
+	return types.NewDocumentWithHeads(
+		document,
+		collaboration.EncodeAutomergeHashes(heads),
+	), nil
+}
+
+func (r *Resolver) listableSearchEntityTypes(ctx context.Context, organizationID gid.GID) ([]uint16, error) {
+	identity := authn.IdentityFromContext(ctx)
+	session := authn.SessionFromContext(ctx)
+
+	var sessionID *gid.GID
+	if session != nil {
+		sessionID = &session.ID
+	}
+
+	entityTypes, err := tag.ListableEntityTypes(ctx, r.iamSvc.Authorizer, identity.ID, sessionID, organizationID)
+	if err != nil {
+		if _, ok := errors.AsType[*iam.ErrAssumptionRequired](err); ok {
+			return nil, fmt.Errorf("assumption required")
+		}
+
+		r.logger.ErrorCtx(ctx, "cannot list searchable entity types", log.Error(err))
+
+		return nil, fmt.Errorf("internal server error")
+	}
+
+	return entityTypes, nil
 }

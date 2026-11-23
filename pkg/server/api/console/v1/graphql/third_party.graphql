@@ -231,13 +231,24 @@ input ThirdPartyRiskAssessmentOrder {
     direction: OrderDirection!
 }
 
-type ThirdParty implements Node {
+type ThirdParty implements Node & Taggable {
+    tags(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: TagOrder
+    ): TagConnection! @goField(forceResolver: true)
+
     id: ID!
     name: String!
     category: ThirdPartyCategory!
     description: String
 
     organization: Organization! @goField(forceResolver: true)
+    compliancePortalThirdParty(
+        compliancePortalId: ID!
+    ): CompliancePortalThirdParty @goField(forceResolver: true)
 
     complianceReports(
         first: Int
@@ -276,17 +287,16 @@ type ThirdParty implements Node {
         orderBy: ThirdPartyRiskAssessmentOrder
     ): ThirdPartyRiskAssessmentConnection! @goField(forceResolver: true)
 
-    measures(
+    internalControls(
         first: Int
         after: CursorKey
         last: Int
         before: CursorKey
-        orderBy: MeasureOrder
-        filter: MeasureFilter
-    ): MeasureConnection! @goField(forceResolver: true)
+        orderBy: InternalControlOrder
+        filter: InternalControlFilter
+    ): InternalControlConnection! @goField(forceResolver: true)
 
-    businessOwner: Profile @goField(forceResolver: true)
-    securityOwner: Profile @goField(forceResolver: true)
+    administrators: [Profile!]! @goField(forceResolver: true)
 
     statusPageUrl: String
     termsOfServiceUrl: String
@@ -302,7 +312,6 @@ type ThirdParty implements Node {
     headquarterAddress: String
     legalName: String
     websiteUrl: String
-    showOnTrustCenter: Boolean!
     level: Int!
 
     parentThirdParty: ThirdParty @goField(forceResolver: true)
@@ -340,8 +349,7 @@ type ThirdPartyComplianceReport implements Node {
 type ThirdPartyBusinessAssociateAgreement implements Node {
     id: ID!
     thirdParty: ThirdParty! @goField(forceResolver: true)
-    validFrom: Datetime
-    validUntil: Datetime
+    validity: Period
     file: File! @goField(forceResolver: true)
     createdAt: Datetime!
     updatedAt: Datetime!
@@ -376,8 +384,7 @@ type ThirdPartyService implements Node {
 type ThirdPartyDataPrivacyAgreement implements Node {
     id: ID!
     thirdParty: ThirdParty! @goField(forceResolver: true)
-    validFrom: Datetime
-    validUntil: Datetime
+    validity: Period
     file: File! @goField(forceResolver: true)
     createdAt: Datetime!
     updatedAt: Datetime!
@@ -540,8 +547,7 @@ input CreateThirdPartyInput {
     trustPageUrl: String
     statusPageUrl: String
     termsOfServiceUrl: String
-    businessOwnerId: ID
-    securityOwnerId: ID
+    administratorIds: [ID!]
     parentThirdPartyId: ID
 }
 
@@ -564,9 +570,7 @@ input UpdateThirdPartyInput {
     countries: [CountryCode!]
     securityPageUrl: String @goField(omittable: true)
     trustPageUrl: String @goField(omittable: true)
-    businessOwnerId: ID @goField(omittable: true)
-    securityOwnerId: ID @goField(omittable: true)
-    showOnTrustCenter: Boolean
+    administratorIds: [ID!]
 }
 
 input DeleteThirdPartyInput {
@@ -627,16 +631,14 @@ input DeleteThirdPartyComplianceReportInput {
 
 input UploadThirdPartyBusinessAssociateAgreementInput {
     thirdPartyId: ID!
-    validFrom: Datetime
-    validUntil: Datetime
+    validity: PeriodInput
     fileName: String!
     file: Upload!
 }
 
 input UpdateThirdPartyBusinessAssociateAgreementInput {
     thirdPartyId: ID!
-    validFrom: Datetime @goField(omittable: true)
-    validUntil: Datetime @goField(omittable: true)
+    validity: PeriodInput
 }
 
 input DeleteThirdPartyBusinessAssociateAgreementInput {
@@ -645,16 +647,14 @@ input DeleteThirdPartyBusinessAssociateAgreementInput {
 
 input UploadThirdPartyDataPrivacyAgreementInput {
     thirdPartyId: ID!
-    validFrom: Datetime
-    validUntil: Datetime
+    validity: PeriodInput
     fileName: String!
     file: Upload!
 }
 
 input UpdateThirdPartyDataPrivacyAgreementInput {
     thirdPartyId: ID!
-    validFrom: Datetime @goField(omittable: true)
-    validUntil: Datetime @goField(omittable: true)
+    validity: PeriodInput
 }
 
 input DeleteThirdPartyDataPrivacyAgreementInput {

@@ -1,11 +1,12 @@
-Govrly
+Probo
 
 Hi {{.RecipientFullName}},
 
-{{if .OrganizationName}}Please use this link to connect to {{.OrganizationName}}'s Compliance Page:{{else}}Please use this link to sign in to Govrly:{{end}}
+Please use this link to connect to {{.OrganizationName}}'s Compliance Page:
 
 {{.MagicLinkURL}}
 
 IMPORTANT: This link expires in {{.DurationInMinutes}} minutes. Use it promptly after receiving this email.
 
-app.govrly.sa
+{{.SenderCompanyHeadquarterAddress}}
+Powered By Prob

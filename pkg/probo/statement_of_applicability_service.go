@@ -1,21 +1,28 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -142,6 +149,31 @@ func (s StatementOfApplicabilityService) Get(
 	return statementOfApplicability, nil
 }
 
+func (s StatementOfApplicabilityService) GetByIDs(
+	ctx context.Context,
+	scope coredata.Scoper,
+	statementIDs ...gid.GID,
+) (coredata.StatementsOfApplicability, error) {
+	var statements coredata.StatementsOfApplicability
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := statements.LoadByIDs(ctx, conn, scope, statementIDs); err != nil &&
+				!errors.Is(err, coredata.ErrResourceNotFound) {
+				return fmt.Errorf("cannot load statements of applicability by ids: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return statements, nil
+}
+
 func (s StatementOfApplicabilityService) Create(
 	ctx context.Context, scope coredata.Scoper,
 	req CreateStatementOfApplicabilityRequest,
@@ -177,6 +209,17 @@ func (s StatementOfApplicabilityService) Create(
 		func(ctx context.Context, conn pg.Tx) error {
 			if err := statementOfApplicability.Insert(ctx, conn, scope); err != nil {
 				return fmt.Errorf("cannot insert statement_of_applicability: %w", err)
+			}
+
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				statementOfApplicability.ID,
+				statementOfApplicability.OrganizationID,
+				statementOfApplicability.Name,
+				statementOfApplicability.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
 			}
 
 			return nil
@@ -216,6 +259,17 @@ func (s StatementOfApplicabilityService) Update(
 				return fmt.Errorf("cannot update statement_of_applicability: %w", err)
 			}
 
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				statementOfApplicability.ID,
+				statementOfApplicability.OrganizationID,
+				statementOfApplicability.Name,
+				statementOfApplicability.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
 			return nil
 		},
 	)
@@ -237,6 +291,10 @@ func (s StatementOfApplicabilityService) Delete(
 		func(ctx context.Context, conn pg.Tx) error {
 			if err := statementOfApplicability.LoadByID(ctx, conn, scope, statementOfApplicabilityID); err != nil {
 				return fmt.Errorf("cannot load statement_of_applicability: %w", err)
+			}
+
+			if err := coredata.DeleteSearchResource(ctx, conn, statementOfApplicability.ID); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
 			}
 
 			if err := statementOfApplicability.Delete(ctx, conn, scope); err != nil {
@@ -340,6 +398,11 @@ func (s StatementOfApplicabilityService) CreateApplicabilityStatement(
 		func(ctx context.Context, conn pg.Tx) error {
 			if err := statementOfApplicability.LoadByID(ctx, conn, scope, statementOfApplicabilityID); err != nil {
 				return fmt.Errorf("cannot load statement of applicability: %w", err)
+			}
+
+			control := &coredata.Control{}
+			if err := control.LoadByID(ctx, conn, scope, controlID); err != nil {
+				return fmt.Errorf("cannot load control: %w", err)
 			}
 
 			applicabilityStatement = &coredata.ApplicabilityStatement{

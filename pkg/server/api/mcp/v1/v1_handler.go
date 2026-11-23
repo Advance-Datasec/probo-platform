@@ -1,21 +1,30 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package mcp_v1
 
 import (
+	"fmt"
+	"math"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -23,51 +32,110 @@ import (
 	mcpgenmcp "go.probo.inc/mcpgen/mcp"
 	"go.probo.inc/probo/pkg/accessreview"
 	"go.probo.inc/probo/pkg/baseurl"
+	"go.probo.inc/probo/pkg/certmanager"
+	cloudaws "go.probo.inc/probo/pkg/cloud/aws"
+	cloudazure "go.probo.inc/probo/pkg/cloud/azure"
+	cloudgcp "go.probo.inc/probo/pkg/cloud/gcp"
+	"go.probo.inc/probo/pkg/complianceportal/management"
 	"go.probo.inc/probo/pkg/cookiebanner"
+	employeeportalmgmt "go.probo.inc/probo/pkg/employeeportal/management"
 	"go.probo.inc/probo/pkg/filemanager"
+	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/iam"
+	"go.probo.inc/probo/pkg/identityfederation"
+	"go.probo.inc/probo/pkg/itam"
+	"go.probo.inc/probo/pkg/mailman"
 	"go.probo.inc/probo/pkg/probo"
+	slackchannel "go.probo.inc/probo/pkg/probot/channel/slack"
 	"go.probo.inc/probo/pkg/resourcealias"
 	"go.probo.inc/probo/pkg/riskmanagement"
 	"go.probo.inc/probo/pkg/server/api/authn"
-	"go.probo.inc/probo/pkg/server/api/mcp/mcputils"
+	"go.probo.inc/probo/pkg/server/api/mcp/mcpx"
 	"go.probo.inc/probo/pkg/server/api/mcp/v1/server"
+	"go.probo.inc/probo/pkg/server/gqlx"
+	"go.probo.inc/probo/pkg/tag"
+	"go.probo.inc/probo/pkg/task"
 	"go.probo.inc/probo/pkg/thirdparty"
 )
 
 func NewMux(
 	logger *log.Logger,
 	proboSvc *probo.Service,
+	managementSvc *management.Service,
+	certManagerSvc *certmanager.Service,
 	resourceAliasSvc *resourcealias.Service,
+	tagSvc *tag.Service,
 	thirdPartySvc *thirdparty.Service,
 	iamSvc *iam.Service,
 	accessReviewSvc *accessreview.Service,
 	cookieBannerSvc *cookiebanner.Service,
+	employeePortalSvc *employeeportalmgmt.Service,
 	riskManagementSvc *riskmanagement.Service,
-	tokenSecret string,
+	itamSvc *itam.Service,
+	taskSvc *task.Service,
+	mailmanSvc *mailman.Service,
 	fileManagerSvc *filemanager.Service,
 	baseURL *baseurl.BaseURL,
+	identityFederation *identityfederation.Issuer,
+	awsConnectorInstall cloudaws.ConnectorInstallConfig,
+	gcpConnectorInstall cloudgcp.ConnectorInstallConfig,
+	azureConnectorInstall cloudazure.ConnectorInstallConfig,
+	customDomainCname string,
+	slackbotInstallations *slackchannel.InstallationService,
+	slackDestinations SlackDestinations,
+	feedback FeedbackConfig,
 ) *chi.Mux {
 	logger = logger.Named("mcp.v1")
 
 	logger.Info("initializing MCP server")
 
 	resolver := &Resolver{
-		proboSvc:       proboSvc,
-		resourceAlias:  resourceAliasSvc,
-		thirdPartySvc:  thirdPartySvc,
-		iamSvc:         iamSvc,
-		accessReview:   accessReviewSvc,
-		cookieBanner:   cookieBannerSvc,
-		riskManagement: riskManagementSvc,
-		logger:         logger,
-		fileManager:    fileManagerSvc,
-		baseURL:        baseURL,
+		proboSvc:              proboSvc,
+		management:            managementSvc,
+		certManager:           certManagerSvc,
+		resourceAlias:         resourceAliasSvc,
+		tag:                   tagSvc,
+		thirdPartySvc:         thirdPartySvc,
+		iamSvc:                iamSvc,
+		accessReview:          accessReviewSvc,
+		cookieBanner:          cookieBannerSvc,
+		employeePortal:        employeePortalSvc,
+		riskManagement:        riskManagementSvc,
+		itamSvc:               itamSvc,
+		task:                  taskSvc,
+		mailman:               mailmanSvc,
+		logger:                logger,
+		fileManager:           fileManagerSvc,
+		baseURL:               baseURL,
+		identityFederation:    identityFederation,
+		awsConnectorInstall:   awsConnectorInstall,
+		gcpConnectorInstall:   gcpConnectorInstall,
+		azureConnectorInstall: azureConnectorInstall,
+		customDomainCname:     customDomainCname,
+		slackbotInstallations: slackbotInstallations,
+		slackDestinations:     slackDestinations,
+		feedback:              feedback,
+		feedbackClient:        feedback.client(logger),
 	}
 
-	mcpServer := server.New(resolver, mcpgenmcp.WithRecoverFunc(mcputils.NewRecoverFunc(logger)))
+	// Tools are registered once for this process, so clients should not
+	// listen for list changes. Logging is omitted because it is deprecated,
+	// and a non-nil Capabilities value replaces the SDK default that would
+	// advertise it.
+	mcpServer := server.New(
+		resolver,
+		mcpgenmcp.WithRecoverFunc(mcpx.NewRecoverFunc(logger)),
+		mcpgenmcp.WithServerOptions(&mcp.ServerOptions{
+			Capabilities: &mcp.ServerCapabilities{
+				Tools: &mcp.ToolCapabilities{ListChanged: false},
+			},
+		}),
+	)
 
-	mcpServer.AddReceivingMiddleware(mcputils.LoggingMiddleware(logger))
+	configureFeedbackTool(mcpServer, feedback)
+
+	mcpServer.AddReceivingMiddleware(mcpx.LoggingMiddleware(logger))
+	mcpServer.AddReceivingMiddleware(mcpx.ListToolsCacheMiddleware(5 * time.Minute))
 
 	getServer := func(r *http.Request) *mcp.Server { return mcpServer }
 	eventStore := mcp.NewMemoryEventStore(nil)
@@ -78,19 +146,18 @@ func NewMux(
 			Stateless: true,
 			// SessionTimeout: 30 * time.Minute,
 			EventStore: eventStore,
-			Logger:     nil, // TODO put logger here
+			Logger:     mcpx.NewSlogLogger(logger.Named("transport")),
 		},
 	)
-	protectedHandler := http.NewCrossOriginProtection().Handler(handler)
 
 	r := chi.NewMux()
-	// Accept either a personal API key or an OAuth2 access token. Each
-	// middleware is a no-op when its credential is absent, so the two can
-	// be chained; the OAuth middleware skips when an identity is already set.
-	r.Use(authn.NewAPIKeyMiddleware(iamSvc, tokenSecret))
 	r.Use(authn.NewOAuth2AccessTokenMiddleware(iamSvc))
 	r.Use(authn.NewIdentityPresenceMiddleware(baseURL))
-	r.Handle("/", protectedHandler)
+	r.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		ctx := gqlx.WithHTTPContext(req.Context(), w, req)
+
+		handler.ServeHTTP(w, req.WithContext(ctx))
+	}))
 
 	logger.Info("MCP server initialized successfully")
 
@@ -103,6 +170,67 @@ func UnwrapOmittable[T any](field mcpgenmcp.Omittable[T]) *T {
 	}
 
 	value, _ := field.Value()
+
+	return &value
+}
+
+// replaceInternalControlIDs turns an omittable nullable internal control list
+// into the task service's replace-or-omit pointer. An unset field leaves links
+// unchanged. A null or empty list clears them.
+func replaceInternalControlIDs(ids **[]gid.GID) *[]gid.GID {
+	if ids == nil {
+		return nil
+	}
+
+	if *ids == nil {
+		empty := []gid.GID{}
+		return &empty
+	}
+
+	return *ids
+}
+
+func optionalIntSlice(values *[]any) (*[]int, error) {
+	if values == nil {
+		return nil, nil
+	}
+
+	ids := make([]int, 0, len(*values))
+	for _, item := range *values {
+		n, err := intFromAny(item)
+		if err != nil {
+			return nil, err
+		}
+
+		ids = append(ids, n)
+	}
+
+	return &ids, nil
+}
+
+func intFromAny(item any) (int, error) {
+	switch n := item.(type) {
+	case int:
+		return n, nil
+	case int32:
+		return int(n), nil
+	case int64:
+		return int(n), nil
+	case float64:
+		if n != math.Trunc(n) {
+			return 0, fmt.Errorf("tcf_purpose_ids must contain integers")
+		}
+
+		return int(n), nil
+	default:
+		return 0, fmt.Errorf("tcf_purpose_ids must contain integers")
+	}
+}
+
+func optionalPtr[T any](value *T) **T {
+	if value == nil {
+		return nil
+	}
 
 	return &value
 }

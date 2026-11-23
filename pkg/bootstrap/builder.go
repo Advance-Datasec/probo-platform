@@ -1,26 +1,44 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package bootstrap
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
+	cloudaws "go.probo.inc/probo/pkg/cloud/aws"
+	cloudazure "go.probo.inc/probo/pkg/cloud/azure"
+	cloudgcp "go.probo.inc/probo/pkg/cloud/gcp"
+	"go.probo.inc/probo/pkg/connectorprotocol"
+	"go.probo.inc/probo/pkg/connectorprotocol/provider"
 	"go.probo.inc/probo/pkg/probodconfig"
 )
+
+// connectorEndpointFields are the field segments buildConnectorEndpoints reads
+// off PROBOD_CONNECTOR_<PROVIDER>_ENDPOINT_<FIELD>. checkConnectorEndpointEnvTypos
+// keys off the same list so the two never drift apart.
+var connectorEndpointFields = []string{"AUTH", "TOKEN", "PROBE", "IDENTITY", "API_BASE"}
 
 type EnvGetter func(key string) string
 
@@ -49,9 +67,43 @@ func (b *Builder) Build() (*probodconfig.FullConfig, error) {
 		return nil, fmt.Errorf("cannot get SAML credentials: %w", err)
 	}
 
-	oauth2SigningKey := b.getOAuth2SigningKey()
+	oauth2SigningKey, err := b.getOAuth2SigningKey()
+	if err != nil {
+		return nil, fmt.Errorf("cannot get OAuth2 server signing key: %w", err)
+	}
+
+	identityFederationEnabled := b.resolver.getEnvBoolOrDefault("PROBOD_IDENTITY_FEDERATION_ENABLED", false)
+
+	identityFederationSigningKeys, err := b.buildIdentityFederationSigningKeys(identityFederationEnabled)
+	if err != nil {
+		return nil, err
+	}
+
+	acmeAccountKey, err := probodconfig.ParsePrivateKey(b.resolver.getEnv("PROBOD_ACME_ACCOUNT_KEY"))
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse PROBOD_ACME_ACCOUNT_KEY: %w", err)
+	}
 
 	pgCACertBundle := b.getPgCACertBundle()
+
+	authCookieSameSite, err := probodconfig.ParseCookieSameSite(
+		b.resolver.getEnvOrDefault("PROBOD_AUTH_COOKIE_SAMESITE", "lax"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse PROBOD_AUTH_COOKIE_SAMESITE: %w", err)
+	}
+
+	compliancePortalTLSMode, err := probodconfig.ParseCompliancePortalTLSMode(
+		b.resolver.getEnvOrDefault("PROBOD_TRUST_CENTER_TLS_MODE", "direct"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse PROBOD_TRUST_CENTER_TLS_MODE: %w", err)
+	}
+
+	rateLimit, err := b.rateLimit()
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := &probodconfig.FullConfig{
 		Unit: probodconfig.UnitConfig{
@@ -84,6 +136,7 @@ func (b *Builder) Build() (*probodconfig.FullConfig, error) {
 					ComplexityLimit:   b.resolver.getEnvIntOrDefault("PROBOD_API_GRAPHQL_COMPLEXITY_LIMIT", 2000),
 					QueryCacheSize:    b.resolver.getEnvIntOrDefault("PROBOD_API_GRAPHQL_QUERY_CACHE_SIZE", 1000),
 					DisableSuggestion: b.resolver.getEnvBoolOrDefault("PROBOD_API_GRAPHQL_DISABLE_SUGGESTION", true),
+					RateLimit:         rateLimit,
 				},
 			},
 			Pg: probodconfig.PgConfig{
@@ -105,12 +158,14 @@ func (b *Builder) Build() (*probodconfig.FullConfig, error) {
 				InvitationConfirmationTokenValidity: b.resolver.getEnvIntOrDefault("PROBOD_AUTH_INVITATION_TOKEN_VALIDITY", 3600),
 				PasswordResetTokenValidity:          b.resolver.getEnvIntOrDefault("PROBOD_AUTH_PASSWORD_RESET_TOKEN_VALIDITY", 3600),
 				MagicLinkTokenValidity:              b.resolver.getEnvIntOrDefault("PROBOD_AUTH_MAGIC_LINK_TOKEN_VALIDITY", 900),
+				EmailConfirmationTokenValidity:      b.resolver.getEnvIntOrDefault("PROBOD_AUTH_EMAIL_CONFIRMATION_TOKEN_VALIDITY", 3600),
 				Cookie: probodconfig.CookieConfig{
 					Name:     b.resolver.getEnv("PROBOD_AUTH_COOKIE_NAME"),
 					Domain:   b.resolver.getEnv("PROBOD_AUTH_COOKIE_DOMAIN"),
 					Secret:   b.resolver.getEnv("PROBOD_AUTH_COOKIE_SECRET"),
 					Duration: b.resolver.getEnvIntOrDefault("PROBOD_AUTH_COOKIE_DURATION", 24),
 					Secure:   b.resolver.getEnvBoolOrDefault("PROBOD_AUTH_COOKIE_SECURE", true),
+					SameSite: authCookieSameSite,
 				},
 				Password: probodconfig.PasswordConfig{
 					Pepper:     b.resolver.getEnv("PROBOD_AUTH_PASSWORD_PEPPER"),
@@ -149,9 +204,39 @@ func (b *Builder) Build() (*probodconfig.FullConfig, error) {
 					),
 				},
 			},
-			TrustCenter: probodconfig.TrustCenterConfig{
-				HTTPAddr:  b.resolver.getEnv("PROBOD_TRUST_CENTER_HTTP_ADDR"),
-				HTTPSAddr: b.resolver.getEnv("PROBOD_TRUST_CENTER_HTTPS_ADDR"),
+			IdentityFederation: probodconfig.IdentityFederationConfig{
+				Enabled:       identityFederationEnabled,
+				IssuerBaseURL: b.resolver.getEnv("PROBOD_IDENTITY_FEDERATION_ISSUER_BASE_URL"),
+				SigningKeys:   identityFederationSigningKeys,
+				CloudFormationTemplateURL: b.resolver.getEnvOrDefault(
+					"PROBOD_IDENTITY_FEDERATION_CLOUDFORMATION_TEMPLATE_URL",
+					cloudaws.DefaultCloudFormationTemplateURL,
+				),
+				TerraformModuleSource: b.resolver.getEnvOrDefault(
+					"PROBOD_IDENTITY_FEDERATION_TERRAFORM_MODULE_SOURCE",
+					cloudaws.DefaultTerraformModuleSource,
+				),
+				GCPTerraformModuleSource: b.resolver.getEnvOrDefault(
+					"PROBOD_IDENTITY_FEDERATION_GCP_TERRAFORM_MODULE_SOURCE",
+					cloudgcp.DefaultTerraformModuleSource,
+				),
+				AzureTerraformModuleSource: b.resolver.getEnvOrDefault(
+					"PROBOD_IDENTITY_FEDERATION_AZURE_TERRAFORM_MODULE_SOURCE",
+					cloudazure.DefaultTerraformModuleSource,
+				),
+				AWSEndpoint: b.resolver.getEnv("PROBOD_IDENTITY_FEDERATION_AWS_ENDPOINT"),
+			},
+			ITAM: probodconfig.ITAMConfig{
+				DeviceEnrollmentTokenValidity: b.resolver.getEnvIntOrDefault(
+					"PROBOD_ITAM_DEVICE_ENROLLMENT_TOKEN_VALIDITY",
+					604800,
+				),
+			},
+			CompliancePortal: probodconfig.CompliancePortalConfig{
+				HTTPAddr:   b.resolver.getEnv("PROBOD_TRUST_CENTER_HTTP_ADDR"),
+				HTTPSAddr:  b.resolver.getEnv("PROBOD_TRUST_CENTER_HTTPS_ADDR"),
+				BaseDomain: b.resolver.getEnv("PROBOD_TRUST_CENTER_BASE_DOMAIN"),
+				TLSMode:    compliancePortalTLSMode,
 				ProxyProtocol: probodconfig.ProxyProtocolConfig{
 					TrustedProxies: b.parseOriginsList(b.resolver.getEnv("PROBOD_TRUST_CENTER_PROXY_PROTOCOL_TRUSTED_PROXIES")),
 				},
@@ -183,13 +268,26 @@ func (b *Builder) Build() (*probodconfig.FullConfig, error) {
 				},
 				Webhook: probodconfig.WebhookConfig{
 					SenderInterval: b.resolver.getEnvIntOrDefault("PROBOD_WEBHOOK_SENDER_INTERVAL", 5),
+					RequestTimeout: b.resolver.getEnvIntOrDefault("PROBOD_WEBHOOK_REQUEST_TIMEOUT", 15),
 					CacheTTL:       b.resolver.getEnvIntOrDefault("PROBOD_WEBHOOK_CACHE_TTL", 86400),
+					StaleAfter:     b.resolver.getEnvIntOrDefault("PROBOD_WEBHOOK_STALE_AFTER", 300),
+					RetryBase:      b.resolver.getEnvIntOrDefault("PROBOD_WEBHOOK_RETRY_BASE", 30),
+					RetryMax:       b.resolver.getEnvIntOrDefault("PROBOD_WEBHOOK_RETRY_MAX", 14400),
+					MaxConcurrency: b.resolver.getEnvIntOrDefault("PROBOD_WEBHOOK_MAX_CONCURRENCY", 5),
 				},
-				Document: probodconfig.DocumentNotificationConfig{
-					Interval:         b.resolver.getEnvIntOrDefault("PROBOD_DOCUMENT_NOTIFICATION_INTERVAL", 300),
-					DebounceDelay:    b.resolver.getEnvIntOrDefault("PROBOD_DOCUMENT_NOTIFICATION_DEBOUNCE_DELAY", 900),
-					ReminderInterval: b.resolver.getEnvIntOrDefault("PROBOD_DOCUMENT_NOTIFICATION_REMINDER_INTERVAL", 86400),
+				Email: probodconfig.EmailNotificationConfig{
+					Interval:         b.resolver.getEnvIntOrDefault("PROBOD_NOTIFICATION_EMAIL_INTERVAL", 300),
+					DebounceDelay:    b.resolver.getEnvIntOrDefault("PROBOD_NOTIFICATION_EMAIL_DEBOUNCE_DELAY", 900),
+					ReminderInterval: b.resolver.getEnvIntOrDefault("PROBOD_NOTIFICATION_EMAIL_REMINDER_INTERVAL", 86400),
 				},
+				FeedbackURL: b.resolver.getEnv("PROBOD_FEEDBACK_URL"),
+				Weekly: probodconfig.WeeklyNotificationConfig{
+					Weekday: b.resolver.getEnvIntOrDefault("PROBOD_NOTIFICATION_WEEKLY_WEEKDAY", 1),
+					Hour:    b.resolver.getEnvIntOrDefault("PROBOD_NOTIFICATION_WEEKLY_HOUR", 16),
+				},
+			},
+			TaskRecurrence: probodconfig.TaskRecurrenceConfig{
+				Interval: b.resolver.getEnvIntOrDefault("PROBOD_TASK_RECURRENCE_INTERVAL", 300),
 			},
 			Agents: func() probodconfig.AgentsConfig {
 				defaultProvider := b.resolver.getEnvOrDefault("PROBOD_AGENT_DEFAULT_PROVIDER", "openai")
@@ -220,17 +318,6 @@ func (b *Builder) Build() (*probodconfig.FullConfig, error) {
 						Temperature: b.resolver.getEnvFloatPtr("PROBOD_AGENT_THIRD_PARTY_VETTER_TEMPERATURE"),
 						MaxTokens:   b.resolver.getEnvIntPtr("PROBOD_AGENT_THIRD_PARTY_VETTER_MAX_TOKENS"),
 					},
-					ThirdPartyDisambiguation: probodconfig.LLMAgentConfig{
-						Provider:  b.resolver.getEnvOrDefault("PROBOD_AGENT_THIRD_PARTY_DISAMBIGUATION_PROVIDER", ""),
-						ModelName: b.resolver.getEnvOrDefault("PROBOD_AGENT_THIRD_PARTY_DISAMBIGUATION_MODEL_NAME", ""),
-						// The disambiguation agent emits a single id plus a
-						// short rationale, but the budget must leave headroom
-						// for reasoning models whose reasoning tokens count
-						// against max_tokens; too small a budget truncates the
-						// JSON.
-						Temperature: b.resolver.getEnvFloatPtr("PROBOD_AGENT_THIRD_PARTY_DISAMBIGUATION_TEMPERATURE"),
-						MaxTokens:   new(b.resolver.getEnvIntOrDefault("PROBOD_AGENT_THIRD_PARTY_DISAMBIGUATION_MAX_TOKENS", 4096)),
-					},
 					TrackerMapping: probodconfig.LLMAgentConfig{
 						Provider:  b.resolver.getEnvOrDefault("PROBOD_AGENT_TRACKER_MAPPING_PROVIDER", ""),
 						ModelName: b.resolver.getEnvOrDefault("PROBOD_AGENT_TRACKER_MAPPING_MODEL_NAME", ""),
@@ -258,6 +345,12 @@ func (b *Builder) Build() (*probodconfig.FullConfig, error) {
 						Temperature: b.resolver.getEnvFloatPtr("PROBOD_AGENT_COMMON_THIRD_PARTY_ENRICHMENT_TEMPERATURE"),
 						MaxTokens:   new(b.resolver.getEnvIntOrDefault("PROBOD_AGENT_COMMON_THIRD_PARTY_ENRICHMENT_MAX_TOKENS", 8192)),
 					},
+					Slackbot: probodconfig.LLMAgentConfig{
+						Provider:    b.resolver.getEnvOrDefault("PROBOD_AGENT_SLACKBOT_PROVIDER", ""),
+						ModelName:   b.resolver.getEnvOrDefault("PROBOD_AGENT_SLACKBOT_MODEL_NAME", ""),
+						Temperature: b.resolver.getEnvFloatPtr("PROBOD_AGENT_SLACKBOT_TEMPERATURE"),
+						MaxTokens:   b.resolver.getEnvIntPtr("PROBOD_AGENT_SLACKBOT_MAX_TOKENS"),
+					},
 					Tools: probodconfig.AgentToolsConfig{
 						FirecrawlAPIKey: b.resolver.getEnv("PROBOD_FIRECRAWL_API_KEY"),
 					},
@@ -274,7 +367,7 @@ func (b *Builder) Build() (*probodconfig.FullConfig, error) {
 					Email:      b.resolver.getEnv("PROBOD_ACME_EMAIL"),
 					KeyType:    b.resolver.getEnv("PROBOD_ACME_KEY_TYPE"),
 					RootCA:     b.resolver.getEnv("PROBOD_ACME_ROOT_CA"),
-					AccountKey: b.resolver.getEnv("PROBOD_ACME_ACCOUNT_KEY"),
+					AccountKey: acmeAccountKey,
 				},
 			},
 			SCIMBridge: probodconfig.SCIMBridgeConfig{
@@ -295,12 +388,11 @@ func (b *Builder) Build() (*probodconfig.FullConfig, error) {
 				MaxConcurrency: b.resolver.getEnvIntOrDefault("PROBOD_THIRD_PARTY_VETTING_MAX_CONCURRENCY", 1),
 			},
 			TrackerMappingWorker: probodconfig.TrackerMappingWorkerConfig{
-				Interval:                   b.resolver.getEnvIntOrDefault("PROBOD_TRACKER_MAPPING_INTERVAL", 10),
-				MaxConcurrency:             b.resolver.getEnvIntOrDefault("PROBOD_TRACKER_MAPPING_MAX_CONCURRENCY", 3),
-				StaleAfter:                 b.resolver.getEnvIntOrDefault("PROBOD_TRACKER_MAPPING_STALE_AFTER", 600),
-				AgentTimeout:               b.resolver.getEnvIntOrDefault("PROBOD_TRACKER_MAPPING_AGENT_TIMEOUT", 45),
-				AgentMaxTurns:              b.resolver.getEnvIntOrDefault("PROBOD_TRACKER_MAPPING_AGENT_MAX_TURNS", 10),
-				DisambiguationAgentTimeout: b.resolver.getEnvIntOrDefault("PROBOD_TRACKER_MAPPING_DISAMBIGUATION_AGENT_TIMEOUT", 45),
+				Interval:       b.resolver.getEnvIntOrDefault("PROBOD_TRACKER_MAPPING_INTERVAL", 10),
+				MaxConcurrency: b.resolver.getEnvIntOrDefault("PROBOD_TRACKER_MAPPING_MAX_CONCURRENCY", 3),
+				StaleAfter:     b.resolver.getEnvIntOrDefault("PROBOD_TRACKER_MAPPING_STALE_AFTER", 600),
+				AgentTimeout:   b.resolver.getEnvIntOrDefault("PROBOD_TRACKER_MAPPING_AGENT_TIMEOUT", 45),
+				AgentMaxTurns:  b.resolver.getEnvIntOrDefault("PROBOD_TRACKER_MAPPING_AGENT_MAX_TURNS", 10),
 			},
 			CommonPatternEnrichmentWorker: probodconfig.CommonPatternEnrichmentWorkerConfig{
 				Interval:       b.resolver.getEnvIntOrDefault("PROBOD_COMMON_PATTERN_ENRICHMENT_INTERVAL", 10),
@@ -319,7 +411,33 @@ func (b *Builder) Build() (*probodconfig.FullConfig, error) {
 				MaxAttempts:         b.resolver.getEnvIntOrDefault("PROBOD_COMMON_THIRD_PARTY_ENRICHMENT_MAX_ATTEMPTS", 3),
 			},
 			Branding: b.resolver.getEnvBoolOrDefault("PROBOD_BRANDING", true),
+			CookieBanner: probodconfig.CookieBannerConfig{
+				TCFCMPID: b.resolver.getEnvIntOrDefault("PROBOD_COOKIE_BANNER_TCF_CMP_ID", 4095),
+			},
+			Slackbot: probodconfig.SlackbotConfig{
+				Enabled:       b.resolver.getEnvBoolOrDefault("PROBOD_SLACKBOT_ENABLED", false),
+				SigningSecret: b.resolver.getEnv("PROBOD_SLACKBOT_SIGNING_SECRET"),
+				ClientID:      b.resolver.getEnv("PROBOD_SLACKBOT_CLIENT_ID"),
+				ClientSecret:  b.resolver.getEnv("PROBOD_SLACKBOT_CLIENT_SECRET"),
+				RedirectURI:   b.resolver.getEnv("PROBOD_SLACKBOT_REDIRECT_URI"),
+			},
+			Faro: probodconfig.FaroConfig{
+				Enabled:      b.resolver.getEnvBoolOrDefault("PROBOD_FARO_ENABLED", false),
+				APIKey:       b.resolver.getEnv("PROBOD_FARO_API_KEY"),
+				CollectorURL: b.resolver.getEnv("PROBOD_FARO_COLLECTOR_URL"),
+			},
 		},
+	}
+
+	if err := validateCookieBannerTCFCmpID(cfg.Probod.CookieBanner.TCFCMPID); err != nil {
+		return nil, err
+	}
+
+	if err := validateWeeklyNotificationSchedule(
+		cfg.Probod.Notifications.Weekly.Weekday,
+		cfg.Probod.Notifications.Weekly.Hour,
+	); err != nil {
+		return nil, err
 	}
 
 	if slackClientID := b.resolver.getEnv("PROBOD_CONNECTOR_SLACK_CLIENT_ID"); slackClientID != "" {
@@ -390,6 +508,23 @@ func (b *Builder) Build() (*probodconfig.FullConfig, error) {
 				RawConfig: probodconfig.ConnectorConfigOAuth2{
 					ClientID:     githubClientID,
 					ClientSecret: b.resolver.getEnv("PROBOD_CONNECTOR_GITHUB_CLIENT_SECRET"),
+				},
+			},
+		)
+	}
+
+	if githubAppID := b.resolver.getEnv("PROBOD_CONNECTOR_GITHUB_APP_ID"); githubAppID != "" {
+		cfg.Probod.Connectors = append(
+			cfg.Probod.Connectors,
+			probodconfig.ConnectorConfig{
+				Provider: "GITHUB",
+				Protocol: connectorprotocol.ProtocolGitHubApp,
+				RawConfig: probodconfig.ConnectorConfigGitHubApp{
+					AppID:        githubAppID,
+					ClientID:     b.resolver.getEnv("PROBOD_CONNECTOR_GITHUB_APP_CLIENT_ID"),
+					ClientSecret: b.resolver.getEnv("PROBOD_CONNECTOR_GITHUB_APP_CLIENT_SECRET"),
+					Slug:         b.resolver.getEnv("PROBOD_CONNECTOR_GITHUB_APP_SLUG"),
+					PrivateKey:   b.resolver.getEnv("PROBOD_CONNECTOR_GITHUB_APP_PRIVATE_KEY"),
 				},
 			},
 		)
@@ -477,6 +612,16 @@ func (b *Builder) Build() (*probodconfig.FullConfig, error) {
 		"DATADOG",
 		"ZENDESK",
 		"LINEAR",
+		"LINEAR_SYNC",
+		"GOOGLE_ANALYTICS",
+		"SQUARE",
+		"FRONT",
+		"CAL_COM",
+		"CALENDLY",
+		"ATTIO",
+		"OVHCLOUD",
+		"OVHCLOUD_US",
+		"PLANETSCALE",
 	} {
 		clientID := b.resolver.getEnv("PROBOD_CONNECTOR_" + provider + "_CLIENT_ID")
 		if clientID == "" {
@@ -496,6 +641,21 @@ func (b *Builder) Build() (*probodconfig.FullConfig, error) {
 		)
 	}
 
+	if webhookSecret := b.resolver.getEnv("PROBOD_CONNECTOR_LINEAR_SYNC_WEBHOOK_SECRET"); webhookSecret != "" {
+		for i := range cfg.Probod.Connectors {
+			if cfg.Probod.Connectors[i].Provider != "LINEAR_SYNC" {
+				continue
+			}
+
+			cfg.Probod.Connectors[i].RawSettings = map[string]any{
+				"webhook-secret": webhookSecret,
+			}
+			cfg.Probod.Connectors[i].Settings = map[string]any{
+				"webhook-secret": webhookSecret,
+			}
+		}
+	}
+
 	// Vercel needs the operator-supplied integration slug to resolve the
 	// templated AuthURL ("https://vercel.com/integrations/{integration_slug}/new").
 	if vercelClientID := b.resolver.getEnv("PROBOD_CONNECTOR_VERCEL_CLIENT_ID"); vercelClientID != "" {
@@ -513,8 +673,47 @@ func (b *Builder) Build() (*probodconfig.FullConfig, error) {
 		)
 	}
 
+	// Crisp is a ManagedAPIKey (Model B) connector: Probo holds one
+	// Marketplace plugin token (the verbatim "identifier:key" pair) shared
+	// across all customer connections, and each connection carries only a
+	// Website ID. The plugin ID is a separate value (the token's Basic
+	// identifier is not the plugin ID) with two consumers: the install redirect
+	// interpolates it into the vendor URL the customer is sent to, and the
+	// per-website plugin API that verifies website ownership takes it on the way
+	// back. Both must be set to activate the connector; until then it stays
+	// hidden from the driver catalog and both install legs answer 404, so it
+	// ships deactivated and activates the moment Crisp validates the production
+	// plugin and both values are configured.
+	crispPluginToken := b.resolver.getEnv("PROBOD_CONNECTOR_CRISP_PLUGIN_TOKEN")
+
+	crispPluginID := b.resolver.getEnv("PROBOD_CONNECTOR_CRISP_PLUGIN_ID")
+	if crispPluginToken != "" && crispPluginID != "" {
+		cfg.Probod.Connectors = append(
+			cfg.Probod.Connectors,
+			probodconfig.ConnectorConfig{
+				Provider: "CRISP",
+				Protocol: "api_key",
+				RawConfig: probodconfig.ConnectorConfigAPIKey{
+					APIKey:     crispPluginToken,
+					ResourceID: crispPluginID,
+				},
+			},
+		)
+	}
+
+	connectorEndpoints, err := b.buildConnectorEndpoints()
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.Probod.ConnectorEndpoints = connectorEndpoints
+
 	if b.resolver.Err() != nil {
 		return nil, b.resolver.Err()
+	}
+
+	if err := cfg.Probod.Auth.Cookie.Validate(); err != nil {
+		return nil, fmt.Errorf("cannot validate auth cookie config: %w", err)
 	}
 
 	return cfg, nil
@@ -539,6 +738,17 @@ func (b *Builder) validateRequired() error {
 		missing = append(missing, "PROBOD_OAUTH2_SERVER_SIGNING_KEY")
 	}
 
+	// The identity federation issuer is opt-in, so its key is only required once an
+	// operator turns it on. A deployment that never federates to a cloud
+	// provider needs no second key.
+	if b.resolver.getEnvBoolOrDefault("PROBOD_IDENTITY_FEDERATION_ENABLED", false) &&
+		b.resolver.getEnv("PROBOD_IDENTITY_FEDERATION_SIGNING_KEY") == "" {
+		missing = append(
+			missing,
+			"PROBOD_IDENTITY_FEDERATION_SIGNING_KEY (required when PROBOD_IDENTITY_FEDERATION_ENABLED is true)",
+		)
+	}
+
 	if slackClientID := b.resolver.getEnv("PROBOD_CONNECTOR_SLACK_CLIENT_ID"); slackClientID != "" {
 		slackRequired := []string{
 			"PROBOD_CONNECTOR_SLACK_CLIENT_SECRET",
@@ -547,6 +757,74 @@ func (b *Builder) validateRequired() error {
 		for _, key := range slackRequired {
 			if b.resolver.getEnv(key) == "" {
 				missing = append(missing, key+" (required when PROBOD_CONNECTOR_SLACK_CLIENT_ID is set)")
+			}
+		}
+	}
+
+	if b.resolver.getEnvBoolOrDefault("PROBOD_FARO_ENABLED", false) {
+		faroRequired := []string{
+			"PROBOD_FARO_COLLECTOR_URL",
+			"PROBOD_FARO_API_KEY",
+		}
+		for _, key := range faroRequired {
+			if b.resolver.getEnv(key) == "" {
+				missing = append(missing, key+" (required when PROBOD_FARO_ENABLED is true)")
+			}
+		}
+	}
+
+	if b.resolver.getEnvBoolOrDefault("PROBOD_SLACKBOT_ENABLED", false) {
+		slackbotRequired := []string{
+			"PROBOD_SLACKBOT_SIGNING_SECRET",
+			"PROBOD_SLACKBOT_CLIENT_ID",
+			"PROBOD_SLACKBOT_CLIENT_SECRET",
+			"PROBOD_SLACKBOT_REDIRECT_URI",
+		}
+		for _, key := range slackbotRequired {
+			if b.resolver.getEnv(key) == "" {
+				missing = append(missing, key+" (required when PROBOD_SLACKBOT_ENABLED is true)")
+			}
+		}
+
+		provider := b.resolver.getEnv("PROBOD_AGENT_SLACKBOT_PROVIDER")
+		if provider == "" {
+			provider = b.resolver.getEnv("PROBOD_AGENT_DEFAULT_PROVIDER")
+		}
+
+		if provider == "" {
+			provider = "openai"
+		}
+
+		var providerAPIKey string
+
+		switch provider {
+		case "openai":
+			providerAPIKey = "PROBOD_OPENAI_API_KEY"
+		case "anthropic":
+			providerAPIKey = "PROBOD_ANTHROPIC_API_KEY"
+		}
+
+		if providerAPIKey != "" && b.resolver.getEnv(providerAPIKey) == "" {
+			missing = append(
+				missing,
+				providerAPIKey+" (required by the enabled Slackbot agent provider)",
+			)
+		}
+	}
+
+	if b.resolver.getEnv("PROBOD_CONNECTOR_GITHUB_APP_ID") != "" {
+		gitHubAppRequired := []string{
+			"PROBOD_CONNECTOR_GITHUB_APP_CLIENT_ID",
+			"PROBOD_CONNECTOR_GITHUB_APP_CLIENT_SECRET",
+			"PROBOD_CONNECTOR_GITHUB_APP_SLUG",
+			"PROBOD_CONNECTOR_GITHUB_APP_PRIVATE_KEY",
+		}
+		for _, key := range gitHubAppRequired {
+			if b.resolver.getEnv(key) == "" {
+				missing = append(
+					missing,
+					key+" (required when PROBOD_CONNECTOR_GITHUB_APP_ID is set)",
+				)
 			}
 		}
 	}
@@ -575,7 +853,17 @@ func (b *Builder) validateRequired() error {
 		{"CONNECTOR_DATADOG", []string{"CLIENT_SECRET"}},
 		{"CONNECTOR_ZENDESK", []string{"CLIENT_SECRET"}},
 		{"CONNECTOR_LINEAR", []string{"CLIENT_SECRET"}},
+		{"CONNECTOR_LINEAR_SYNC", []string{"CLIENT_SECRET", "WEBHOOK_SECRET"}},
+		{"CONNECTOR_GOOGLE_ANALYTICS", []string{"CLIENT_SECRET"}},
+		{"CONNECTOR_SQUARE", []string{"CLIENT_SECRET"}},
+		{"CONNECTOR_FRONT", []string{"CLIENT_SECRET"}},
+		{"CONNECTOR_CAL_COM", []string{"CLIENT_SECRET"}},
+		{"CONNECTOR_CALENDLY", []string{"CLIENT_SECRET"}},
+		{"CONNECTOR_ATTIO", []string{"CLIENT_SECRET"}},
 		{"CONNECTOR_VERCEL", []string{"CLIENT_SECRET", "INTEGRATION_SLUG"}},
+		{"CONNECTOR_OVHCLOUD", []string{"CLIENT_SECRET"}},
+		{"CONNECTOR_OVHCLOUD_US", []string{"CLIENT_SECRET"}},
+		{"CONNECTOR_PLANETSCALE", []string{"CLIENT_SECRET"}},
 	}
 
 	for _, p := range oauthProviders {
@@ -601,34 +889,131 @@ func (b *Builder) validateRequired() error {
 	return nil
 }
 
-func (b *Builder) getSAMLCredentials() (cert, key string, err error) {
-	cert = b.samlCertificate
-	key = b.samlPrivateKey
+func validateCookieBannerTCFCmpID(id int) error {
+	if id < 2 || id > 4095 {
+		return fmt.Errorf("PROBOD_COOKIE_BANNER_TCF_CMP_ID must be between 2 and 4095")
+	}
+
+	return nil
+}
+
+func validateWeeklyNotificationSchedule(weekday int, hour int) error {
+	if weekday < 0 || weekday > 6 {
+		return fmt.Errorf("PROBOD_NOTIFICATION_WEEKLY_WEEKDAY must be between 0 and 6")
+	}
+
+	if hour < 0 || hour > 23 {
+		return fmt.Errorf("PROBOD_NOTIFICATION_WEEKLY_HOUR must be between 0 and 23")
+	}
+
+	return nil
+}
+
+func (b *Builder) getSAMLCredentials() (string, probodconfig.RSAPrivateKey, error) {
+	cert := b.samlCertificate
+	keyPEM := b.samlPrivateKey
 
 	if cert == "" {
 		cert = b.resolver.getEnv("PROBOD_SAML_CERTIFICATE")
 	}
 
-	if key == "" {
-		key = b.resolver.getEnv("PROBOD_SAML_PRIVATE_KEY")
+	if keyPEM == "" {
+		keyPEM = b.resolver.getEnv("PROBOD_SAML_PRIVATE_KEY")
 	}
 
-	if cert == "" || key == "" {
-		cert, key, err = GenerateSAMLCertificate()
+	if cert == "" || keyPEM == "" {
+		generatedCert, generatedKey, err := GenerateSAMLCertificate()
 		if err != nil {
-			return "", "", fmt.Errorf("cannot generate SAML certificate: %w", err)
+			return "", probodconfig.RSAPrivateKey{}, fmt.Errorf("cannot generate SAML certificate: %w", err)
 		}
+
+		cert = generatedCert
+		keyPEM = generatedKey
+	}
+
+	key, err := probodconfig.ParseRSAPrivateKey(keyPEM)
+	if err != nil {
+		return "", probodconfig.RSAPrivateKey{}, fmt.Errorf("cannot parse SAML private key: %w", err)
 	}
 
 	return cert, key, nil
 }
 
-func (b *Builder) getOAuth2SigningKey() string {
-	if b.oauth2SigningKey != "" {
-		return b.oauth2SigningKey
+func (b *Builder) getOAuth2SigningKey() (probodconfig.RSAPrivateKey, error) {
+	keyPEM := b.oauth2SigningKey
+	if keyPEM == "" {
+		keyPEM = b.resolver.getEnv("PROBOD_OAUTH2_SERVER_SIGNING_KEY")
 	}
 
-	return b.resolver.getEnv("PROBOD_OAUTH2_SERVER_SIGNING_KEY")
+	return probodconfig.ParseRSAPrivateKey(keyPEM)
+}
+
+// buildIdentityFederationSigningKeys returns the keys published in the identity
+// federation JWKS. The previous key is optional and never signs: it stays
+// published across a rotation so that a cloud provider holding a cached key set
+// can still verify a token minted before the swap.
+func (b *Builder) buildIdentityFederationSigningKeys(
+	enabled bool,
+) ([]probodconfig.IdentityFederationSigningKeyConfig, error) {
+	if !enabled {
+		return nil, nil
+	}
+
+	kid := b.resolver.getEnvOrDefault("PROBOD_IDENTITY_FEDERATION_SIGNING_KEY_KID", "default")
+
+	activeKey, err := probodconfig.ParseRSAPrivateKey(
+		b.resolver.getEnv("PROBOD_IDENTITY_FEDERATION_SIGNING_KEY"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse PROBOD_IDENTITY_FEDERATION_SIGNING_KEY: %w", err)
+	}
+
+	signingKeys := []probodconfig.IdentityFederationSigningKeyConfig{
+		{
+			PrivateKey: activeKey,
+			KID:        kid,
+			Active:     true,
+		},
+	}
+
+	previousPrivateKey := b.resolver.getEnv("PROBOD_IDENTITY_FEDERATION_PREVIOUS_SIGNING_KEY")
+	previousKID := b.resolver.getEnv("PROBOD_IDENTITY_FEDERATION_PREVIOUS_SIGNING_KEY_KID")
+
+	if previousPrivateKey == "" && previousKID == "" {
+		return signingKeys, nil
+	}
+
+	if previousPrivateKey == "" {
+		return nil, fmt.Errorf("cannot build identity federation signing keys: PROBOD_IDENTITY_FEDERATION_PREVIOUS_SIGNING_KEY is required when PROBOD_IDENTITY_FEDERATION_PREVIOUS_SIGNING_KEY_KID is set")
+	}
+
+	// A verifier selects the retired key by its own kid, so it cannot be
+	// defaulted: "default" is what an operator who never named a key already
+	// signs with.
+	if previousKID == "" {
+		return nil, fmt.Errorf("cannot build identity federation signing keys: PROBOD_IDENTITY_FEDERATION_PREVIOUS_SIGNING_KEY_KID is required when PROBOD_IDENTITY_FEDERATION_PREVIOUS_SIGNING_KEY is set")
+	}
+
+	if previousKID == kid {
+		return nil, fmt.Errorf(
+			"cannot build identity federation signing keys: PROBOD_IDENTITY_FEDERATION_PREVIOUS_SIGNING_KEY_KID must differ from PROBOD_IDENTITY_FEDERATION_SIGNING_KEY_KID, both are %q",
+			kid,
+		)
+	}
+
+	retiredKey, err := probodconfig.ParseRSAPrivateKey(previousPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse PROBOD_IDENTITY_FEDERATION_PREVIOUS_SIGNING_KEY: %w", err)
+	}
+
+	return append(
+		signingKeys,
+		probodconfig.IdentityFederationSigningKeyConfig{
+			PrivateKey: retiredKey,
+			KID:        previousKID,
+			Active:     false,
+		},
+	), nil
 }
 
 func (b *Builder) getPgCACertBundle() string {
@@ -647,15 +1032,17 @@ func (b *Builder) buildLLMProviders() map[string]probodconfig.LLMProviderConfig 
 
 	if apiKey := b.resolver.getEnv("PROBOD_OPENAI_API_KEY"); apiKey != "" {
 		providers["openai"] = probodconfig.LLMProviderConfig{
-			Type:   "openai",
-			APIKey: apiKey,
+			Type:    "openai",
+			APIKey:  apiKey,
+			BaseURL: b.resolver.getEnv("PROBOD_OPENAI_BASE_URL"),
 		}
 	}
 
 	if apiKey := b.resolver.getEnv("PROBOD_ANTHROPIC_API_KEY"); apiKey != "" {
 		providers["anthropic"] = probodconfig.LLMProviderConfig{
-			Type:   "anthropic",
-			APIKey: apiKey,
+			Type:    "anthropic",
+			APIKey:  apiKey,
+			BaseURL: b.resolver.getEnv("PROBOD_ANTHROPIC_BASE_URL"),
 		}
 	}
 
@@ -684,4 +1071,129 @@ func (b *Builder) parseOriginsList(s string) []string {
 	}
 
 	return result
+}
+
+// buildConnectorEndpoints collects per-provider endpoint overrides from
+// PROBOD_CONNECTOR_<PROVIDER>_ENDPOINT_{AUTH,TOKEN,PROBE,IDENTITY,API_BASE},
+// letting a deployment point a connector at a vendor sandbox without a code
+// change.
+//
+// The provider list comes from the connector registry rather than a literal
+// here, so a new provider is overridable the moment it is registered. The
+// resolver looks up keys one at a time and cannot enumerate the environment,
+// which is why the providers are iterated instead of the variables — that
+// same blindness is why checkConnectorEndpointEnvTypos below exists as a
+// separate, explicit environment scan.
+//
+// probod rejects an override that names an unknown provider or a field the
+// provider does not resolve statically, so a typo fails at startup rather than
+// sitting in the config doing nothing. Building the registry can itself fail
+// on a bad Registration, which is why this returns an error instead of
+// panicking: that failure is an operator-visible startup condition here, not
+// the programmer error NewBuiltinRegistry treats it as elsewhere.
+func (b *Builder) buildConnectorEndpoints() (map[string]probodconfig.ConnectorEndpointsConfig, error) {
+	reg, err := provider.NewBuiltinRegistryWith()
+	if err != nil {
+		return nil, fmt.Errorf("cannot build connector provider registry: %w", err)
+	}
+
+	known := make(map[string]bool, len(reg.All()))
+	for _, r := range reg.All() {
+		known[string(r.Provider)] = true
+	}
+
+	if err := b.checkConnectorEndpointEnvTypos(known); err != nil {
+		return nil, err
+	}
+
+	var endpoints map[string]probodconfig.ConnectorEndpointsConfig
+
+	for _, r := range reg.All() {
+		prefix := "PROBOD_CONNECTOR_" + string(r.Provider) + "_ENDPOINT_"
+
+		e := probodconfig.ConnectorEndpointsConfig{
+			Auth:     b.resolver.getEnv(prefix + "AUTH"),
+			Token:    b.resolver.getEnv(prefix + "TOKEN"),
+			Probe:    b.resolver.getEnv(prefix + "PROBE"),
+			Identity: b.resolver.getEnv(prefix + "IDENTITY"),
+			APIBase:  b.resolver.getEnv(prefix + "API_BASE"),
+		}
+
+		if e == (probodconfig.ConnectorEndpointsConfig{}) {
+			continue
+		}
+
+		if endpoints == nil {
+			endpoints = make(map[string]probodconfig.ConnectorEndpointsConfig)
+		}
+
+		endpoints[string(r.Provider)] = e
+	}
+
+	return endpoints, nil
+}
+
+// checkConnectorEndpointEnvTypos scans the environment (when the resolver has
+// an enumerator — production always does, via NewResolver(nil)) for
+// PROBOD_CONNECTOR_*_ENDPOINT_* keys and rejects any whose provider segment is
+// not in known or whose field segment is not one of connectorEndpointFields.
+//
+// This exists because buildConnectorEndpoints's getEnv calls above are blind
+// to a typo: PROBOD_CONNECTOR_GITHBU_ENDPOINT_API_BASE resolves to "" exactly
+// like an unset key, so the misspelled provider's endpoint silently keeps
+// pointing at production while the operator believes they repointed it.
+// getEnv cannot see a key it never asked for; only a full-environment scan
+// can. When the resolver has no enumerator (every test that does not opt in
+// via Resolver.SetEnumerator) this is a no-op, matching the pre-existing
+// getEnv-only behaviour.
+func (b *Builder) checkConnectorEndpointEnvTypos(known map[string]bool) error {
+	const (
+		prefix = "PROBOD_CONNECTOR_"
+		infix  = "_ENDPOINT_"
+	)
+
+	var bad []string
+
+	for _, key := range b.resolver.keys() {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+
+		rest := strings.TrimPrefix(key, prefix)
+
+		before, after, ok := strings.Cut(rest, infix)
+		if !ok {
+			continue
+		}
+
+		providerSeg := before
+		fieldSeg := after
+
+		switch {
+		case !known[providerSeg]:
+			bad = append(bad, fmt.Sprintf("%s: %q is not a registered connector provider", key, providerSeg))
+		case !slices.Contains(connectorEndpointFields, fieldSeg):
+			bad = append(bad, fmt.Sprintf("%s: %q is not a connector endpoint field", key, fieldSeg))
+		}
+	}
+
+	if len(bad) > 0 {
+		return fmt.Errorf("invalid connector endpoint override environment variable(s):\n  - %s", strings.Join(bad, "\n  - "))
+	}
+
+	return nil
+}
+
+func (b *Builder) rateLimit() (probodconfig.GraphQLRateLimitConfig, error) {
+	raw := b.resolver.getEnv("PROBOD_API_GRAPHQL_RATE_LIMIT")
+	if raw == "" {
+		return probodconfig.GraphQLRateLimitConfig{}, nil
+	}
+
+	var cfg probodconfig.GraphQLRateLimitConfig
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return probodconfig.GraphQLRateLimitConfig{}, fmt.Errorf("cannot parse PROBOD_API_GRAPHQL_RATE_LIMIT: %w", err)
+	}
+
+	return cfg, nil
 }

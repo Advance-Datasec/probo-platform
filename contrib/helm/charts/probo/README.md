@@ -1,6 +1,6 @@
-# Govrly Helm Chart
+# Probo Helm Chart
 
-This Helm chart deploys Govrly - an open-source SOC-2 compliance platform - on Kubernetes.
+This Helm chart deploys Probo - an open-source SOC-2 compliance platform - on Kubernetes.
 
 ## Prerequisites
 
@@ -52,7 +52,7 @@ TEMP_KEY=$(mktemp)
 TEMP_CERT=$(mktemp)
 
 openssl req -x509 -newkey rsa:2048 -keyout "$TEMP_KEY" -out "$TEMP_CERT" \
-  -days 3650 -nodes -subj "/CN=probo-saml/O=Govrly/C=US" 2>/dev/null
+  -days 3650 -nodes -subj "/CN=probo-saml/O=Probo/C=US" 2>/dev/null
 
 # Read generated files and export as environment variables
 export SAML_PRIVATE_KEY=$(cat "$TEMP_KEY")
@@ -170,8 +170,15 @@ The following parameters **must** be configured:
 | `probo.oauth2.signingKey` | PEM-encoded OAuth2 private signing key |
 | `postgresql.host` | PostgreSQL hostname |
 | `postgresql.password` | PostgreSQL password |
-| `s3.accessKeyId` | S3 access key ID |
-| `s3.secretAccessKey` | S3 secret access key |
+
+S3 credentials are conditionally required, and only when
+`seaweedfs.enabled=false`. The chart default (`seaweedfs.enabled=true`) deploys
+bundled SeaweedFS and does not read `s3.accessKeyId` or `s3.secretAccessKey`.
+On AWS, set `seaweedfs.enabled=false` and leave `s3.endpoint`,
+`s3.accessKeyId`, and `s3.secretAccessKey` blank to authenticate via EKS Pod
+Identity or IRSA. In that mode, setting only one of the two keys fails at
+install time. Off AWS, set `seaweedfs.enabled=false`, set `s3.endpoint`, and
+set both keys; an empty pair is rejected when `s3.endpoint` is set.
 
 ### Secret Format Quick Reference
 
@@ -200,17 +207,56 @@ The following parameters **must** be configured:
 | `s3.region`            | AWS region                      | `us-east-1` |
 | `s3.endpoint`          | S3 endpoint (for S3-compatible) | `""` |
 | `s3.usePathStyle`      | Use path-style URLs for selected S3-compatible backends | `false` |
+| `probo.openai.baseUrl` | OpenAI compatible endpoint (e.g. Azure OpenAI) | `""` (api.openai.com) |
+| `probo.anthropic.baseUrl` | Anthropic compatible endpoint | `""` (api.anthropic.com) |
 | `chrome.enabled`       | Deploy Chrome                   | `true` |
 | `chrome.external.addr` | External Chrome (if disabled)   | `""` |
 | `ingress.enabled`      | Enable ingress                  | `false` |
 
 See [values.yaml](values.yaml) for all available options.
 
+### Additional Environment Variables
+
+`probod` is configured through `PROBOD_*` environment variables, and the chart
+only has dedicated values for some of them. For anything else, such as
+connectors for providers that have no `probo.connectors` template yet (Google
+Workspace, Vercel, Sentry, ...), use `extraEnv` and `extraEnvFrom`. See the
+[environment variable reference](https://www.probo.com/docs/deployment/configuration/environment-reference)
+for the names.
+
+```yaml
+extraEnv:
+  - name: PROBOD_CONNECTOR_GOOGLE_WORKSPACE_CLIENT_ID
+    valueFrom:
+      secretKeyRef:
+        name: probo-connectors
+        key: google-workspace-client-id
+  - name: PROBOD_CONNECTOR_GOOGLE_WORKSPACE_CLIENT_SECRET
+    valueFrom:
+      secretKeyRef:
+        name: probo-connectors
+        key: google-workspace-client-secret
+
+# Or load the keys of a Secret as environment variables (only keys that are
+# valid environment variable names are loaded):
+extraEnvFrom:
+  - secretRef:
+      name: probo-extra-secrets
+```
+
+`extraEnv` entries are appended after the variables the chart renders. Do not
+repeat a variable the chart already sets, or list the same name twice:
+Kubernetes rejects duplicate environment variable names under server-side
+apply (the Helm 4 default), and the chart fails to render if `extraEnv` itself
+contains a duplicate. Variables from `extraEnvFrom` have the lowest precedence,
+so an entry in `env` always wins over the same name from `envFrom`. Create the
+referenced Secrets yourself; the chart does not manage them.
+
 ## Components
 
 The chart deploys the following:
 
-- **Govrly Application**: Main Go binary serving GraphQL APIs and SPAs
+- **Probo Application**: Main Go binary serving GraphQL APIs and SPAs
 - **Chrome Headless**: For PDF generation (optional, can use external)
 - **Ingress**: For external access with TLS (optional)
 
@@ -309,7 +355,7 @@ kubectl get secret probo -o yaml
 
 ### Test Database Connection
 
-Check the Govrly logs for database connection errors. The application will fail to start if it cannot connect to PostgreSQL.
+Check the Probo logs for database connection errors. The application will fail to start if it cannot connect to PostgreSQL.
 
 ### Test S3 Connection
 
@@ -319,10 +365,11 @@ Check the Probo logs for S3 connection errors when uploading files.
 
 If startup logs show:
 
-`IP geolocation table is empty; run geoloc-import to populate it`
+`IP geolocation table is empty; populate it with an external location importer`
 
 the instance is running correctly, but geolocation data is missing. Populate
-it by running the `geoloc-import` command in your operational workflow.
+the provider-neutral location table with an external importer in your
+operational workflow.
 
 ## Examples
 

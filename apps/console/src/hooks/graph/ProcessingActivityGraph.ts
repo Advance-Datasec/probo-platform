@@ -1,20 +1,26 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { promisifyMutation, sprintf } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
+import { promisifyMutation } from "@probo/helpers";
 import { useConfirm } from "@probo/ui";
+import { useTranslation } from "react-i18next";
 import { useMutation } from "react-relay";
 import { graphql } from "relay-runtime";
 
@@ -38,33 +44,55 @@ export const processingActivitiesQuery = graphql`
         canPublishProcessingActivities: permission(
           action: "core:processing-activity:publish"
         )
-        canPublishDataProtectionImpactAssessments: permission(
-          action: "core:data-protection-impact-assessment:publish"
-        )
-        canPublishTransferImpactAssessments: permission(
-          action: "core:transfer-impact-assessment:publish"
-        )
         processingActivitiesDocument {
           id
           defaultApprovers {
             id
           }
         }
+        ...ProcessingActivitiesPageFragment
+      }
+    }
+  }
+`;
+
+export const dataProtectionImpactAssessmentsQuery = graphql`
+  query ProcessingActivityGraphDPIAListQuery(
+    $organizationId: ID!
+  ) {
+    node(id: $organizationId) {
+      ... on Organization {
+        canPublishDataProtectionImpactAssessments: permission(
+          action: "core:data-protection-impact-assessment:publish"
+        )
         dataProtectionImpactAssessmentsDocument {
           id
           defaultApprovers {
             id
           }
         }
+        ...DataProtectionImpactAssessmentsPageFragment
+      }
+    }
+  }
+`;
+
+export const transferImpactAssessmentsQuery = graphql`
+  query ProcessingActivityGraphTIAListQuery(
+    $organizationId: ID!
+  ) {
+    node(id: $organizationId) {
+      ... on Organization {
+        canPublishTransferImpactAssessments: permission(
+          action: "core:transfer-impact-assessment:publish"
+        )
         transferImpactAssessmentsDocument {
           id
           defaultApprovers {
             id
           }
         }
-        ...ProcessingActivitiesPageFragment
-        ...ProcessingActivitiesPageDPIAFragment
-        ...ProcessingActivitiesPageTIAFragment
+        ...TransferImpactAssessmentsPageFragment
       }
     }
   }
@@ -266,10 +294,10 @@ export const useDeleteProcessingActivity = (
   processingActivity: { id: string; name: string },
   connectionId: string,
 ) => {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [mutate] = useMutationWithToasts(deleteProcessingActivityMutation, {
-    successMessage: __("Processing activity deleted successfully"),
-    errorMessage: __("Failed to delete processing activity"),
+    successMessage: t("processingActivityGraph.messages.deleted"),
+    errorMessage: t("processingActivityGraph.errors.delete"),
   });
   const confirm = useConfirm();
 
@@ -285,12 +313,9 @@ export const useDeleteProcessingActivity = (
           },
         }),
       {
-        message: sprintf(
-          __(
-            "This will permanently delete the processing activity %s. This action cannot be undone.",
-          ),
-          processingActivity.name,
-        ),
+        message: t("processingActivityGraph.deleteConfirmation", {
+          name: processingActivity.name,
+        }),
       },
     );
   };
@@ -299,7 +324,7 @@ export const useDeleteProcessingActivity = (
 export const useCreateProcessingActivity = (connectionId?: string) => {
   // eslint-disable-next-line relay/generated-typescript-types
   const [mutate] = useMutation(createProcessingActivityMutation);
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (input: {
     organizationId: string;
@@ -326,12 +351,12 @@ export const useCreateProcessingActivity = (connectionId?: string) => {
   }) => {
     if (!input.organizationId) {
       return alert(
-        __("Failed to create processing activity: organization is required"),
+        t("processingActivityGraph.errors.createOrganizationRequired"),
       );
     }
     if (!input.name) {
       return alert(
-        __("Failed to create processing activity: name is required"),
+        t("processingActivityGraph.errors.createNameRequired"),
       );
     }
 
@@ -370,7 +395,7 @@ export const useCreateProcessingActivity = (connectionId?: string) => {
 export const useUpdateProcessingActivity = () => {
   // eslint-disable-next-line relay/generated-typescript-types
   const [mutate] = useMutation(updateProcessingActivityMutation);
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (input: {
     id: string;
@@ -396,7 +421,7 @@ export const useUpdateProcessingActivity = () => {
     thirdPartyIds?: string[];
   }) => {
     if (!input.id) {
-      return alert(__("Failed to update processing activity: ID is required"));
+      return alert(t("processingActivityGraph.errors.updateIdRequired"));
     }
 
     return promisifyMutation(mutate)({
@@ -483,7 +508,7 @@ export const deleteDataProtectionImpactAssessmentMutation = graphql`
 export const useCreateDataProtectionImpactAssessment = () => {
   // eslint-disable-next-line relay/generated-typescript-types
   const [mutate] = useMutation(createDataProtectionImpactAssessmentMutation);
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (input: {
     processingActivityId: string;
@@ -495,7 +520,7 @@ export const useCreateDataProtectionImpactAssessment = () => {
   }) => {
     if (!input.processingActivityId) {
       return alert(
-        __("Failed to create DPIA: Processing Activity ID is required"),
+        t("processingActivityGraph.errors.createDpiaProcessingActivityIdRequired"),
       );
     }
 
@@ -510,7 +535,7 @@ export const useCreateDataProtectionImpactAssessment = () => {
 export const useUpdateDataProtectionImpactAssessment = () => {
   // eslint-disable-next-line relay/generated-typescript-types
   const [mutate] = useMutation(updateDataProtectionImpactAssessmentMutation);
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (input: {
     id: string;
@@ -521,7 +546,7 @@ export const useUpdateDataProtectionImpactAssessment = () => {
     residualRisk?: ProcessingActivityDPIAResidualRisk;
   }) => {
     if (!input.id) {
-      return alert(__("Failed to update DPIA: ID is required"));
+      return alert(t("processingActivityGraph.errors.updateDpiaIdRequired"));
     }
 
     return promisifyMutation(mutate)({
@@ -536,12 +561,12 @@ export const useDeleteDataProtectionImpactAssessment = (
   dpia: { id: string },
   options?: { onSuccess?: () => void },
 ) => {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [mutate] = useMutationWithToasts(
     deleteDataProtectionImpactAssessmentMutation,
     {
-      successMessage: __("DPIA deleted successfully"),
-      errorMessage: __("Failed to delete DPIA"),
+      successMessage: t("processingActivityGraph.messages.dpiaDeleted"),
+      errorMessage: t("processingActivityGraph.errors.deleteDpia"),
     },
   );
   const confirm = useConfirm();
@@ -558,9 +583,7 @@ export const useDeleteDataProtectionImpactAssessment = (
           onSuccess: options?.onSuccess,
         }),
       {
-        message: __(
-          "This will permanently delete this Data Protection Impact Assessment. This action cannot be undone.",
-        ),
+        message: t("processingActivityGraph.dpiaDeleteConfirmation"),
       },
     );
   };
@@ -642,7 +665,7 @@ export const deleteTransferImpactAssessmentMutation = graphql`
 export const useCreateTransferImpactAssessment = () => {
   // eslint-disable-next-line relay/generated-typescript-types
   const [mutate] = useMutation(createTransferImpactAssessmentMutation);
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (input: {
     processingActivityId: string;
@@ -654,7 +677,7 @@ export const useCreateTransferImpactAssessment = () => {
   }) => {
     if (!input.processingActivityId) {
       return alert(
-        __("Failed to create TIA: Processing Activity ID is required"),
+        t("processingActivityGraph.errors.createTiaProcessingActivityIdRequired"),
       );
     }
 
@@ -669,7 +692,7 @@ export const useCreateTransferImpactAssessment = () => {
 export const useUpdateTransferImpactAssessment = () => {
   // eslint-disable-next-line relay/generated-typescript-types
   const [mutate] = useMutation(updateTransferImpactAssessmentMutation);
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (input: {
     id: string;
@@ -680,7 +703,7 @@ export const useUpdateTransferImpactAssessment = () => {
     supplementaryMeasures?: string;
   }) => {
     if (!input.id) {
-      return alert(__("Failed to update TIA: ID is required"));
+      return alert(t("processingActivityGraph.errors.updateTiaIdRequired"));
     }
 
     return promisifyMutation(mutate)({
@@ -695,12 +718,12 @@ export const useDeleteTransferImpactAssessment = (
   tia: { id: string },
   options?: { onSuccess?: () => void },
 ) => {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [mutate] = useMutationWithToasts(
     deleteTransferImpactAssessmentMutation,
     {
-      successMessage: __("TIA deleted successfully"),
-      errorMessage: __("Failed to delete TIA"),
+      successMessage: t("processingActivityGraph.messages.tiaDeleted"),
+      errorMessage: t("processingActivityGraph.errors.deleteTia"),
     },
   );
   const confirm = useConfirm();
@@ -717,9 +740,7 @@ export const useDeleteTransferImpactAssessment = (
           onSuccess: options?.onSuccess,
         }),
       {
-        message: __(
-          "This will permanently delete this Transfer Impact Assessment. This action cannot be undone.",
-        ),
+        message: t("processingActivityGraph.tiaDeleteConfirmation"),
       },
     );
   };

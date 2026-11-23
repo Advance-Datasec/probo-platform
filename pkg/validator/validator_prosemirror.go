@@ -1,29 +1,38 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package validator
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"go.probo.inc/probo/pkg/prosemirror"
+	"go.probo.inc/probo/pkg/richtext"
 )
 
 // ProseMirrorDocumentContent requires non-empty string values to be valid
-// ProseMirror/Tiptap JSON with root type "doc". Empty and whitespace-only
-// strings are allowed.
+// ProseMirror/Tiptap JSON with root type "doc" and a node tree that matches
+// the Tiptap schema, including parent-child content rules.
+// Empty and whitespace-only strings are allowed.
 func ProseMirrorDocumentContent() ValidatorFunc {
 	return func(value any) *ValidationError {
 		actualValue, isNil := dereferenceValue(value)
@@ -40,7 +49,35 @@ func ProseMirrorDocumentContent() ValidatorFunc {
 			return nil
 		}
 
-		if err := prosemirror.ValidateDocumentContentJSON(s); err != nil {
+		if err := richtext.ValidateDocumentContentJSON(s); err != nil {
+			return newValidationError(ErrorCodeInvalidFormat, err.Error())
+		}
+
+		return nil
+	}
+}
+
+// ProseMirrorCommentContent requires non-empty string values to be valid
+// ProseMirror/Tiptap JSON restricted to the comment allowlist (paragraphs,
+// lists, blockquotes, mentions, and the bold/italic/strike/code/link marks).
+// Empty and whitespace-only strings are allowed.
+func ProseMirrorCommentContent() ValidatorFunc {
+	return func(value any) *ValidationError {
+		actualValue, isNil := dereferenceValue(value)
+		if isNil {
+			return nil
+		}
+
+		s, ok := actualValue.(string)
+		if !ok {
+			return newValidationError(ErrorCodeInvalidFormat, "value must be a string")
+		}
+
+		if strings.TrimSpace(s) == "" {
+			return nil
+		}
+
+		if err := richtext.ValidateCommentContentJSON(s); err != nil {
 			return newValidationError(ErrorCodeInvalidFormat, err.Error())
 		}
 
@@ -74,11 +111,68 @@ func ProseMirrorDocumentMaxTextLength(maxLength int) ValidatorFunc {
 			return nil
 		}
 
-		if n.TextLength() > maxLength {
+		if richtext.DocumentSchema.TextLength(n) > maxLength {
 			return newValidationError(
 				ErrorCodeTooLong,
 				fmt.Sprintf("text content must be at most %d characters", maxLength),
 			)
+		}
+
+		return nil
+	}
+}
+
+func parseProseMirrorDocument(s string) (prosemirror.Node, bool) {
+	n, err := prosemirror.Parse(s)
+	if err != nil || n.Type != prosemirror.NodeDoc {
+		return prosemirror.Node{}, false
+	}
+
+	return n, true
+}
+
+func nodeHasVisibleText(n prosemirror.Node) bool {
+	if n.Type == prosemirror.NodeHorizontalRule ||
+		n.Type == prosemirror.NodeImage ||
+		n.Type == prosemirror.NodeFile ||
+		n.Type == prosemirror.NodeMention {
+		return true
+	}
+
+	if n.Type == prosemirror.NodeText && n.Text != "" && strings.TrimSpace(n.Text) != "" {
+		return true
+	}
+
+	return slices.ContainsFunc(n.Content, nodeHasVisibleText)
+}
+
+// HasVisibleRichText requires a ProseMirror document with user-visible
+// content. Empty documents (blank paragraphs, lists, or tables) fail the
+// same way as empty or whitespace-only values. Horizontal rules, images,
+// file cards, and mentions count as visible even without text.
+func HasVisibleRichText() ValidatorFunc {
+	return func(value any) *ValidationError {
+		actualValue, isNil := dereferenceValue(value)
+		if isNil {
+			return newValidationError(ErrorCodeRequired, "field is required")
+		}
+
+		s, ok := actualValue.(string)
+		if !ok {
+			return newValidationError(ErrorCodeInvalidFormat, "value must be a string")
+		}
+
+		if strings.TrimSpace(s) == "" {
+			return newValidationError(ErrorCodeRequired, "field is required")
+		}
+
+		n, ok := parseProseMirrorDocument(s)
+		if !ok {
+			return newValidationError(ErrorCodeInvalidFormat, "must be a ProseMirror document")
+		}
+
+		if !nodeHasVisibleText(n) {
+			return newValidationError(ErrorCodeRequired, "field is required")
 		}
 
 		return nil

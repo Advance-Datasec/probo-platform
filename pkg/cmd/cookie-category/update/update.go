@@ -1,22 +1,31 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package update
 
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"go.probo.inc/probo/pkg/cli/api"
@@ -24,7 +33,7 @@ import (
 )
 
 const updateMutation = `
-mutation($input: UpdateCookieCategoryInput!) {
+mutation CookieCategoryUpdate($input: UpdateCookieCategoryInput!) {
   updateCookieCategory(input: $input) {
     cookieCategory {
       id
@@ -51,9 +60,10 @@ type updateResponse struct {
 
 func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 	var (
-		flagName        string
-		flagSlug        string
-		flagDescription string
+		flagName          string
+		flagSlug          string
+		flagDescription   string
+		flagTCFPurposeIDs string
 	)
 
 	cmd := &cobra.Command{
@@ -93,6 +103,15 @@ func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 				input["description"] = flagDescription
 			}
 
+			if cmd.Flags().Changed("tcf-purpose-ids") {
+				ids, err := parseTCFPurposeIDs(flagTCFPurposeIDs)
+				if err != nil {
+					return err
+				}
+
+				input["tcfPurposeIds"] = ids
+			}
+
 			if len(input) == 1 {
 				return fmt.Errorf("at least one field must be specified for update")
 			}
@@ -117,6 +136,34 @@ func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&flagName, "name", "", "Category name")
 	cmd.Flags().StringVar(&flagSlug, "slug", "", "Category slug")
 	cmd.Flags().StringVar(&flagDescription, "description", "", "Category description")
+	cmd.Flags().StringVar(&flagTCFPurposeIDs, "tcf-purpose-ids", "", "IAB TCF purpose IDs (comma-separated; empty clears)")
 
 	return cmd
+}
+
+func parseTCFPurposeIDs(value string) ([]int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return []int{}, nil
+	}
+
+	parts := strings.Split(value, ",")
+
+	ids := make([]int, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+
+		id, err := strconv.Atoi(part)
+		if err != nil || id < 1 || id > 11 {
+			return nil, fmt.Errorf("invalid TCF purpose ID %q (must be 1-11)", part)
+		}
+
+		if slices.Contains(ids, id) {
+			return nil, fmt.Errorf("duplicate TCF purpose ID %d", id)
+		}
+
+		ids = append(ids, id)
+	}
+
+	return ids, nil
 }

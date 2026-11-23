@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package oauth2
 
@@ -23,6 +29,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.gearno.de/kit/log"
+	"go.probo.inc/probo/pkg/coredata"
+	"go.probo.inc/probo/pkg/iam/oauth2scope"
 )
 
 func TestIsCIMDClientID(t *testing.T) {
@@ -66,27 +74,39 @@ func TestIsCIMDClientID(t *testing.T) {
 			func(t *testing.T) {
 				t.Parallel()
 
-				assert.Equal(t, tt.valid, isCIMDClientID(tt.raw))
+				assert.Equal(t, tt.valid, IsCIMDClientID(tt.raw))
 			},
 		)
 	}
 }
 
-func TestCIMDClientIDAllowed(t *testing.T) {
+func TestCIMDAllowFromClientIDs(t *testing.T) {
 	t.Parallel()
 
 	clientID := "https://chatgpt.com/oauth/client.json"
+	allow := CIMDAllowFromClientIDs(nil)
 
-	assert.False(t, cimdClientIDAllowed(clientID, nil))
-	assert.False(t, cimdClientIDAllowed(clientID, []string{}))
-	assert.True(
-		t,
-		cimdClientIDAllowed(clientID, []string{clientID}),
-	)
-	assert.False(
-		t,
-		cimdClientIDAllowed(clientID, []string{"https://other.example.com/oauth/client.json"}),
-	)
+	allowance, err := allow(t.Context(), clientID)
+	require.NoError(t, err)
+	assert.Equal(t, CIMDAllowanceDenied, allowance)
+
+	allow = CIMDAllowFromClientIDs([]string{})
+
+	allowance, err = allow(t.Context(), clientID)
+	require.NoError(t, err)
+	assert.Equal(t, CIMDAllowanceDenied, allowance)
+
+	allow = CIMDAllowFromClientIDs([]string{clientID})
+
+	allowance, err = allow(t.Context(), clientID)
+	require.NoError(t, err)
+	assert.Equal(t, CIMDAllowanceAllowed, allowance)
+
+	allow = CIMDAllowFromClientIDs([]string{"https://other.example.com/oauth/client.json"})
+
+	allowance, err = allow(t.Context(), clientID)
+	require.NoError(t, err)
+	assert.Equal(t, CIMDAllowanceDenied, allowance)
 }
 
 func TestValidateClientMetadataDocument(t *testing.T) {
@@ -101,6 +121,31 @@ func TestValidateClientMetadataDocument(t *testing.T) {
 	}
 
 	require.NoError(t, validateClientMetadataDocument(clientID, &doc))
+
+	t.Run(
+		"live ChatGPT metadata shape",
+		func(t *testing.T) {
+			t.Parallel()
+
+			chatGPTClientID := "https://chatgpt.com/oauth/client.json"
+			chatGPT := ClientMetadataDocument{
+				ClientID:                chatGPTClientID,
+				ClientName:              "ChatGPT",
+				ClientURI:               "https://chatgpt.com/",
+				LogoURI:                 "https://persistent.oaistatic.com/sonic/misc/openai-logo.png",
+				RedirectURIs:            []string{"https://chatgpt.com/connector_platform_oauth_redirect"},
+				GrantTypes:              []string{"authorization_code", "refresh_token"},
+				ResponseTypes:           []string{"code"},
+				TokenEndpointAuthMethod: "private_key_jwt",
+				TokenEndpointAuthMethodsSupported: []string{
+					"none",
+					"private_key_jwt",
+				},
+			}
+
+			require.NoError(t, validateClientMetadataDocument(chatGPTClientID, &chatGPT))
+		},
+	)
 
 	t.Run(
 		"http redirect on non-loopback rejected",
@@ -139,6 +184,112 @@ func TestValidateClientMetadataDocument(t *testing.T) {
 			require.Error(t, err)
 		},
 	)
+
+	t.Run(
+		"https client_uri and logo_uri allowed",
+		func(t *testing.T) {
+			t.Parallel()
+
+			good := doc
+			good.ClientURI = "https://mcp.example.com"
+			good.LogoURI = "https://mcp.example.com/logo.png"
+
+			require.NoError(t, validateClientMetadataDocument(clientID, &good))
+		},
+	)
+
+	t.Run(
+		"non-web client_uri rejected",
+		func(t *testing.T) {
+			t.Parallel()
+
+			bad := doc
+			bad.ClientURI = "javascript://example.com/%0Aalert(1)"
+
+			err := validateClientMetadataDocument(clientID, &bad)
+			require.Error(t, err)
+		},
+	)
+
+	t.Run(
+		"non-web logo_uri rejected",
+		func(t *testing.T) {
+			t.Parallel()
+
+			bad := doc
+			bad.LogoURI = "data://example.com/image"
+
+			err := validateClientMetadataDocument(clientID, &bad)
+			require.Error(t, err)
+		},
+	)
+}
+
+func TestSelectCIMDTokenEndpointAuthMethod(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		doc     ClientMetadataDocument
+		want    coredata.OAuth2ClientTokenEndpointAuthMethod
+		wantErr bool
+	}{
+		{
+			name: "chatgpt negotiates none from supported methods",
+			doc: ClientMetadataDocument{
+				TokenEndpointAuthMethod: "private_key_jwt",
+				TokenEndpointAuthMethodsSupported: []string{
+					"none",
+					"private_key_jwt",
+				},
+			},
+			want: coredata.OAuth2ClientTokenEndpointAuthMethodNone,
+		},
+		{
+			name: "legacy none method",
+			doc: ClientMetadataDocument{
+				TokenEndpointAuthMethod: "none",
+			},
+			want: coredata.OAuth2ClientTokenEndpointAuthMethodNone,
+		},
+		{
+			name: "missing method defaults to none",
+			doc:  ClientMetadataDocument{},
+			want: coredata.OAuth2ClientTokenEndpointAuthMethodNone,
+		},
+		{
+			name: "legacy private key jwt rejected",
+			doc: ClientMetadataDocument{
+				TokenEndpointAuthMethod: "private_key_jwt",
+			},
+			wantErr: true,
+		},
+		{
+			name: "no supported method intersection rejected",
+			doc: ClientMetadataDocument{
+				TokenEndpointAuthMethodsSupported: []string{"private_key_jwt"},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(
+			tt.name,
+			func(t *testing.T) {
+				t.Parallel()
+
+				got, err := selectCIMDTokenEndpointAuthMethod(&tt.doc)
+				if tt.wantErr {
+					require.Error(t, err)
+					return
+				}
+
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			},
+		)
+	}
 }
 
 func TestCIMDFetcherFetch(t *testing.T) {
@@ -220,6 +371,56 @@ func TestCIMDFetcherFetch(t *testing.T) {
 			_, err = fetcher.fetch(t.Context(), clientID)
 			require.NoError(t, err)
 			assert.Equal(t, 2, requestCount)
+		},
+	)
+}
+
+func TestCIMDScopes(t *testing.T) {
+	t.Parallel()
+
+	reg := oauth2scope.NewRegistry().Register(
+		map[coredata.OAuth2Scope][]string{
+			coredata.OAuth2Scope("v1:example:write"): {"example:write"},
+		},
+	)
+	svc := &Service{registry: reg}
+
+	t.Run(
+		"defaults to all scopes when metadata omits scope",
+		func(t *testing.T) {
+			t.Parallel()
+
+			scopes, err := svc.cimdScopes(&ClientMetadataDocument{})
+			require.NoError(t, err)
+			assert.Contains(t, scopes, ScopeOpenID)
+			assert.Contains(t, scopes, coredata.OAuth2Scope("v1:example:write"))
+		},
+	)
+
+	t.Run(
+		"uses scope declared in metadata",
+		func(t *testing.T) {
+			t.Parallel()
+
+			scopes, err := svc.cimdScopes(
+				&ClientMetadataDocument{Scope: "openid profile email"},
+			)
+			require.NoError(t, err)
+			assert.Equal(
+				t,
+				coredata.OAuth2Scopes{ScopeOpenID, ScopeProfile, ScopeEmail},
+				scopes,
+			)
+		},
+	)
+
+	t.Run(
+		"rejects unknown scope in metadata",
+		func(t *testing.T) {
+			t.Parallel()
+
+			_, err := svc.cimdScopes(&ClientMetadataDocument{Scope: "admin"})
+			require.Error(t, err)
 		},
 	)
 }

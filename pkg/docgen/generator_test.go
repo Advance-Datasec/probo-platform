@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package docgen
 
@@ -190,6 +196,36 @@ func TestRenderHTML(t *testing.T) {
 			assert.Contains(t, resultStr, "</body>")
 		})
 	}
+}
+
+func TestRenderHTML_FileLink(t *testing.T) {
+	t.Parallel()
+
+	result, err := RenderHTML(DocumentData{
+		Title:   "Files",
+		BaseURL: "http://localhost:8080",
+		Content: json.RawMessage([]byte(
+			`{"type":"doc","content":[{"type":"file","attrs":{"fileId":"file-1","fileName":"policy.pdf","mimeType":"application/pdf","size":12}}]}`,
+		)),
+	})
+	require.NoError(t, err)
+
+	html := string(result)
+	assert.Contains(t, html, `<base href="http://localhost:8080">`)
+	assert.Contains(t, html, `<a href="/api/files/v1/file-1" class="document-file">policy.pdf</a>`)
+
+	escaped, err := RenderHTML(DocumentData{
+		Title:   "Files",
+		BaseURL: "http://localhost:8080",
+		Content: json.RawMessage([]byte(
+			`{"type":"doc","content":[{"type":"file","attrs":{"fileId":"file-1","fileName":"<script>alert(1).pdf","mimeType":"application/pdf","size":12}}]}`,
+		)),
+	})
+	require.NoError(t, err)
+
+	escapedHTML := string(escaped)
+	assert.Contains(t, escapedHTML, `<a href="/api/files/v1/file-1" class="document-file">&lt;script&gt;alert(1).pdf</a>`)
+	assert.NotContains(t, escapedHTML, "<script>alert(1).pdf")
 }
 
 func TestRenderHTML_ErrorHandling(t *testing.T) {

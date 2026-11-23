@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package update
 
@@ -24,15 +30,13 @@ import (
 )
 
 const updateMutation = `
-mutation($input: UpdateRiskInput!) {
+mutation RiskUpdate($input: UpdateRiskInput!) {
   updateRisk(input: $input) {
     risk {
       id
+      referenceId
       name
       category
-      treatment
-      inherentRiskScore
-      residualRiskScore
     }
   }
 }
@@ -41,28 +45,20 @@ mutation($input: UpdateRiskInput!) {
 type updateResponse struct {
 	UpdateRisk struct {
 		Risk struct {
-			ID                string `json:"id"`
-			Name              string `json:"name"`
-			Category          string `json:"category"`
-			Treatment         string `json:"treatment"`
-			InherentRiskScore int    `json:"inherentRiskScore"`
-			ResidualRiskScore int    `json:"residualRiskScore"`
+			ID          string `json:"id"`
+			ReferenceID string `json:"referenceId"`
+			Name        string `json:"name"`
+			Category    string `json:"category"`
 		} `json:"risk"`
 	} `json:"updateRisk"`
 }
 
 func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 	var (
-		flagName               string
-		flagCategory           string
-		flagTreatment          string
-		flagInherentLikelihood int
-		flagInherentImpact     int
-		flagResidualLikelihood int
-		flagResidualImpact     int
-		flagDescription        string
-		flagNote               string
-		flagOwner              string
+		flagName        string
+		flagCategory    string
+		flagDescription string
+		flagNote        string
 	)
 
 	cmd := &cobra.Command{
@@ -100,40 +96,12 @@ func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 				input["category"] = flagCategory
 			}
 
-			if cmd.Flags().Changed("treatment") {
-				input["treatment"] = flagTreatment
-			}
-
-			if cmd.Flags().Changed("inherent-likelihood") {
-				input["inherentLikelihood"] = flagInherentLikelihood
-			}
-
-			if cmd.Flags().Changed("inherent-impact") {
-				input["inherentImpact"] = flagInherentImpact
-			}
-
-			if cmd.Flags().Changed("residual-likelihood") {
-				input["residualLikelihood"] = flagResidualLikelihood
-			}
-
-			if cmd.Flags().Changed("residual-impact") {
-				input["residualImpact"] = flagResidualImpact
-			}
-
 			if cmd.Flags().Changed("description") {
 				input["description"] = flagDescription
 			}
 
 			if cmd.Flags().Changed("note") {
 				input["note"] = flagNote
-			}
-
-			if cmd.Flags().Changed("owner") {
-				if flagOwner == "" {
-					input["ownerId"] = nil
-				} else {
-					input["ownerId"] = flagOwner
-				}
 			}
 
 			if len(input) == 1 {
@@ -156,7 +124,8 @@ func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 			r := resp.UpdateRisk.Risk
 			_, _ = fmt.Fprintf(
 				f.IOStreams.Out,
-				"Updated risk %s (%s)\n",
+				"Updated risk %s %s (%s)\n",
+				r.ReferenceID,
 				r.ID,
 				r.Name,
 			)
@@ -167,14 +136,8 @@ func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 
 	cmd.Flags().StringVar(&flagName, "name", "", "Risk name")
 	cmd.Flags().StringVar(&flagCategory, "category", "", "Risk category")
-	cmd.Flags().StringVar(&flagTreatment, "treatment", "", "Risk treatment: MITIGATED, ACCEPTED, AVOIDED, TRANSFERRED")
-	cmd.Flags().IntVar(&flagInherentLikelihood, "inherent-likelihood", 0, "Inherent likelihood 1-5")
-	cmd.Flags().IntVar(&flagInherentImpact, "inherent-impact", 0, "Inherent impact 1-5")
-	cmd.Flags().IntVar(&flagResidualLikelihood, "residual-likelihood", 0, "Residual likelihood 1-5")
-	cmd.Flags().IntVar(&flagResidualImpact, "residual-impact", 0, "Residual impact 1-5")
 	cmd.Flags().StringVar(&flagDescription, "description", "", "Risk description")
 	cmd.Flags().StringVar(&flagNote, "note", "", "Risk note")
-	cmd.Flags().StringVar(&flagOwner, "owner", "", "Owner profile ID")
 
 	return cmd
 }

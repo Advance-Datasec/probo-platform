@@ -1,32 +1,42 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
+	"go.gearno.de/x/ref"
 	"go.probo.inc/probo/pkg/coredata"
 )
 
 const (
-	openRouterMembersEndpoint = "https://openrouter.ai/api/v1/organization/members"
+	// openRouterMembersPath is joined onto the driver's base URL.
+	openRouterMembersPath = "organization/members"
 	// openRouterPageSize is the maximum page size GET /organization/members
 	// accepts (limit must be between 1 and 100).
 	openRouterPageSize = 100
@@ -38,6 +48,7 @@ const (
 // with no tenant selector.
 type OpenRouterDriver struct {
 	httpClient *http.Client
+	baseURL    string
 }
 
 var _ Driver = (*OpenRouterDriver)(nil)
@@ -57,8 +68,10 @@ type openRouterMembersResponse struct {
 	TotalCount int                `json:"total_count"`
 }
 
-func NewOpenRouterDriver(httpClient *http.Client) *OpenRouterDriver {
-	return &OpenRouterDriver{httpClient: httpClient}
+// NewOpenRouterDriver builds a driver against baseURL, the versioned
+// OpenRouter API origin (e.g. https://openrouter.ai/api/v1).
+func NewOpenRouterDriver(httpClient *http.Client, baseURL string) *OpenRouterDriver {
+	return &OpenRouterDriver{httpClient: httpClient, baseURL: baseURL}
 }
 
 func (d *OpenRouterDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error) {
@@ -78,11 +91,13 @@ func (d *OpenRouterDriver) ListAccounts(ctx context.Context) ([]AccountRecord, e
 				continue
 			}
 
+			role := strings.TrimSpace(m.Role)
+
 			records = append(records, AccountRecord{
 				Email:       email,
-				FullName:    openRouterFullName(m, email),
-				Roles:       openRouterRoles(m.Role),
-				IsAdmin:     m.Role == "org:admin",
+				FullName:    cmp.Or(joinName(ref.UnrefOrZero(m.FirstName), ref.UnrefOrZero(m.LastName)), email),
+				Roles:       openRouterRoles(role),
+				IsAdmin:     openRouterIsAdmin(role),
 				MFAStatus:   coredata.MFAStatusUnknown,
 				AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
 				AccountType: coredata.AccessReviewEntryAccountTypeUser,
@@ -100,7 +115,12 @@ func (d *OpenRouterDriver) ListAccounts(ctx context.Context) ([]AccountRecord, e
 }
 
 func (d *OpenRouterDriver) fetchMembersPage(ctx context.Context, offset int) (*openRouterMembersResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openRouterMembersEndpoint, nil)
+	endpoint, err := url.JoinPath(d.baseURL, openRouterMembersPath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build openrouter members URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create openrouter members request: %w", err)
 	}
@@ -133,39 +153,38 @@ func (d *OpenRouterDriver) fetchMembersPage(ctx context.Context, offset int) (*o
 	return &resp, nil
 }
 
-func openRouterFullName(m openRouterMember, fallback string) string {
-	first := ""
-	if m.FirstName != nil {
-		first = strings.TrimSpace(*m.FirstName)
-	}
-
-	last := ""
-	if m.LastName != nil {
-		last = strings.TrimSpace(*m.LastName)
-	}
-
-	full := strings.TrimSpace(first + " " + last)
-	if full != "" {
-		return full
-	}
-
-	return fallback
-}
-
 // openRouterRoles maps OpenRouter's organization role enum
 // (org:admin / org:member) to a display label, preserving any unknown
 // future role verbatim.
 func openRouterRoles(role string) []string {
+	role = strings.TrimSpace(role)
+
 	switch role {
 	case "org:admin":
 		return []string{"Admin"}
 	case "org:member":
 		return []string{"Member"}
 	default:
-		if strings.TrimSpace(role) != "" {
+		if role != "" {
 			return []string{role}
 		}
 
 		return []string{}
+	}
+}
+
+// openRouterIsAdmin maps the documented organization roles to an admin flag.
+// Unknown roles remain unclassified so future role additions are not
+// incorrectly treated as non-admin.
+func openRouterIsAdmin(role string) *bool {
+	role = strings.TrimSpace(role)
+
+	switch role {
+	case "org:admin":
+		return new(true)
+	case "org:member":
+		return new(false)
+	default:
+		return nil
 	}
 }

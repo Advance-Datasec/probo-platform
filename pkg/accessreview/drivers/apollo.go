@@ -1,24 +1,32 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -26,7 +34,7 @@ import (
 )
 
 const (
-	apolloUsersEndpoint = "https://api.apollo.io/api/v1/users/search"
+	apolloUsersPath     = "/users/search"
 	apolloUsersPageSize = 100
 )
 
@@ -36,6 +44,7 @@ const (
 // x-api-key header by the connection transport, not here.
 type ApolloDriver struct {
 	httpClient *http.Client
+	baseURL    string
 }
 
 var _ Driver = (*ApolloDriver)(nil)
@@ -56,15 +65,12 @@ type apolloUser struct {
 type apolloUsersResponse struct {
 	Users      []apolloUser `json:"users"`
 	Pagination struct {
-		Page         int `json:"page"`
-		PerPage      int `json:"per_page"`
-		TotalPages   int `json:"total_pages"`
-		TotalEntries int `json:"total_entries"`
+		TotalPages int `json:"total_pages"`
 	} `json:"pagination"`
 }
 
-func NewApolloDriver(httpClient *http.Client) *ApolloDriver {
-	return &ApolloDriver{httpClient: httpClient}
+func NewApolloDriver(httpClient *http.Client, baseURL string) *ApolloDriver {
+	return &ApolloDriver{httpClient: httpClient, baseURL: baseURL}
 }
 
 func (d *ApolloDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error) {
@@ -86,7 +92,7 @@ func (d *ApolloDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error
 
 			records = append(records, AccountRecord{
 				Email:       email,
-				FullName:    apolloFullName(u, email),
+				FullName:    cmp.Or(strings.TrimSpace(u.Name), joinName(u.FirstName, u.LastName), email),
 				Roles:       apolloRoles(role),
 				IsAdmin:     apolloIsAdmin(role),
 				MFAStatus:   coredata.MFAStatusUnknown,
@@ -105,7 +111,12 @@ func (d *ApolloDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error
 }
 
 func (d *ApolloDriver) fetchUsersPage(ctx context.Context, page int) (*apolloUsersResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apolloUsersEndpoint, nil)
+	endpoint, err := url.JoinPath(d.baseURL, apolloUsersPath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build apollo users URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create apollo users request: %w", err)
 	}
@@ -136,19 +147,6 @@ func (d *ApolloDriver) fetchUsersPage(ctx context.Context, page int) (*apolloUse
 	}
 
 	return &resp, nil
-}
-
-func apolloFullName(u apolloUser, fallback string) string {
-	if name := strings.TrimSpace(u.Name); name != "" {
-		return name
-	}
-
-	combined := strings.TrimSpace(strings.TrimSpace(u.FirstName) + " " + strings.TrimSpace(u.LastName))
-	if combined != "" {
-		return combined
-	}
-
-	return fallback
 }
 
 // apolloRole extracts a role label from Apollo's `role` field, which is
@@ -185,12 +183,15 @@ func apolloRoles(role string) []string {
 	return []string{role}
 }
 
-// apolloIsAdmin reports whether a permission-profile name is Apollo's
-// built-in super-admin profile ("Admin"). Apollo exposes no boolean admin
-// flag and lets customers name custom profiles freely, so the match is exact
-// (case-insensitive), not a substring: a profile merely containing "admin"
-// (e.g. "Billing Admin") is not auto-classified — its Role is still surfaced
-// for the reviewer to judge.
-func apolloIsAdmin(role string) bool {
-	return strings.EqualFold(strings.TrimSpace(role), "Admin")
+// apolloIsAdmin maps a permission-profile name to Apollo's built-in
+// super-admin profile ("Admin"). An absent or unreadable role remains
+// unclassified. Apollo lets customers name custom profiles freely, so a known
+// non-empty profile is false unless it exactly matches Admin case-insensitively.
+func apolloIsAdmin(role string) *bool {
+	role = strings.TrimSpace(role)
+	if role == "" {
+		return nil
+	}
+
+	return new(strings.EqualFold(role, "Admin"))
 }

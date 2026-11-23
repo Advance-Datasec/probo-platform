@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -27,12 +33,12 @@ import (
 	"go.probo.inc/probo/pkg/coredata"
 )
 
-// betterStackTeamMembersEndpoint is the Better Stack Uptime API team-members
-// resource. The team-members reference documents this apex host and returns
-// its pagination links on the same host, so the driver pins every page
-// request to it (instead of following the response's `next` URL) to avoid a
-// cross-host redirect that would drop the Authorization header.
-const betterStackTeamMembersEndpoint = "https://betterstack.com/api/v2/team-members"
+// betterStackTeamMembersPath is the Better Stack Uptime API team-members
+// resource. The team-members reference documents an apex-host base and returns
+// its pagination links on the same host, so the driver pins every page request
+// to the configured base (instead of following the response's `next` URL) to
+// avoid a cross-host redirect that would drop the Authorization header.
+const betterStackTeamMembersPath = "/team-members"
 
 // BetterStackDriver fetches team members and pending invitations from the
 // Better Stack Uptime API via Bearer token-authenticated REST requests. The
@@ -41,6 +47,7 @@ const betterStackTeamMembersEndpoint = "https://betterstack.com/api/v2/team-memb
 type BetterStackDriver struct {
 	httpClient *http.Client
 	teamName   string
+	baseURL    string
 }
 
 var _ Driver = (*BetterStackDriver)(nil)
@@ -63,7 +70,7 @@ type betterStackTeamMembersResponse struct {
 	} `json:"pagination"`
 }
 
-func NewBetterStackDriver(httpClient *http.Client, teamName string) *BetterStackDriver {
+func NewBetterStackDriver(httpClient *http.Client, teamName, baseURL string) *BetterStackDriver {
 	return &BetterStackDriver{
 		httpClient: &http.Client{
 			Transport: &retryRoundTripper{
@@ -72,6 +79,7 @@ func NewBetterStackDriver(httpClient *http.Client, teamName string) *BetterStack
 			},
 		},
 		teamName: teamName,
+		baseURL:  baseURL,
 	}
 }
 
@@ -96,7 +104,7 @@ func (d *BetterStackDriver) ListAccounts(ctx context.Context) ([]AccountRecord, 
 				FullName:    strings.TrimSpace(member.Attributes.FirstName + " " + member.Attributes.LastName),
 				Roles:       betterStackRoles(member.Attributes.Role),
 				Active:      betterStackActive(member.Type),
-				IsAdmin:     betterStackIsAdmin(member.Attributes.Role),
+				IsAdmin:     new(betterStackIsAdmin(member.Attributes.Role)),
 				MFAStatus:   coredata.MFAStatusUnknown,
 				AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
 				AccountType: coredata.AccessReviewEntryAccountTypeUser,
@@ -128,21 +136,12 @@ func (d *BetterStackDriver) fetchTeamMembersPage(
 	ctx context.Context,
 	page int,
 ) (*betterStackTeamMembersResponse, error) {
-	endpoint, err := url.Parse(betterStackTeamMembersEndpoint)
+	endpoint, err := BetterStackTeamMembersURL(d.baseURL, d.teamName, page)
 	if err != nil {
-		return nil, fmt.Errorf("cannot parse better stack team members URL: %w", err)
+		return nil, fmt.Errorf("cannot build better stack team members URL: %w", err)
 	}
 
-	q := endpoint.Query()
-	q.Set("page", strconv.Itoa(page))
-
-	if d.teamName != "" {
-		q.Set("team_name", d.teamName)
-	}
-
-	endpoint.RawQuery = q.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create better stack team members request: %w", err)
 	}
@@ -156,6 +155,10 @@ func (d *BetterStackDriver) fetchTeamMembersPage(
 
 	defer func() { _ = httpResp.Body.Close() }()
 
+	if rejected := BetterStackTeamMembersRejection(httpResp); rejected != nil {
+		return nil, rejected
+	}
+
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		return nil, fmt.Errorf("cannot fetch better stack team members: unexpected status %d", httpResp.StatusCode)
 	}
@@ -166,6 +169,46 @@ func (d *BetterStackDriver) fetchTeamMembersPage(
 	}
 
 	return &resp, nil
+}
+
+// BetterStackTeamMembersURL returns the team-members URL for page, scoped to
+// teamName when set.
+func BetterStackTeamMembersURL(baseURL, teamName string, page int) (string, error) {
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("cannot parse better stack base URL: %w", err)
+	}
+
+	endpoint := base.JoinPath(betterStackTeamMembersPath)
+
+	q := endpoint.Query()
+	q.Set("page", strconv.Itoa(page))
+
+	if teamName != "" {
+		q.Set("team_name", teamName)
+	}
+
+	endpoint.RawQuery = q.Encode()
+
+	return endpoint.String(), nil
+}
+
+// BetterStackTeamNotFound is the code for a team_name that names none of the
+// token's teams.
+const BetterStackTeamNotFound = "better_stack_team_not_found"
+
+// BetterStackTeamMembersRejection returns the refusal a team-members response
+// carries, or nil.
+func BetterStackTeamMembersRejection(resp *http.Response) *SettingRejectedError {
+	if resp.StatusCode != http.StatusUnprocessableEntity || !respondsWithJSON(resp) {
+		return nil
+	}
+
+	return &SettingRejectedError{
+		Code:       BetterStackTeamNotFound,
+		StatusCode: resp.StatusCode,
+		Message:    "Better Stack has no team with this name for this API token. Team names are case-sensitive: copy the exact name from Settings > Teams in Better Stack, or use a team-based API token.",
+	}
 }
 
 // betterStackRoles maps a Better Stack role token to a human-readable label.
@@ -226,4 +269,19 @@ func parseBetterStackTimestamp(value string) (time.Time, bool) {
 	}
 
 	return t, true
+}
+
+// betterStackNameResolver returns the Better Stack team name captured when
+// the API-key connector was created. The team name is the human-readable
+// instance identifier, so no HTTP call is required.
+type betterStackNameResolver struct {
+	teamName string
+}
+
+func NewBetterStackNameResolver(teamName string) NameResolver {
+	return &betterStackNameResolver{teamName: teamName}
+}
+
+func (r *betterStackNameResolver) ResolveInstanceName(_ context.Context) (string, error) {
+	return r.teamName, nil
 }

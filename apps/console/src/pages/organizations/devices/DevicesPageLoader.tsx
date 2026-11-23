@@ -1,0 +1,63 @@
+// Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import { Suspense, useEffect, useRef } from "react";
+import { useQueryLoader } from "react-relay";
+
+import type { DevicesPageQuery } from "#/__generated__/core/DevicesPageQuery.graphql";
+import { useOrganizationId } from "#/hooks/useOrganizationId";
+
+import { useDevicesListFilters } from "./_lib/useDevicesListFilters";
+import { DevicesPage, devicesPageQuery } from "./DevicesPage";
+import { DevicesPageSkeleton } from "./DevicesPageSkeleton";
+
+export default function DevicesPageLoader() {
+  const organizationId = useOrganizationId();
+  const filters = useDevicesListFilters();
+  const filtersRef = useRef(filters);
+  const [queryRef, loadQuery]
+    = useQueryLoader<DevicesPageQuery>(devicesPageQuery);
+
+  useEffect(() => {
+    filtersRef.current = filters;
+  }, [filters]);
+
+  useEffect(() => {
+    const current = filtersRef.current;
+    loadQuery({
+      organizationId,
+      query: current.ownerQuery,
+      hasPostureWarning: current.hasPostureWarning,
+      states: current.states.length === 0 ? null : current.states,
+      platforms: current.platforms.length === 0 ? null : current.platforms,
+      agentVersions: current.agentVersions.length === 0 ? null : current.agentVersions,
+    }, { fetchPolicy: "store-and-network" });
+  }, [loadQuery, organizationId]);
+
+  if (!queryRef) {
+    return <DevicesPageSkeleton />;
+  }
+
+  return (
+    <Suspense fallback={<DevicesPageSkeleton />}>
+      <DevicesPage queryRef={queryRef} />
+    </Suspense>
+  );
+}

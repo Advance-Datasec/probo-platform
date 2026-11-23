@@ -42,6 +42,36 @@ enum CookieSource
         )
 }
 
+enum DetectedTrackerObserver
+    @goModel(
+        model: "go.probo.inc/probo/pkg/coredata.DetectedTrackerObserver"
+    ) {
+    SDK
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.DetectedTrackerObserverSDK"
+        )
+    SCANNER
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.DetectedTrackerObserverScanner"
+        )
+}
+
+enum CookieSameSite
+    @goModel(model: "go.probo.inc/probo/pkg/coredata.CookieSameSite") {
+    STRICT
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieSameSiteStrict"
+        )
+    LAX
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieSameSiteLax"
+        )
+    NONE
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieSameSiteNone"
+        )
+}
+
 enum TrackerType
     @goModel(model: "go.probo.inc/probo/pkg/coredata.TrackerType") {
     COOKIE
@@ -73,6 +103,16 @@ enum CookieBannerOrderField
     CREATED_AT
         @goEnum(
             value: "go.probo.inc/probo/pkg/coredata.CookieBannerOrderFieldCreatedAt"
+        )
+}
+
+enum CookieBannerVersionOrderField
+    @goModel(
+        model: "go.probo.inc/probo/pkg/coredata.CookieBannerVersionOrderField"
+    ) {
+    CREATED_AT
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieBannerVersionOrderFieldCreatedAt"
         )
 }
 
@@ -112,6 +152,14 @@ input CookieBannerOrder
     field: CookieBannerOrderField!
 }
 
+input CookieBannerVersionOrder
+    @goModel(
+        model: "go.probo.inc/probo/pkg/server/api/console/v1/types.CookieBannerVersionOrderBy"
+    ) {
+    direction: OrderDirection!
+    field: CookieBannerVersionOrderField!
+}
+
 input CookieCategoryOrder
     @goModel(
         model: "go.probo.inc/probo/pkg/server/api/console/v1/types.CookieCategoryOrderBy"
@@ -127,6 +175,212 @@ input CookieCategoryFilter
     excludeKind: CookieCategoryKind
 }
 
+type CookieBannerCapabilities
+    @goModel(
+        model: "go.probo.inc/probo/pkg/coredata.CookieBannerCapabilities"
+    ) {
+    resourceReporting: Boolean!
+    tcf: Boolean! @goField(name: "TCF")
+    corsless: Boolean!
+}
+
+enum BrowserFamily
+    @goModel(
+        model: "go.probo.inc/probo/pkg/coredata.BrowserFamily"
+    ) {
+    CHROME
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.BrowserFamilyChrome"
+        )
+    EDGE
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.BrowserFamilyEdge"
+        )
+    FIREFOX
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.BrowserFamilyFirefox"
+        )
+    SAFARI
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.BrowserFamilySafari"
+        )
+    OTHER
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.BrowserFamilyOther"
+        )
+}
+
+type BrowserFamilyCount
+    @goModel(
+        model: "go.probo.inc/probo/pkg/cookiebanner.BrowserFamilyCount"
+    ) {
+    family: BrowserFamily!
+    count: Int!
+}
+
+type DailyPageLoads
+    @goModel(
+        model: "go.probo.inc/probo/pkg/cookiebanner.DailyPageLoads"
+    ) {
+    day: Datetime!
+    pageLoads: [BrowserFamilyCount!]!
+}
+
+type DailyHits
+    @goModel(
+        model: "go.probo.inc/probo/pkg/cookiebanner.DailyHits"
+    ) {
+    day: Datetime!
+    hits: [BrowserFamilyCount!]!
+}
+
+enum CookieBannerScanState
+    @goModel(model: "go.probo.inc/probo/pkg/coredata.CookieBannerScanState") {
+    PENDING
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieBannerScanStatePending"
+        )
+    RUNNING
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieBannerScanStateRunning"
+        )
+    PAUSED
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieBannerScanStatePaused"
+        )
+    COMPLETED
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieBannerScanStateCompleted"
+        )
+    FAILED
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieBannerScanStateFailed"
+        )
+}
+
+enum CookieBannerScanFailureReason
+    @goModel(
+        model: "go.probo.inc/probo/pkg/coredata.CookieBannerScanFailureReason"
+    ) {
+    UNREACHABLE
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieBannerScanFailureReasonUnreachable"
+        )
+    BLOCKED
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieBannerScanFailureReasonBlocked"
+        )
+    NO_PAGES_LOADED
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieBannerScanFailureReasonNoPagesLoaded"
+        )
+    INTERRUPTED
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieBannerScanFailureReasonInterrupted"
+        )
+    INTERNAL
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieBannerScanFailureReasonInternal"
+        )
+    BANNER_NOT_INSTALLED
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieBannerScanFailureReasonBannerNotInstalled"
+        )
+    DIFFERENT_BANNER
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieBannerScanFailureReasonDifferentBanner"
+        )
+}
+
+enum CookieBannerScanOrderField
+    @goModel(
+        model: "go.probo.inc/probo/pkg/coredata.CookieBannerScanOrderField"
+    ) {
+    CREATED_AT
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CookieBannerScanOrderFieldCreatedAt"
+        )
+}
+
+input CookieBannerScanOrder
+    @goModel(
+        model: "go.probo.inc/probo/pkg/server/api/console/v1/types.CookieBannerScanOrderBy"
+    ) {
+    field: CookieBannerScanOrderField!
+    direction: OrderDirection!
+}
+
+input CookieBannerScanFilter {
+    """
+    Only scans in this state. Null means every state.
+    """
+    state: CookieBannerScanState
+}
+
+type CookieBannerScanCheckpointQueueItem {
+    url: String!
+}
+
+"""
+The latest crawl frontier. The worker overwrites this; it is not a history.
+"""
+type CookieBannerScanCheckpoint {
+    visitedTemplates: [String!]!
+    queue: [CookieBannerScanCheckpointQueueItem!]!
+    coveredHosts: [String!]!
+    pagesScanned: Int!
+    elapsedMs: Int!
+    truncated: Boolean!
+}
+
+type CookieBannerScan implements Node {
+    id: ID!
+    cookieBanner: CookieBanner! @goField(forceResolver: true)
+    state: CookieBannerScanState!
+    failureReason: CookieBannerScanFailureReason
+    truncated: Boolean!
+    pagesScanned: Int!
+    cookiesFound: Int!
+    storageFound: Int!
+    resourcesFound: Int!
+    startedAt: Datetime
+    completedAt: Datetime
+    createdAt: Datetime!
+    updatedAt: Datetime!
+    checkpoint: CookieBannerScanCheckpoint
+
+    detectedTrackers(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: DetectedTrackerOrder
+        filter: DetectedTrackerFilter
+    ): DetectedTrackerConnection! @goField(forceResolver: true)
+
+    trackerResources(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: TrackerResourceOrder
+    ): TrackerResourceConnection! @goField(forceResolver: true)
+}
+
+type CookieBannerScanConnection
+    @goModel(
+        model: "go.probo.inc/probo/pkg/server/api/console/v1/types.CookieBannerScanConnection"
+    ) {
+    totalCount: Int! @goField(forceResolver: true)
+    edges: [CookieBannerScanEdge!]!
+    pageInfo: PageInfo!
+}
+
+type CookieBannerScanEdge {
+    cursor: CursorKey!
+    node: CookieBannerScan!
+}
+
 type CookieBanner implements Node {
     id: ID!
     name: String!
@@ -136,7 +390,15 @@ type CookieBanner implements Node {
     cookiePolicyUrl: String!
     consentExpiryDays: Int!
     showBranding: Boolean!
+    forceOptIn: Boolean!
+    capabilities: CookieBannerCapabilities!
     defaultLanguage: String!
+    publisherCountryCode: String!
+    """
+    IAB TCF CMP ID for this instance, from probod config. 4095 is a
+    placeholder until IAB Europe issues a registered ID.
+    """
+    tcfCmpId: Int! @goField(forceResolver: true)
 
     organization: Organization @goField(forceResolver: true)
 
@@ -152,6 +414,15 @@ type CookieBanner implements Node {
     translations: [CookieBannerTranslation!]! @goField(forceResolver: true)
 
     latestVersion: CookieBannerVersion @goField(forceResolver: true)
+    publishedVersion: CookieBannerVersion @goField(forceResolver: true)
+
+    versions(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: CookieBannerVersionOrder
+    ): CookieBannerVersionConnection @goField(forceResolver: true)
 
     policyDocument: Document @goField(forceResolver: true)
 
@@ -174,12 +445,29 @@ type CookieBanner implements Node {
     ): TrackerPatternConnection @goField(forceResolver: true)
 
     """
-    The deduped union of third parties referenced by the banner's
-    tracker patterns, both org-scoped (ThirdParty) and global
-    (CommonThirdParty). Powers the third-party filter combobox on the
+    The deduped catalog third parties referenced by the banner's
+    tracker patterns. Powers the third-party filter combobox on the
     trackers list page.
     """
-    linkedThirdParties: [TrackerPatternThirdPartyLink!]!
+    linkedThirdParties: [CommonThirdParty!]!
+        @goField(forceResolver: true)
+
+    gvlVendors(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: CommonGVLVendorOrder
+    ): CommonGVLVendorConnection @goField(forceResolver: true)
+
+    gvlVendorIds: [Int!]! @goField(forceResolver: true)
+
+    """
+    Page loads per browser family for each of the last `days` UTC days,
+    today included and oldest first. Days with no loads are included
+    with an empty list. Defaults to 7 days; at most 90.
+    """
+    dailyPageLoads(days: Int): [DailyPageLoads!]!
         @goField(forceResolver: true)
 
     uncategorisedTrackerResources(
@@ -190,6 +478,20 @@ type CookieBanner implements Node {
         orderBy: TrackerResourceOrder
         filter: TrackerResourceFilter
     ): TrackerResourceConnection @goField(forceResolver: true)
+
+    """
+    The PENDING, RUNNING, or PAUSED scan for this banner, if one exists.
+    """
+    activeScan: CookieBannerScan @goField(forceResolver: true)
+
+    scans(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: CookieBannerScanOrder
+        filter: CookieBannerScanFilter
+    ): CookieBannerScanConnection! @goField(forceResolver: true)
 
     createdAt: Datetime!
     updatedAt: Datetime!
@@ -214,6 +516,7 @@ type CookieCategory implements Node {
     kind: CookieCategoryKind!
     rank: Int!
     gcmConsentTypes: [String!]!
+    tcfPurposeIds: [Int!]!
     posthogConsent: Boolean!
 
     trackerPatterns(
@@ -236,6 +539,28 @@ type CookieCategory implements Node {
     updatedAt: Datetime!
 
     permission(action: String!): Boolean! @goField(forceResolver: true)
+}
+
+enum CommonTrackerPatternAttribution
+    @goModel(
+        model: "go.probo.inc/probo/pkg/coredata.CommonTrackerPatternAttribution"
+    ) {
+    UNDETERMINED
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CommonTrackerPatternAttributionUndetermined"
+        )
+    THIRD_PARTY
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CommonTrackerPatternAttributionThirdParty"
+        )
+    FIRST_PARTY
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CommonTrackerPatternAttributionFirstParty"
+        )
+    NOT_ATTRIBUTABLE
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.CommonTrackerPatternAttributionNotAttributable"
+        )
 }
 
 enum TrackerPatternMatchType
@@ -264,10 +589,6 @@ enum TrackerPatternOrderField
         @goEnum(
             value: "go.probo.inc/probo/pkg/coredata.TrackerPatternOrderFieldName"
         )
-    LAST_MATCHED_AT
-        @goEnum(
-            value: "go.probo.inc/probo/pkg/coredata.TrackerPatternOrderFieldLastMatchedAt"
-        )
     UPDATED_AT
         @goEnum(
             value: "go.probo.inc/probo/pkg/coredata.TrackerPatternOrderFieldUpdatedAt"
@@ -287,29 +608,29 @@ type TrackerPattern implements Node
     trackerType: TrackerType!
     pattern: String!
     matchType: TrackerPatternMatchType!
-    displayName: String!
     maxAgeSeconds: Int
     description: String!
     source: CookieSource
+    """
+    The sibling banner in the same CMP domain whose detection promoted
+    source. Null when the source was observed on this pattern's own banner.
+    """
+    sourceCookieBanner: CookieBanner @goField(forceResolver: true)
     excluded: Boolean!
     detectedCount: Int! @goField(forceResolver: true)
-    lastMatchedAt: Datetime
+    """
+    Detections of this pattern per browser family for each of the last
+    `days` UTC days, today included and oldest first. Days with no hits
+    are included with an empty list. Defaults to 7 days; at most 90.
+    """
+    dailyHits(days: Int): [DailyHits!]! @goField(forceResolver: true)
     createdAt: Datetime!
     updatedAt: Datetime!
 
     """
-    The org-scoped third party this pattern is mapped to, if any. Set
-    when the mapping worker promoted the pattern to a tenant-managed
-    ThirdParty record. When this field is non-null, commonThirdParty is
-    always null.
-    """
-    thirdParty: ThirdParty @goField(forceResolver: true)
-
-    """
     The global third party this pattern is mapped to via the common
-    tracker-pattern catalog. Null when the pattern has its own
-    org-scoped thirdParty, when it has not been mapped, or when the
-    matched common pattern has no common third party.
+    tracker-pattern catalog. Null when the pattern has not been mapped
+    or when the matched common pattern has no common third party.
     """
     commonThirdParty: CommonThirdParty @goField(forceResolver: true)
 
@@ -322,6 +643,22 @@ type TrackerPattern implements Node
     debugging agent-generated descriptions.
     """
     commonTrackerPatternId: ID
+
+    """
+    Catalog verdict inherited from the linked common tracker pattern.
+    Null when the org pattern has no catalog link, except when source
+    is EXTENSION: that is always NOT_ATTRIBUTABLE (visitor software),
+    even if a catalog row is already linked.
+    """
+    attribution: CommonTrackerPatternAttribution
+        @goField(forceResolver: true)
+
+    """
+    Distinct observers that reported a detection of this pattern.
+    Empty when the pattern has no detections.
+    """
+    observedBy: [DetectedTrackerObserver!]!
+        @goField(forceResolver: true)
 
     detectedTrackers(
         first: Int
@@ -342,14 +679,6 @@ type TrackerPatternConnection
     edges: [TrackerPatternEdge!]!
     pageInfo: PageInfo!
 }
-
-"""
-A third party associated with a banner's tracker patterns. Either the
-tenant-managed ThirdParty (when a pattern was promoted to the org
-catalog) or the global CommonThirdParty linked through a common
-tracker pattern.
-"""
-union TrackerPatternThirdPartyLink = ThirdParty | CommonThirdParty
 
 type TrackerPatternEdge {
     cursor: CursorKey!
@@ -373,22 +702,43 @@ input TrackerPatternFilter
     trackerType: TrackerType
     cookieCategoryId: ID
     """
-    Filter to tracker patterns linked to a single third party. Accepts
-    either an org-scoped ThirdParty GID (matched against third_party_id)
-    or a global CommonThirdParty GID (matched against the indirect link
-    through common_tracker_patterns). The dispatch happens at the
-    resolver based on the GID entity-type prefix.
+    Filter to tracker patterns linked to a single catalog third party.
+    Accepts a CommonThirdParty GID, matched through
+    common_tracker_patterns.
     """
     thirdPartyId: ID
+    """
+    When true, only excluded patterns. When false, only patterns
+    that are not excluded.
+    """
+    excluded: Boolean
+    """
+    When true, only patterns in a non-uncategorised category.
+    When false, only uncategorised patterns.
+    """
+    categorized: Boolean
+    """
+    Only patterns with at least one detection from any of these
+    observers. Null or empty disables the filter.
+    """
+    observedBy: [DetectedTrackerObserver!]
 }
 
 type DetectedTracker implements Node {
     id: ID!
     identifier: String!
     initiatorUrl: String
+    cookieDomain: String
+    hostOnly: Boolean
     maxAgeSeconds: Int
     source: CookieSource
-    lastDetectedAt: Datetime!
+    observedBy: DetectedTrackerObserver!
+    valueSize: Int
+    httpOnly: Boolean
+    secure: Boolean
+    sameSite: CookieSameSite
+    partitioned: Boolean
+    setByUrl: String
     createdAt: Datetime!
 }
 
@@ -396,14 +746,24 @@ enum DetectedTrackerOrderField
     @goModel(
         model: "go.probo.inc/probo/pkg/coredata.DetectedTrackerOrderField"
     ) {
+    CREATED_AT
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.DetectedTrackerOrderFieldCreatedAt"
+        )
     INITIATOR_URL
         @goEnum(
             value: "go.probo.inc/probo/pkg/coredata.DetectedTrackerOrderFieldInitiatorURL"
         )
-    LAST_DETECTED_AT
-        @goEnum(
-            value: "go.probo.inc/probo/pkg/coredata.DetectedTrackerOrderFieldLastDetectedAt"
-        )
+}
+
+input DetectedTrackerFilter
+    @goModel(
+        model: "go.probo.inc/probo/pkg/server/api/console/v1/types.DetectedTrackerFilter"
+    ) {
+    """
+    Only detections of these tracker types. Null or an empty list returns every scanner detection.
+    """
+    trackerTypes: [TrackerType!]
 }
 
 input DetectedTrackerOrder
@@ -476,10 +836,6 @@ enum TrackerResourceOrderField
         @goEnum(
             value: "go.probo.inc/probo/pkg/coredata.TrackerResourceOrderFieldCreatedAt"
         )
-    LAST_DETECTED_AT
-        @goEnum(
-            value: "go.probo.inc/probo/pkg/coredata.TrackerResourceOrderFieldLastDetectedAt"
-        )
     ORIGIN
         @goEnum(
             value: "go.probo.inc/probo/pkg/coredata.TrackerResourceOrderFieldOrigin"
@@ -499,7 +855,6 @@ type TrackerResource implements Node {
     displayName: String!
     description: String!
     excluded: Boolean!
-    lastDetectedAt: Datetime
     createdAt: Datetime!
     updatedAt: Datetime!
 
@@ -541,6 +896,8 @@ type CookieBannerVersion implements Node {
     version: Int!
     state: String!
     categories: [CookieBannerVersionCategory!]! @goField(forceResolver: true)
+    gvlVendorCount: Int! @goField(forceResolver: true)
+    gvlVendorIds: [Int!]! @goField(forceResolver: true)
     createdAt: Datetime!
     updatedAt: Datetime!
 }
@@ -558,6 +915,20 @@ type CookieBannerVersionCookie {
     trackerType: TrackerType!
     maxAgeSeconds: Int
     description: String!
+}
+
+type CookieBannerVersionConnection
+    @goModel(
+        model: "go.probo.inc/probo/pkg/server/api/console/v1/types.CookieBannerVersionConnection"
+    ) {
+    totalCount: Int! @goField(forceResolver: true)
+    edges: [CookieBannerVersionEdge!]!
+    pageInfo: PageInfo!
+}
+
+type CookieBannerVersionEdge {
+    cursor: CursorKey!
+    node: CookieBannerVersion!
 }
 
 type CookieBannerConnection
@@ -649,6 +1020,24 @@ extend type Mutation {
     moveTrackerResourceToCategory(
         input: MoveTrackerResourceToCategoryInput!
     ): MoveTrackerResourceToCategoryPayload!
+    addCookieBannerGVLVendor(
+        input: AddCookieBannerGVLVendorInput!
+    ): AddCookieBannerGVLVendorPayload!
+    removeCookieBannerGVLVendor(
+        input: RemoveCookieBannerGVLVendorInput!
+    ): RemoveCookieBannerGVLVendorPayload!
+    requestCookieBannerScan(
+        input: RequestCookieBannerScanInput!
+    ): RequestCookieBannerScanPayload!
+}
+
+input RequestCookieBannerScanInput {
+    cookieBannerId: ID!
+}
+
+type RequestCookieBannerScanPayload {
+    cookieBannerScan: CookieBannerScan!
+    cookieBanner: CookieBanner!
 }
 
 input CreateCookieBannerInput {
@@ -660,6 +1049,10 @@ input CreateCookieBannerInput {
     consentExpiryDays: Int!
 }
 
+input CookieBannerCapabilitiesInput {
+    resourceReporting: Boolean
+}
+
 input UpdateCookieBannerInput {
     cookieBannerId: ID!
     name: String
@@ -667,6 +1060,9 @@ input UpdateCookieBannerInput {
     cookiePolicyUrl: String
     consentExpiryDays: Int
     defaultLanguage: String
+    publisherCountryCode: String
+    capabilities: CookieBannerCapabilitiesInput
+    forceOptIn: Boolean
 }
 
 input DeleteCookieBannerInput {
@@ -703,6 +1099,7 @@ input UpdateCookieCategoryInput {
     slug: String
     description: String
     gcmConsentTypes: [String!]
+    tcfPurposeIds: [Int!]
     posthogConsent: Boolean
 }
 
@@ -779,7 +1176,6 @@ input CreateTrackerPatternInput {
     trackerType: TrackerType
     pattern: String!
     matchType: TrackerPatternMatchType!
-    displayName: String!
     maxAgeSeconds: Int
     description: String
 }
@@ -862,5 +1258,24 @@ type DeleteTrackerResourcePayload {
 
 type MoveTrackerResourceToCategoryPayload {
     trackerResource: TrackerResource!
+    cookieBanner: CookieBanner!
+}
+
+input AddCookieBannerGVLVendorInput {
+    cookieBannerId: ID!
+    iabVendorId: Int!
+}
+
+input RemoveCookieBannerGVLVendorInput {
+    cookieBannerId: ID!
+    iabVendorId: Int!
+}
+
+type AddCookieBannerGVLVendorPayload {
+    commonGVLVendor: CommonGVLVendor!
+    cookieBanner: CookieBanner!
+}
+
+type RemoveCookieBannerGVLVendorPayload {
     cookieBanner: CookieBanner!
 }

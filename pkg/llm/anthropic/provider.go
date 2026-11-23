@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package anthropic
 
@@ -45,6 +51,13 @@ type (
 		requestTimeout time.Duration
 		maxRetries     *int
 	}
+)
+
+const (
+	anthropicThinkingMinBudgetTokens    = 1024
+	anthropicThinkingOutputTokenReserve = 1024
+
+	thinkingProvider = "anthropic"
 )
 
 func WithHTTPClient(c *http.Client) Option {
@@ -163,8 +176,8 @@ func buildParams(req *llm.ChatCompletionRequest) (anthropic.MessageNewParams, er
 		params.ToolChoice = buildToolChoice(req.ToolChoice)
 	}
 
-	if req.Thinking != nil && req.Thinking.Enabled {
-		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(req.Thinking.BudgetTokens))
+	if budgetTokens, ok := resolveThinkingBudget(*req.MaxTokens, req.Thinking); ok {
+		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(budgetTokens))
 	}
 
 	if req.ResponseFormat != nil {
@@ -190,6 +203,28 @@ func buildParams(req *llm.ChatCompletionRequest) (anthropic.MessageNewParams, er
 	}
 
 	return params, nil
+}
+
+func resolveThinkingBudget(maxTokens int, thinking *llm.ThinkingConfig) (int, bool) {
+	if thinking == nil || !thinking.Enabled || thinking.BudgetTokens <= 0 {
+		return 0, false
+	}
+
+	if maxTokens <= anthropicThinkingMinBudgetTokens {
+		return 0, false
+	}
+
+	maxBudgetTokens := maxTokens - anthropicThinkingOutputTokenReserve
+	if maxBudgetTokens < anthropicThinkingMinBudgetTokens {
+		maxBudgetTokens = maxTokens - 1
+	}
+
+	budgetTokens := max(min(thinking.BudgetTokens, maxBudgetTokens), anthropicThinkingMinBudgetTokens)
+	if budgetTokens >= maxTokens {
+		return 0, false
+	}
+
+	return budgetTokens, true
 }
 
 func extractSystem(messages []llm.Message) (system []string, rest []llm.Message) {
@@ -236,6 +271,11 @@ func buildMessages(messages []llm.Message) []anthropic.MessageParam {
 			for _, p := range msg.Parts {
 				switch part := p.(type) {
 				case llm.ThinkingPart:
+					// Anthropic cannot verify another provider's thinking.
+					if part.Provider != "" && part.Provider != thinkingProvider {
+						continue
+					}
+
 					blocks = append(blocks, anthropic.NewThinkingBlock(part.Signature, part.Text))
 				case llm.TextPart:
 					if part.Text != "" {
@@ -251,6 +291,10 @@ func buildMessages(messages []llm.Message) []anthropic.MessageParam {
 				}
 
 				blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, input, tc.Function.Name))
+			}
+
+			if len(blocks) == 0 {
+				continue
 			}
 
 			out = append(out, anthropic.NewAssistantMessage(blocks...))
@@ -355,6 +399,7 @@ func mapResponse(msg *anthropic.Message) *llm.ChatCompletionResponse {
 			resp.Message.Parts = append(resp.Message.Parts, llm.ThinkingPart{
 				Text:      tb.Thinking,
 				Signature: tb.Signature,
+				Provider:  thinkingProvider,
 			})
 		case "text":
 			resp.Message.Parts = append(resp.Message.Parts, llm.TextPart{Text: block.Text})
@@ -509,7 +554,10 @@ func (s *anthropicStream) mapStreamEvent(event *anthropic.MessageStreamEventUnio
 			s.thinkingSignature = delta.Signature
 
 			return llm.ChatCompletionStreamEvent{
-				Delta: llm.MessageDelta{ThinkingSignature: delta.Signature},
+				Delta: llm.MessageDelta{
+					ThinkingSignature: delta.Signature,
+					ThinkingProvider:  thinkingProvider,
+				},
 			}, true
 		case "input_json_delta":
 			return llm.ChatCompletionStreamEvent{

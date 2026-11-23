@@ -1,18 +1,25 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import {
+	NodeApiError,
 	NodeConnectionTypes,
 	NodeOperationError,
 	type IExecuteFunctions,
@@ -25,18 +32,57 @@ import {
 	getAllResourceFields,
 	getExecuteFunction,
 } from './actions';
+import { getAccessReviewSources } from './actions/accessReview/loadAccessReviewSourceOptions';
+import {
+	getAPIKeyConnectorProviders,
+	getClientCredentialsConnectorProviders,
+} from './actions/connector/loadConnectorProviderOptions';
+import {
+	searchAccessReviewCampaigns,
+	searchAssets,
+	searchAudits,
+	searchCompliancePortals,
+	searchControls,
+	searchCookieBanners,
+	searchDocumentVersions,
+	searchDocuments,
+	searchFrameworks,
+	searchInternalControls,
+	searchOrganizations,
+	searchPeople,
+	searchRisks,
+	searchTasks,
+	searchThirdParties,
+} from './locators';
+
+function nodeErrorForItem(
+	this: IExecuteFunctions,
+	error: unknown,
+	itemIndex: number,
+): NodeApiError | NodeOperationError {
+	if (error instanceof NodeApiError || error instanceof NodeOperationError) {
+		error.context.itemIndex = itemIndex;
+		return error;
+	}
+
+	const cause = error instanceof Error ? error : new Error(String(error));
+	return new NodeOperationError(this.getNode(), cause, {
+		itemIndex,
+		level: 'error',
+	});
+}
 
 export class Probo implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'Govrly',
+		displayName: 'Probo',
 		name: 'probo',
 		icon: { light: 'file:../../icons/probo-light.svg', dark: 'file:../../icons/probo.svg' },
 		group: ['input'],
 		version: 1,
 		subtitle: '={{$parameter["resource"]}} / {{$parameter["operation"]}}',
-		description: 'Consume data from the Govrly API',
+		description: 'Consume data from the Probo API',
 		defaults: {
-			name: 'Govrly',
+			name: 'Probo',
 		},
 		usableAsTool: true,
 		inputs: [NodeConnectionTypes.Main],
@@ -52,12 +98,6 @@ export class Probo implements INodeType {
 				},
 			},
 		],
-		requestDefaults: {
-			headers: {
-				Accept: 'application/json',
-				'Content-Type': 'application/json',
-			},
-		},
 		properties: [
 			{
 				displayName: 'Authentication',
@@ -65,7 +105,7 @@ export class Probo implements INodeType {
 				type: 'options',
 				options: [
 					{
-						name: 'API Key',
+						name: 'Access Token',
 						value: 'apiKey',
 					},
 				],
@@ -83,9 +123,24 @@ export class Probo implements INodeType {
 						description: 'Manage access review campaigns',
 					},
 					{
+						name: 'Access Review Source',
+						value: 'accessReviewSource',
+						description: 'Manage access review sources',
+					},
+					{
+						name: 'AI System',
+						value: 'aiSystem',
+						description: 'Manage AI systems',
+					},
+					{
 						name: 'Asset',
 						value: 'asset',
 						description: 'Manage assets',
+					},
+					{
+						name: 'Attachment',
+						value: 'attachment',
+						description: 'Upload a file for rich text',
 					},
 					{
 						name: 'Audit',
@@ -96,6 +151,21 @@ export class Probo implements INodeType {
 						name: 'Audit Log',
 						value: 'auditLog',
 						description: 'View audit log entries',
+					},
+					{
+						name: 'Business Function',
+						value: 'businessFunction',
+						description: 'Manage business functions',
+					},
+					{
+						name: 'Compliance Portal',
+						value: 'compliancePortal',
+						description: 'Manage compliance portal',
+					},
+					{
+						name: 'Connector',
+						value: 'connector',
+						description: 'Manage connectors and connector accounts',
 					},
 					{
 						name: 'Control',
@@ -123,14 +193,34 @@ export class Probo implements INodeType {
 						description: 'Manage data',
 					},
 					{
+						name: 'Device',
+						value: 'device',
+						description: 'Manage ITAM devices',
+					},
+					{
 						name: 'Document',
 						value: 'document',
 						description: 'Manage documents, versions, and signatures',
 					},
 					{
+						name: 'Document Comment',
+						value: 'documentComment',
+						description: 'Comment on a live document',
+					},
+					{
+						name: 'Document Suggestion',
+						value: 'documentSuggestion',
+						description: 'Suggest and review document redlines',
+					},
+					{
 						name: 'DPIA',
 						value: 'dpia',
 						description: 'Manage data protection impact assessments',
+					},
+					{
+						name: 'Employee Portal',
+						value: 'employeePortal',
+						description: 'Manage employee portals',
 					},
 					{
 						name: 'Evidence',
@@ -153,9 +243,9 @@ export class Probo implements INodeType {
 						description: 'Manage frameworks',
 					},
 					{
-						name: 'Measure',
-						value: 'measure',
-						description: 'Manage measures',
+						name: 'Internal Control',
+						value: 'internalControl',
+						description: 'Manage internal controls',
 					},
 					{
 						name: 'Obligation',
@@ -193,9 +283,9 @@ export class Probo implements INodeType {
 						description: 'Manage risks',
 					},
 					{
-						name: 'Risk Assessment',
-						value: 'riskAssessment',
-						description: 'Manage risk assessments',
+						name: 'Risk Analysis',
+						value: 'riskAnalysis',
+						description: 'Manage risk analyses',
 					},
 					{
 						name: 'Statement of Applicability',
@@ -203,9 +293,24 @@ export class Probo implements INodeType {
 						description: 'Manage statements of applicability',
 					},
 					{
+						name: 'Tag',
+						value: 'tag',
+						description: 'Manage tags',
+					},
+					{
 						name: 'Task',
 						value: 'task',
 						description: 'Manage tasks',
+					},
+					{
+						name: 'Task Activity',
+						value: 'taskActivity',
+						description: 'List task activities',
+					},
+					{
+						name: 'Task Comment',
+						value: 'taskComment',
+						description: 'Manage task comments',
 					},
 					{
 						name: 'Third Party',
@@ -223,9 +328,9 @@ export class Probo implements INodeType {
 						description: 'Manage tracker patterns',
 					},
 					{
-						name: 'Trust Center',
-						value: 'trustCenter',
-						description: 'Manage trust center',
+						name: 'Treatment Plan',
+						value: 'treatmentPlan',
+						description: 'Manage treatment plans',
 					},
 					{
 						name: 'User',
@@ -256,16 +361,22 @@ export class Probo implements INodeType {
 
 				const executeFunction = getExecuteFunction(resource, operation);
 				const result = await executeFunction.call(this, i);
-				returnData.push(result);
+				if (Array.isArray(result)) {
+					returnData.push(...result);
+				} else {
+					returnData.push(result);
+				}
 			} catch (error) {
+				const nodeError = nodeErrorForItem.call(this, error, i);
 				if (this.continueOnFail()) {
 					returnData.push({
-						json: { error: error instanceof Error ? error.message : String(error) },
+						json: { error: nodeError.message },
+						error: nodeError,
 						pairedItem: { item: i },
 					});
 					continue;
 				}
-				throw new NodeOperationError(this.getNode(), error as Error, { itemIndex: i });
+				throw nodeError;
 			}
 		}
 
@@ -273,6 +384,27 @@ export class Probo implements INodeType {
 	}
 
 	methods = {
-		listSearch: {},
+		loadOptions: {
+			getAccessReviewSources,
+			getAPIKeyConnectorProviders,
+			getClientCredentialsConnectorProviders,
+		},
+		listSearch: {
+			searchAccessReviewCampaigns,
+			searchAssets,
+			searchAudits,
+			searchCompliancePortals,
+			searchControls,
+			searchCookieBanners,
+			searchDocumentVersions,
+			searchDocuments,
+			searchFrameworks,
+			searchInternalControls,
+			searchOrganizations,
+			searchPeople,
+			searchRisks,
+			searchTasks,
+			searchThirdParties,
+		},
 	};
 }

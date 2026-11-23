@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -19,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,7 +43,7 @@ func TestSentryDriver(t *testing.T) {
 		orgSlug = "acme-corp"
 	}
 
-	driver := NewSentryDriver(client, orgSlug)
+	driver := NewSentryDriver(client, orgSlug, "https://sentry.io/api/0")
 	records, err := driver.ListAccounts(context.Background())
 	require.NoError(t, err)
 	require.NotEmpty(t, records)
@@ -48,12 +55,48 @@ func TestSentryDriver(t *testing.T) {
 	assert.NotEmpty(t, r.Roles)
 }
 
+// TestSentryDriverRequestsTrailingSlashPaths pins the exact request paths
+// against Sentry's real routing: its API is Django-based and only matches
+// paths ending in a slash, answering 404 (no redirect) otherwise. A 404 is
+// indistinguishable from a revoked membership here, so dropping the slash
+// silently turns every campaign fetch into a bogus "reconnect" error.
+func TestSentryDriverRequestsTrailingSlashPaths(t *testing.T) {
+	t.Parallel()
+
+	var gotPaths []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.URL.Path)
+
+		// Mimic Sentry: unslashed paths do not route.
+		if !strings.HasSuffix(r.URL.Path, "/") {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"The requested resource does not exist"}`))
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[{"id":"42","email":"alice@example.com","name":"Alice","orgRole":"member"}]`))
+	}))
+	defer srv.Close()
+
+	client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
+
+	records, err := NewSentryDriver(client, "acme-corp", "https://sentry.io/api/0").ListAccounts(context.Background())
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, "alice@example.com", records[0].Email)
+	assert.Equal(t, []string{"/api/0/organizations/acme-corp/members/"}, gotPaths)
+}
+
 func TestSentryDriverListAccountsStaleSlug(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Equal(t, "/api/0/organizations/acme-old/members", r.URL.Path)
+		assert.Equal(t, "/api/0/organizations/acme-old/members/", r.URL.Path)
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"detail":"The requested resource does not exist"}`))
 	}))
@@ -61,7 +104,7 @@ func TestSentryDriverListAccountsStaleSlug(t *testing.T) {
 
 	client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
 
-	_, err := NewSentryDriver(client, "acme-old").ListAccounts(context.Background())
+	_, err := NewSentryDriver(client, "acme-old", "https://sentry.io/api/0").ListAccounts(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `"acme-old"`)
 	assert.Contains(t, err.Error(), "not accessible")
@@ -82,7 +125,7 @@ func TestSentryDriverListAccountsAutoDiscoversSlug(t *testing.T) {
 			assert.Equal(t, "true", r.URL.Query().Get("member"))
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`[{"slug":"` + discoveredSlug + `","name":"Discovered Org"}]`))
-		case "/api/0/organizations/" + discoveredSlug + "/members":
+		case "/api/0/organizations/" + discoveredSlug + "/members/":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`[{"id":"42","email":"alice@example.com","name":"Alice","orgRole":"member"}]`))
 		default:
@@ -94,7 +137,7 @@ func TestSentryDriverListAccountsAutoDiscoversSlug(t *testing.T) {
 
 	client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
 
-	records, err := NewSentryDriver(client, "").ListAccounts(context.Background())
+	records, err := NewSentryDriver(client, "", "https://sentry.io/api/0").ListAccounts(context.Background())
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 	assert.Equal(t, "alice@example.com", records[0].Email)

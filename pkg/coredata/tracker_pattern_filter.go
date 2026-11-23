@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -23,12 +29,14 @@ type TrackerPatternFilter struct {
 	matchType          *TrackerPatternMatchType
 	cookieCategoryID   *gid.GID
 	excluded           *bool
+	categorized        *bool
 	query              *string
 	patternKeyword     *string
 	source             *CookieSource
 	trackerType        *TrackerType
-	thirdPartyID       *gid.GID
 	commonThirdPartyID *gid.GID
+	observedBy         []DetectedTrackerObserver
+	identifiers        []string
 }
 
 func NewTrackerPatternFilter(
@@ -43,16 +51,29 @@ func NewTrackerPatternFilter(
 	}
 }
 
+func (f *TrackerPatternFilter) WithExcluded(excluded *bool) *TrackerPatternFilter {
+	f.excluded = excluded
+	return f
+}
+
+// WithCategorized restricts results to patterns whose category kind is
+// not UNCATEGORISED when categorized is true, or only uncategorised
+// patterns when false. A nil value disables the filter.
+func (f *TrackerPatternFilter) WithCategorized(categorized *bool) *TrackerPatternFilter {
+	f.categorized = categorized
+	return f
+}
+
 func (f *TrackerPatternFilter) WithQuery(query *string) *TrackerPatternFilter {
 	f.query = query
 	return f
 }
 
-// WithPatternKeyword restricts the result to patterns whose pattern or
-// display name contains keyword (case-insensitive). It differs from
-// WithQuery, which matches display name or description: this targets the
-// raw pattern so operators can select by the matched domain or cookie
-// name. A nil or empty keyword disables the filter.
+// WithPatternKeyword restricts the result to patterns whose pattern
+// contains keyword (case-insensitive). It differs from WithQuery, which
+// matches pattern or description: this targets the raw pattern so
+// operators can select by the matched domain or cookie name. A nil or
+// empty keyword disables the filter.
 func (f *TrackerPatternFilter) WithPatternKeyword(keyword *string) *TrackerPatternFilter {
 	f.patternKeyword = keyword
 	return f
@@ -68,13 +89,24 @@ func (f *TrackerPatternFilter) WithTrackerType(trackerType *TrackerType) *Tracke
 	return f
 }
 
-func (f *TrackerPatternFilter) WithThirdPartyID(thirdPartyID *gid.GID) *TrackerPatternFilter {
-	f.thirdPartyID = thirdPartyID
+func (f *TrackerPatternFilter) WithCommonThirdPartyID(id *gid.GID) *TrackerPatternFilter {
+	f.commonThirdPartyID = id
 	return f
 }
 
-func (f *TrackerPatternFilter) WithCommonThirdPartyID(id *gid.GID) *TrackerPatternFilter {
-	f.commonThirdPartyID = id
+// WithObservedBy restricts results to patterns that have at least one
+// detection from any of the given observers. A nil or empty slice
+// disables the filter.
+func (f *TrackerPatternFilter) WithObservedBy(observedBy []DetectedTrackerObserver) *TrackerPatternFilter {
+	f.observedBy = observedBy
+	return f
+}
+
+// WithIdentifiers restricts results to patterns whose pattern is one of
+// the given names. A nil slice disables the filter. An empty slice
+// matches nothing.
+func (f *TrackerPatternFilter) WithIdentifiers(identifiers []string) *TrackerPatternFilter {
+	f.identifiers = identifiers
 	return f
 }
 
@@ -107,16 +139,29 @@ func (f *TrackerPatternFilter) SQLFragment() string {
 	END
 	AND
 	CASE
+		WHEN @has_categorized_filter::boolean = false THEN TRUE
+		WHEN @filter_categorized::boolean = true THEN
+			cookie_category_id IN (
+				SELECT id FROM cookie_categories
+				WHERE kind <> @uncategorised_kind::cookie_category_kind
+			)
+		ELSE
+			cookie_category_id IN (
+				SELECT id FROM cookie_categories
+				WHERE kind = @uncategorised_kind::cookie_category_kind
+			)
+	END
+	AND
+	CASE
 		WHEN @filter_query::text IS NOT NULL AND @filter_query::text != '' THEN
-			(display_name ILIKE '%' || @filter_query || '%'
+			(pattern ILIKE '%' || @filter_query || '%'
 			 OR description ILIKE '%' || @filter_query || '%')
 		ELSE TRUE
 	END
 	AND
 	CASE
 		WHEN @filter_pattern_keyword::text IS NOT NULL AND @filter_pattern_keyword::text != '' THEN
-			(pattern ILIKE '%' || @filter_pattern_keyword || '%'
-			 OR display_name ILIKE '%' || @filter_pattern_keyword || '%')
+			pattern ILIKE '%' || @filter_pattern_keyword || '%'
 		ELSE TRUE
 	END
 	AND
@@ -135,13 +180,6 @@ func (f *TrackerPatternFilter) SQLFragment() string {
 	END
 	AND
 	CASE
-		WHEN @has_third_party_id_filter::boolean = false THEN TRUE
-		WHEN @has_third_party_id_filter::boolean = true THEN
-			third_party_id = @filter_third_party_id::text
-		ELSE TRUE
-	END
-	AND
-	CASE
 		WHEN @has_common_third_party_id_filter::boolean = false THEN TRUE
 		WHEN @has_common_third_party_id_filter::boolean = true THEN
 			common_tracker_pattern_id IN (
@@ -149,6 +187,20 @@ func (f *TrackerPatternFilter) SQLFragment() string {
 				WHERE common_third_party_id = @filter_common_third_party_id::text
 			)
 		ELSE TRUE
+	END
+	AND
+	CASE
+		WHEN @filter_observed_by::detected_tracker_observer[] IS NOT NULL THEN
+			id IN (
+				SELECT tracker_pattern_id FROM detected_trackers
+				WHERE observed_by = ANY(@filter_observed_by::detected_tracker_observer[])
+			)
+		ELSE TRUE
+	END
+	AND
+	CASE
+		WHEN @filter_identifiers::text[] IS NULL THEN TRUE
+		ELSE pattern = ANY(@filter_identifiers::text[])
 	END
 )`
 }
@@ -165,16 +217,19 @@ func (f *TrackerPatternFilter) SQLArguments() pgx.StrictNamedArgs {
 		"filter_cookie_category_id":        nil,
 		"has_excluded_filter":              false,
 		"filter_excluded":                  nil,
+		"has_categorized_filter":           false,
+		"filter_categorized":               nil,
+		"uncategorised_kind":               CookieCategoryKindUncategorised,
 		"filter_query":                     nil,
 		"filter_pattern_keyword":           nil,
 		"has_source_filter":                false,
 		"filter_source":                    nil,
 		"has_tracker_type_filter":          false,
 		"filter_tracker_type":              nil,
-		"has_third_party_id_filter":        false,
-		"filter_third_party_id":            nil,
 		"has_common_third_party_id_filter": false,
 		"filter_common_third_party_id":     nil,
+		"filter_observed_by":               filterStrings(f.observedBy),
+		"filter_identifiers":               f.identifiers,
 	}
 
 	if f.matchType != nil {
@@ -190,6 +245,11 @@ func (f *TrackerPatternFilter) SQLArguments() pgx.StrictNamedArgs {
 	if f.excluded != nil {
 		args["has_excluded_filter"] = true
 		args["filter_excluded"] = *f.excluded
+	}
+
+	if f.categorized != nil {
+		args["has_categorized_filter"] = true
+		args["filter_categorized"] = *f.categorized
 	}
 
 	if f.query != nil {
@@ -208,11 +268,6 @@ func (f *TrackerPatternFilter) SQLArguments() pgx.StrictNamedArgs {
 	if f.trackerType != nil {
 		args["has_tracker_type_filter"] = true
 		args["filter_tracker_type"] = string(*f.trackerType)
-	}
-
-	if f.thirdPartyID != nil {
-		args["has_third_party_id_filter"] = true
-		args["filter_third_party_id"] = *f.thirdPartyID
 	}
 
 	if f.commonThirdPartyID != nil {

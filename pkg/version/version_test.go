@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package version_test
 
@@ -48,7 +54,7 @@ func TestUserAgent(t *testing.T) {
 			name:      "ACME client user agent",
 			component: "acme-client",
 			checks: []string{
-				"Govrly/",
+				"Probo/",
 				"acme-client",
 				"Go/go",
 			},
@@ -57,7 +63,7 @@ func TestUserAgent(t *testing.T) {
 			name:      "Probod user agent",
 			component: "probod",
 			checks: []string{
-				"Govrly/",
+				"Probo/",
 				"probod",
 				"Go/go",
 			},
@@ -66,7 +72,7 @@ func TestUserAgent(t *testing.T) {
 			name:      "Custom component",
 			component: "test-component",
 			checks: []string{
-				"Govrly/",
+				"Probo/",
 				"test-component",
 				"Go/go",
 			},
@@ -83,8 +89,8 @@ func TestUserAgent(t *testing.T) {
 			}
 
 			// Check format structure
-			// Should be like: Govrly/version (component; ...) Go/version
-			assert.True(t, strings.HasPrefix(ua, "Govrly/"), "User agent should start with Govrly/")
+			// Should be like: Probo/version (component; ...) Go/version
+			assert.True(t, strings.HasPrefix(ua, "Probo/"), "User agent should start with Probo/")
 			assert.Contains(t, ua, "(", "User agent should have opening parenthesis")
 			assert.Contains(t, ua, ")", "User agent should have closing parenthesis")
 		})

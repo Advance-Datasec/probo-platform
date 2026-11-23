@@ -3,6 +3,7 @@ type Identity implements Node {
   email: EmailAddr!
   fullName: String!
   emailVerified: Boolean!
+  avatar: File @goField(forceResolver: true)
   createdAt: Datetime!
   updatedAt: Datetime!
 
@@ -22,16 +23,6 @@ type Identity implements Node {
     before: CursorKey
     orderBy: SessionOrder
   ): SessionConnection @goField(forceResolver: true)
-
-  personalAPIKeys(
-    first: Int
-    after: CursorKey
-    last: Int
-    before: CursorKey
-  ): PersonalAPIKeyConnection
-    @goField(forceResolver: true)
-    @authentication(required: PRESENT)
-    @sessionOnly
 
   oauth2AccessTokens(
     first: Int
@@ -56,4 +47,30 @@ type Identity implements Node {
   permission(action: String!): Boolean!
     @goField(forceResolver: true)
     @authentication(required: PRESENT)
+
+  notificationPreferences(organizationId: ID!): [NotificationPreference!]!
+    @goField(forceResolver: true)
+    @authentication(required: PRESENT)
+    @sessionOnly
+}
+
+extend type Mutation {
+  updateAvatar(
+    input: UpdateAvatarInput!
+  ): UpdateAvatarPayload @authentication(required: PRESENT) @sessionOnly
+  deleteAvatar: DeleteAvatarPayload
+    @authentication(required: PRESENT)
+    @sessionOnly
+}
+
+input UpdateAvatarInput {
+  file: Upload!
+}
+
+type UpdateAvatarPayload {
+  identity: Identity!
+}
+
+type DeleteAvatarPayload {
+  identity: Identity!
 }

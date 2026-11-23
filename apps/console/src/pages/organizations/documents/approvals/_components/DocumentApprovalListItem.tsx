@@ -1,19 +1,24 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { sprintf } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
+import { dateTimeFormat } from "@probo/i18n";
 import {
   Badge,
   Button,
@@ -21,11 +26,12 @@ import {
   IconCircleX,
   IconClock,
 } from "@probo/ui";
+import { useTranslation } from "react-i18next";
 import { useFragment } from "react-relay";
 import { graphql } from "relay-runtime";
 
 import type { DocumentApprovalListItemFragment$key } from "#/__generated__/core/DocumentApprovalListItemFragment.graphql";
-import { useOrganizationId } from "#/hooks/useOrganizationId";
+import { employeePortalHref } from "#/lib/employeePortalHref";
 
 const fragment = graphql`
   fragment DocumentApprovalListItemFragment on DocumentVersionApprovalDecision {
@@ -50,10 +56,10 @@ const fragment = graphql`
 
 export function DocumentApprovalListItem(props: {
   fragmentRef: DocumentApprovalListItemFragment$key;
+  employeePortalId: string | null;
 }) {
-  const { fragmentRef } = props;
-  const { __, dateTimeFormat } = useTranslate();
-  const organizationId = useOrganizationId();
+  const { fragmentRef, employeePortalId } = props;
+  const { t, i18n } = useTranslation();
 
   const decision = useFragment(fragment, fragmentRef);
 
@@ -62,7 +68,13 @@ export function DocumentApprovalListItem(props: {
   const isRejected = decision.state === "REJECTED";
   const isVoided = decision.state === "VOIDED";
 
-  const reviewUrl = `/organizations/${organizationId}/employee/approvals/${decision.documentVersion.document.id}`;
+  const reviewUrl = employeePortalId == null
+    ? null
+    : employeePortalHref(
+        employeePortalId,
+        "approvals",
+        decision.documentVersion.document.id,
+      );
 
   return (
     <div className="flex gap-3 items-center py-3">
@@ -76,10 +88,18 @@ export function DocumentApprovalListItem(props: {
           {isPending && <IconClock size={16} />}
           {isVoided && <IconClock size={16} className="text-txt-secondary" />}
           <span>
-            {isPending && sprintf(__("Requested on %s"), dateTimeFormat(decision.createdAt))}
-            {isApproved && sprintf(__("Approved on %s"), dateTimeFormat(decision.decidedAt))}
-            {isRejected && sprintf(__("Rejected on %s"), dateTimeFormat(decision.decidedAt))}
-            {isVoided && sprintf(__("Requested on %s"), dateTimeFormat(decision.createdAt))}
+            {isPending && t("documentApprovalListItem.dates.requested", {
+              date: dateTimeFormat(i18n.language, decision.createdAt),
+            })}
+            {isApproved && t("documentApprovalListItem.dates.approved", {
+              date: dateTimeFormat(i18n.language, decision.decidedAt),
+            })}
+            {isRejected && t("documentApprovalListItem.dates.rejected", {
+              date: dateTimeFormat(i18n.language, decision.decidedAt),
+            })}
+            {isVoided && t("documentApprovalListItem.dates.requested", {
+              date: dateTimeFormat(i18n.language, decision.createdAt),
+            })}
           </span>
         </div>
         {decision.comment && (
@@ -90,21 +110,31 @@ export function DocumentApprovalListItem(props: {
       </div>
       <div className="ml-auto flex items-center gap-2">
         {isApproved && (
-          <Badge variant="success">{__("Approved")}</Badge>
+          <Badge variant="success">
+            {t("documentApprovalListItem.status.approved")}
+          </Badge>
         )}
         {isRejected && (
-          <Badge variant="danger">{__("Rejected")}</Badge>
+          <Badge variant="danger">
+            {t("documentApprovalListItem.status.rejected")}
+          </Badge>
         )}
-        {isPending && (decision.canApprove || decision.canReject) && (
-          <Button variant="secondary" to={reviewUrl} target="_blank">
-            {__("Review")}
+        {isPending && (decision.canApprove || decision.canReject) && reviewUrl != null && (
+          <Button variant="secondary" asChild>
+            <a href={reviewUrl} target="_blank" rel="noreferrer">
+              {t("documentApprovalListItem.actions.review")}
+            </a>
           </Button>
         )}
         {isPending && !decision.canApprove && !decision.canReject && (
-          <Badge variant="warning">{__("Pending")}</Badge>
+          <Badge variant="warning">
+            {t("documentApprovalListItem.status.pending")}
+          </Badge>
         )}
         {isVoided && (
-          <Badge variant="neutral">{__("Voided")}</Badge>
+          <Badge variant="neutral">
+            {t("documentApprovalListItem.status.voided")}
+          </Badge>
         )}
       </div>
     </div>

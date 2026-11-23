@@ -1,0 +1,372 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import { DotsThreeVerticalIcon, EyeIcon, EyeSlashIcon, InfoIcon, TrashIcon } from "@phosphor-icons/react";
+import { Dropdown } from "@probo/ui/src/v2/Dropdown/Dropdown";
+import { DropdownItem } from "@probo/ui/src/v2/Dropdown/DropdownItem";
+import { DropdownPopup } from "@probo/ui/src/v2/Dropdown/DropdownPopup";
+import { DropdownTrigger } from "@probo/ui/src/v2/Dropdown/DropdownTrigger";
+import { IconButton } from "@probo/ui/src/v2/IconButton/IconButton";
+import { Popover } from "@probo/ui/src/v2/Popover/Popover";
+import { PopoverPopup } from "@probo/ui/src/v2/Popover/PopoverPopup";
+import { PopoverTrigger } from "@probo/ui/src/v2/Popover/PopoverTrigger";
+import { TableCell } from "@probo/ui/src/v2/Table/TableCell";
+import { TableLink } from "@probo/ui/src/v2/Table/TableLink";
+import { TableRow } from "@probo/ui/src/v2/Table/TableRow";
+import { TableRowHeaderCell } from "@probo/ui/src/v2/Table/TableRowHeaderCell";
+import { Text } from "@probo/ui/src/v2/typography/Text";
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useFragment } from "react-relay";
+import { useLocation, useParams } from "react-router";
+import { graphql } from "relay-runtime";
+
+import type { MoveToCategorySelect_cookieBanner$key } from "#/__generated__/core/MoveToCategorySelect_cookieBanner.graphql";
+import type { TrackerPatternListItem_trackerPattern$key } from "#/__generated__/core/TrackerPatternListItem_trackerPattern.graphql";
+import type { TrackerPatternListItemMoveMutation } from "#/__generated__/core/TrackerPatternListItemMoveMutation.graphql";
+import type { TrackerPatternListItemUpdateMutation } from "#/__generated__/core/TrackerPatternListItemUpdateMutation.graphql";
+import { useOrganizationId } from "#/hooks/useOrganizationId";
+import { useMutation } from "#/lib/relay/useMutation";
+
+import { cookieBannerPath } from "../../../_lib/cookieBannerPaths";
+import { trackerPatternListItem } from "../../../variants";
+import { MoveToCategorySelect } from "../../_components/MoveToCategorySelect";
+import { trackerTypeBadges } from "../_lib/trackerBadges";
+
+import { DeleteTrackerPatternDialog } from "./DeleteTrackerPatternDialog";
+import { TrackerAttributionLabel } from "./TrackerAttributionLabel";
+import { TrackerObserverBadges } from "./TrackerObserverBadges";
+import { TrackerSourceBadge } from "./TrackerSourceBadge";
+import { TrackerTypeBadge } from "./TrackerTypeBadge";
+
+const trackerPatternFragment = graphql`
+  fragment TrackerPatternListItem_trackerPattern on TrackerPattern {
+    id
+    trackerType
+    pattern
+    source
+    sourceCookieBanner {
+      id
+    }
+    description
+    ...TrackerSourceBadge_trackerPattern
+    dailyHits(days: 30) {
+      hits {
+        count
+      }
+    }
+    excluded
+    cookieCategory {
+      id
+      name
+    }
+    commonThirdParty {
+      id
+      name
+    }
+    attribution
+    observedBy
+    canUpdate: permission(action: "core:tracker-pattern:update")
+    canDelete: permission(action: "core:tracker-pattern:delete")
+  }
+`;
+
+const movePatternMutation = graphql`
+  mutation TrackerPatternListItemMoveMutation(
+    $input: MoveTrackerPatternToCategoryInput!
+  ) {
+    moveTrackerPatternToCategory(input: $input) {
+      trackerPattern {
+        id
+        cookieCategory {
+          id
+          name
+          kind
+        }
+      }
+      cookieBanner {
+        id
+        latestVersion {
+          id
+          version
+          state
+        }
+      }
+    }
+  }
+`;
+
+const updatePatternMutation = graphql`
+  mutation TrackerPatternListItemUpdateMutation(
+    $input: UpdateTrackerPatternInput!
+  ) {
+    updateTrackerPattern(input: $input) {
+      trackerPattern {
+        id
+        excluded
+        updatedAt
+      }
+      cookieBanner {
+        id
+        latestVersion {
+          id
+          version
+          state
+        }
+      }
+    }
+  }
+`;
+
+interface TrackerPatternListItemProps {
+  patternKey: TrackerPatternListItem_trackerPattern$key;
+  cookieBannerKey: MoveToCategorySelect_cookieBanner$key;
+  onMoved: () => void;
+  onRemoved: () => void;
+}
+
+export function TrackerPatternListItem({
+  patternKey,
+  cookieBannerKey,
+  onMoved,
+  onRemoved,
+}: TrackerPatternListItemProps) {
+  const { t, i18n } = useTranslation("organizations/cookie-banners");
+  const organizationId = useOrganizationId();
+  const location = useLocation();
+  const { cookieBannerId } = useParams<{ cookieBannerId: string }>();
+  const pattern = useFragment(trackerPatternFragment, patternKey);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const { name, heading, link, title, type, info, detail, actions, optional }
+    = trackerPatternListItem({
+      excluded: pattern.excluded,
+    });
+  const description = pattern.description.trim();
+
+  const [movePattern] = useMutation<TrackerPatternListItemMoveMutation>(
+    movePatternMutation,
+    {
+      successMessage: t("trackerPatternRow.messages.cookieMoved"),
+      errorToast: t("trackerPatternRow.errors.moveCookie"),
+    },
+  );
+  const [updatePattern] = useMutation<TrackerPatternListItemUpdateMutation>(
+    updatePatternMutation,
+    {
+      errorToast: t("trackerPatternRow.errors.updateCookie"),
+    },
+  );
+
+  if (cookieBannerId == null) {
+    throw new Error(":cookieBannerId missing in route params");
+  }
+
+  function handleMove(targetCategoryId: string) {
+    if (targetCategoryId === pattern.cookieCategory?.id) {
+      return;
+    }
+    void movePattern({
+      variables: {
+        input: {
+          trackerPatternId: pattern.id,
+          targetCookieCategoryId: targetCategoryId,
+        },
+      },
+    }).then(
+      () => {
+        onMoved();
+      },
+      () => undefined,
+    );
+  }
+
+  function handleToggleExcluded() {
+    void updatePattern({
+      variables: {
+        input: {
+          trackerPatternId: pattern.id,
+          excluded: !pattern.excluded,
+        },
+      },
+    }).then(
+      () => {
+        onMoved();
+      },
+      () => undefined,
+    );
+  }
+
+  const typeBadge = trackerTypeBadges[pattern.trackerType];
+  const detailPath = `${cookieBannerPath(organizationId, cookieBannerId)}/trackers/${pattern.id}`;
+  const hits = pattern.dailyHits.reduce(
+    (sum, day) => sum + day.hits.reduce((daySum, hit) => daySum + hit.count, 0),
+    0,
+  );
+  const hitsLabel = new Intl.NumberFormat(i18n.language).format(hits);
+
+  return (
+    <>
+      <TableRow align="center" interactive>
+        <TableRowHeaderCell overflow="break">
+          <div className={name()}>
+            <div className={heading()}>
+              {typeBadge != null && (
+                <span className={type()}>
+                  <TrackerTypeBadge trackerType={pattern.trackerType} />
+                </span>
+              )}
+              <TableLink
+                to={{ pathname: detailPath, search: location.search }}
+                className={link()}
+              >
+                <Text size={2} weight="medium" highContrast className={title()}>
+                  {pattern.pattern}
+                </Text>
+              </TableLink>
+              {description !== ""
+                ? (
+                    <span className={info()}>
+                      <Popover>
+                        <PopoverTrigger
+                          render={(
+                            <IconButton
+                              size={1}
+                              variant="ghost"
+                              color="neutral"
+                              aria-label={t("trackerPatternRow.actions.description")}
+                            />
+                          )}
+                        >
+                          <InfoIcon />
+                        </PopoverTrigger>
+                        <PopoverPopup>
+                          <div className={detail()}>
+                            <Text size={2} weight="medium" highContrast>
+                              {pattern.pattern}
+                            </Text>
+                            <Text size={2} color="faint">
+                              {description}
+                            </Text>
+                          </div>
+                        </PopoverPopup>
+                      </Popover>
+                    </span>
+                  )
+                : null}
+            </div>
+          </div>
+        </TableRowHeaderCell>
+        <TableCell>
+          {pattern.source === "EXTENSION"
+            ? <TrackerAttributionLabel attribution="NOT_ATTRIBUTABLE" />
+            : pattern.commonThirdParty
+              ? (
+                  <Text size={2} highContrast>
+                    {pattern.commonThirdParty.name}
+                  </Text>
+                )
+              : <TrackerAttributionLabel attribution={pattern.attribution} />}
+        </TableCell>
+        <TableCell
+          interactive={pattern.sourceCookieBanner != null ? true : undefined}
+          className={optional()}
+        >
+          <TrackerSourceBadge layout="stacked" trackerPatternKey={pattern} />
+        </TableCell>
+        <TableCell className={optional()}>
+          <TrackerObserverBadges observers={pattern.observedBy} />
+        </TableCell>
+        {pattern.canUpdate
+          ? (
+              <TableCell interactive>
+                <MoveToCategorySelect
+                  cookieBannerKey={cookieBannerKey}
+                  currentCategoryId={pattern.cookieCategory?.id}
+                  currentCategoryName={pattern.cookieCategory?.name}
+                  onSelect={handleMove}
+                />
+              </TableCell>
+            )
+          : (
+              <TableCell>
+                <Text size={2} color={pattern.cookieCategory == null ? "faint" : undefined}>
+                  {pattern.cookieCategory?.name ?? "-"}
+                </Text>
+              </TableCell>
+            )}
+        <TableCell justify="end">
+          <Text size={2} weight="bold" highContrast className="font-mono">
+            {hitsLabel}
+          </Text>
+        </TableCell>
+        <TableCell interactive={pattern.canUpdate || pattern.canDelete ? true : undefined} justify="end">
+          {(pattern.canUpdate || pattern.canDelete) && (
+            <div className={actions()}>
+              <Dropdown>
+                <DropdownTrigger
+                  render={(
+                    <IconButton
+                      variant="ghost"
+                      color="neutral"
+                      size={1}
+                      aria-label={t("trackerPatternRow.actions.more")}
+                    >
+                      <DotsThreeVerticalIcon />
+                    </IconButton>
+                  )}
+                />
+                <DropdownPopup align="end">
+                  {pattern.canUpdate && (
+                    <DropdownItem
+                      iconStart={pattern.excluded ? <EyeIcon /> : <EyeSlashIcon />}
+                      onClick={handleToggleExcluded}
+                    >
+                      {pattern.excluded
+                        ? t("trackerPatternRow.actions.include")
+                        : t("trackerPatternRow.actions.exclude")}
+                    </DropdownItem>
+                  )}
+                  {pattern.canDelete && (
+                    <DropdownItem
+                      color="error"
+                      iconStart={<TrashIcon />}
+                      onClick={() => setDeleteOpen(true)}
+                    >
+                      {t("trackerPatternRow.actions.delete")}
+                    </DropdownItem>
+                  )}
+                </DropdownPopup>
+              </Dropdown>
+            </div>
+          )}
+        </TableCell>
+      </TableRow>
+      {pattern.canDelete && (
+        <DeleteTrackerPatternDialog
+          trackerPatternId={pattern.id}
+          name={pattern.pattern}
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+          onRemoved={onRemoved}
+        />
+      )}
+    </>
+  );
+}

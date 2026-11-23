@@ -1,29 +1,41 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { formatError } from "@probo/helpers";
+import { Field } from "@base-ui/react/field";
+import { Form } from "@base-ui/react/form";
+import { formatError, type GraphQLError } from "@probo/helpers";
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
-import { Button, Field, useToast } from "@probo/ui";
-import { useState } from "react";
+import { Button } from "@probo/ui/src/v2/Button/Button";
+import { TextField } from "@probo/ui/src/v2/form/TextField";
+import { Link } from "@probo/ui/src/v2/Link/Link";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
+import { Heading } from "@probo/ui/src/v2/typography/Heading";
+import { Text } from "@probo/ui/src/v2/typography/Text";
+import { useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation } from "react-relay";
-import { Link, useSearchParams } from "react-router";
+import { useSearchParams } from "react-router";
 import { graphql } from "relay-runtime";
-import { z } from "zod";
 
 import type { VerifyEmailPageMutation } from "#/__generated__/iam/VerifyEmailPageMutation.graphql";
-import { useFormWithSchema } from "#/hooks/useFormWithSchema";
+import { usePostAuthRedirectUrl } from "#/hooks/usePostAuthRedirectUrl";
 
 const verifyEmailMutation = graphql`
   mutation VerifyEmailPageMutation($input: VerifyEmailInput!) {
@@ -33,120 +45,127 @@ const verifyEmailMutation = graphql`
   }
 `;
 
-const confirmEmailSchema = z.object({
-  token: z.string().min(1, "Please enter a confirmation token"),
-});
-
 export default function VerifyEmailPage() {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
   const [searchParams] = useSearchParams();
+  const queryToken = searchParams.get("token")?.trim() ?? "";
+  const postAuthRedirectUrl = usePostAuthRedirectUrl();
 
-  usePageTitle(__("Confirm Email"));
+  usePageTitle(t("verifyEmailPage.pageTitle"));
 
-  const [isConfirmed, setIsConfirmed] = useState(false);
-
-  const form = useFormWithSchema(confirmEmailSchema, {
-    defaultValues: {
-      token: searchParams.get("token") ?? "",
-    },
-  });
-
-  const [verifyEmail]
+  const [verifyEmail, isVerifying]
     = useMutation<VerifyEmailPageMutation>(verifyEmailMutation);
 
-  const handleSubmit = form.handleSubmit((data) => {
+  const handleSubmit = useCallback((token: string) => {
+    if (token === "") {
+      toast.add({
+        title: t("common.error"),
+        description: t("verifyEmailPage.errors.tokenRequired"),
+        type: "error",
+      });
+      return;
+    }
+
     verifyEmail({
       variables: {
         input: {
-          token: data.token.trim(),
+          token,
         },
       },
       onCompleted: (_, errors) => {
-        if (errors) {
-          toast({
-            title: __("Error"),
-            description: formatError(__("Failed to confirm email"), errors),
-            variant: "error",
+        if (errors && !errors.some(error => (error as GraphQLError).extensions?.code === "EMAIL_ALREADY_VERIFIED")) {
+          toast.add({
+            title: t("common.error"), description: formatError(t("verifyEmailPage.errors.confirm"), errors),
+            type: "error",
           });
           return;
         }
 
-        setIsConfirmed(true);
-        toast({
-          title: __("Success"),
-          description: __("Your email has been confirmed successfully"),
-          variant: "success",
-        });
+        window.location.href = postAuthRedirectUrl;
       },
       onError: (err) => {
-        toast({
-          title: __("Error"),
-          description: err.message || __("Failed to confirm email"),
-          variant: "error",
+        toast.add({
+          title: t("common.error"), description: err.message || t("verifyEmailPage.errors.confirm"),
+          type: "error",
         });
       },
     });
-  });
+  }, [t, toast, verifyEmail, postAuthRedirectUrl]);
 
   return (
-    <div className="space-y-6 w-full max-w-md mx-auto pt-8">
-      <div className="space-y-2 text-center">
-        <h1 className="text-3xl font-bold">{__("Email Confirmation")}</h1>
-        <p className="text-txt-tertiary">
-          {__("Confirm your email address to complete registration")}
-        </p>
+    <div className="flex w-full flex-col gap-8">
+      <div className="flex flex-col gap-1">
+        <Heading level={1} size={4} weight="medium" align="center" highContrast>
+          {t("verifyEmailPage.title")}
+        </Heading>
+        <Text size={2} align="center" className="block">
+          {queryToken === ""
+            ? t("verifyEmailPage.description")
+            : t("verifyEmailPage.continueDescription")}
+        </Text>
       </div>
 
-      {isConfirmed
+      {queryToken === ""
         ? (
-            <div className="space-y-4 text-center">
-              <p className="text-green-600 dark:text-green-400">
-                {__("Your email has been confirmed successfully!")}
-              </p>
-              <Button to="/auth/login" className="w-full">
-                {__("Proceed to Login")}
-              </Button>
-            </div>
-          )
-        : (
-            <form onSubmit={e => void handleSubmit(e)} className="space-y-4">
-              <Field
-                label={__("Confirmation Token")}
-                type="text"
-                placeholder={__("Enter your confirmation token")}
-                {...form.register("token")}
-                error={form.formState.errors.token?.message}
-                disabled={form.formState.isSubmitting}
-                help={__(
-                  "The token has been automatically filled from the URL if available",
-                )}
-              />
+            <Form
+              className="flex flex-col gap-5"
+              onFormSubmit={(values) => {
+                handleSubmit(String(values.token ?? "").trim());
+              }}
+            >
+              <Field.Root name="token" className="flex flex-col gap-1.5">
+                <Field.Label className="text-1 font-medium text-sand-12">
+                  {t("verifyEmailPage.fields.token")}
+                </Field.Label>
+                <TextField
+                  type="text"
+                  name="token"
+                  required
+                  placeholder={t("verifyEmailPage.fields.tokenPlaceholder")}
+                  disabled={isVerifying}
+                />
+                <Field.Description className="text-1 text-sand-11">
+                  {t("verifyEmailPage.fields.tokenHelp")}
+                </Field.Description>
+                <Field.Error className="text-1 text-red-11" />
+              </Field.Root>
 
               <Button
                 type="submit"
-                className="w-xs h-10 mx-auto mt-6"
-                disabled={form.formState.isSubmitting}
+                variant="solid"
+                color="neutral"
+                highContrast
+                size={3}
+                className="w-full"
+                loading={isVerifying}
               >
-                {form.formState.isSubmitting
-                  ? __("Confirming...")
-                  : __("Confirm Email")}
+                {t("verifyEmailPage.actions.confirm")}
               </Button>
-            </form>
+            </Form>
+          )
+        : (
+            <Button
+              type="button"
+              variant="solid"
+              color="neutral"
+              highContrast
+              size={3}
+              className="w-full"
+              loading={isVerifying}
+              onClick={() => {
+                handleSubmit(queryToken);
+              }}
+            >
+              {t("verifyEmailPage.actions.continue")}
+            </Button>
           )}
 
-      <div className="text-center">
-        {!isConfirmed && (
-          <p className="text-sm text-txt-tertiary">
-            <Link
-              to="/auth/login"
-              className="underline text-txt-primary hover:text-txt-secondary"
-            >
-              {__("Back to Login")}
-            </Link>
-          </p>
-        )}
-      </div>
+      <Text align="center" size={2} className="block">
+        <Link to="/auth/login">
+          {t("verifyEmailPage.actions.backToLogin")}
+        </Link>
+      </Text>
     </div>
   );
 }

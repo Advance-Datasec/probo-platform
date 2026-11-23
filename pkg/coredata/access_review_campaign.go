@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -77,6 +83,92 @@ FOR UPDATE
 
 		return fmt.Errorf("cannot lock campaign: %w", err)
 	}
+
+	return nil
+}
+
+func (c *AccessReviewCampaign) LockForShare(
+	ctx context.Context,
+	conn pg.Tx,
+	scope Scoper,
+) error {
+	q := `
+SELECT id
+FROM access_review_campaigns
+WHERE %s
+  AND id = @id
+FOR SHARE
+`
+	q = fmt.Sprintf(q, scope.SQLFragment())
+	args := pgx.StrictNamedArgs{"id": c.ID}
+	maps.Copy(args, scope.SQLArguments())
+
+	var id gid.GID
+	if err := conn.QueryRow(ctx, q, args).Scan(&id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrResourceNotFound
+		}
+
+		return fmt.Errorf("cannot lock campaign: %w", err)
+	}
+
+	return nil
+}
+
+// LoadWithStaleFetchAttemptsForUpdateSkipLocked locks up to limit campaigns
+// with an attempt stuck in FETCHING since before staleThreshold, skipping
+// campaigns locked elsewhere. It is intentionally cross-tenant.
+func (campaigns *AccessReviewCampaigns) LoadWithStaleFetchAttemptsForUpdateSkipLocked(
+	ctx context.Context,
+	conn pg.Tx,
+	staleThreshold time.Time,
+	limit int,
+) error {
+	q := `
+SELECT
+    id,
+    organization_id,
+    name,
+    description,
+    status,
+    started_at,
+    completed_at,
+    created_at,
+    updated_at
+FROM
+    access_review_campaigns
+WHERE
+    id IN (
+        SELECT access_review_campaign_id
+        FROM access_review_campaign_sources
+        WHERE id IN (
+            SELECT access_review_campaign_source_id
+            FROM access_review_campaign_source_fetch_attempts
+            WHERE status = @fetching_status
+                AND updated_at < @stale_threshold
+        )
+    )
+LIMIT @limit
+FOR UPDATE SKIP LOCKED
+`
+
+	args := pgx.StrictNamedArgs{
+		"fetching_status": AccessReviewCampaignSourceFetchStatusFetching,
+		"stale_threshold": staleThreshold,
+		"limit":           limit,
+	}
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query access_review_campaigns: %w", err)
+	}
+
+	result, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[AccessReviewCampaign])
+	if err != nil {
+		return fmt.Errorf("cannot collect access review campaigns: %w", err)
+	}
+
+	*campaigns = result
 
 	return nil
 }
@@ -357,54 +449,4 @@ WHERE
 	}
 
 	return count, nil
-}
-
-func (c *AccessReviewCampaign) LoadLastCompletedByOrganizationID(
-	ctx context.Context,
-	conn pg.Querier,
-	scope Scoper,
-	organizationID gid.GID,
-) error {
-	q := `
-SELECT
-    id,
-    organization_id,
-    name,
-    description,
-    status,
-    started_at,
-    completed_at,
-    created_at,
-    updated_at
-FROM
-    access_review_campaigns
-WHERE
-    %s
-    AND organization_id = @organization_id
-    AND status = 'COMPLETED'
-ORDER BY completed_at DESC
-LIMIT 1;
-`
-	q = fmt.Sprintf(q, scope.SQLFragment())
-
-	args := pgx.StrictNamedArgs{"organization_id": organizationID}
-	maps.Copy(args, scope.SQLArguments())
-
-	rows, err := conn.Query(ctx, q, args)
-	if err != nil {
-		return fmt.Errorf("cannot query access_review_campaigns: %w", err)
-	}
-
-	campaign, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[AccessReviewCampaign])
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrResourceNotFound
-		}
-
-		return fmt.Errorf("cannot collect access review campaign: %w", err)
-	}
-
-	*c = campaign
-
-	return nil
 }

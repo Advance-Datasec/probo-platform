@@ -1,29 +1,69 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package cmdutil
 
 import (
+	"time"
+
 	"go.probo.inc/probo/pkg/cli/api"
 	"go.probo.inc/probo/pkg/cli/config"
 	"go.probo.inc/probo/pkg/cmd/iostreams"
+)
+
+const (
+	// ConsoleEndpoint is the console GraphQL API used by organization records.
+	ConsoleEndpoint = "/api/console/v1/graphql"
+
+	// ConnectEndpoint is the connect GraphQL API used by the signed-in user.
+	ConnectEndpoint = "/api/connect/v1/graphql"
 )
 
 type Factory struct {
 	IOStreams *iostreams.IOStreams
 	Version   string
 	Config    func() (*config.Config, error)
+}
+
+// GraphQLClient loads the active host and returns an authenticated client.
+// hc is the host configuration, including the saved default organization.
+func (f *Factory) GraphQLClient(endpoint string) (*api.Client, *config.HostConfig, error) {
+	cfg, err := f.Config()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	host, hc, err := cfg.DefaultHost()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	client := api.NewClient(
+		host,
+		hc.Token,
+		endpoint,
+		cfg.HTTPTimeoutDuration(),
+		TokenRefreshOption(cfg, host, hc),
+	)
+
+	return client, hc, nil
 }
 
 // TokenRefreshOption returns an api.Option that enables automatic access
@@ -42,12 +82,64 @@ func TokenRefreshOption(
 		RefreshToken:  hc.RefreshToken,
 		TokenEndpoint: hc.TokenEndpoint,
 		ClientID:      config.CLIClientID,
-		OnRefresh: func(accessToken, refreshToken string) error {
-			hc.Token = accessToken
-			hc.RefreshToken = refreshToken
+		ExpiresAt:     hc.ExpiresAt,
+		Lock:          config.Lock,
+		Current: func() (api.StoredCredentials, error) {
+			fresh, err := config.Load()
+			if err != nil {
+				return api.StoredCredentials{}, err
+			}
+
+			saved := fresh.Hosts[host]
+			if saved == nil {
+				return api.StoredCredentials{}, nil
+			}
+
+			return api.StoredCredentials{
+				AccessToken:  saved.Token,
+				RefreshToken: saved.RefreshToken,
+				ExpiresAt:    saved.ExpiresAt,
+			}, nil
+		},
+		OnRefresh: func(accessToken, refreshToken string, expiresAt time.Time) error {
+			fresh, err := config.Load()
+			if err != nil {
+				return err
+			}
+
+			saved := fresh.Hosts[host]
+			if saved == nil {
+				saved = &config.HostConfig{
+					TokenEndpoint: hc.TokenEndpoint,
+					Organization:  hc.Organization,
+				}
+			}
+
+			saved.Token = accessToken
+			if refreshToken != "" {
+				saved.RefreshToken = refreshToken
+			}
+
+			if !expiresAt.IsZero() {
+				saved.ExpiresAt = expiresAt
+			}
+
+			if saved.TokenEndpoint == "" {
+				saved.TokenEndpoint = hc.TokenEndpoint
+			}
+
+			fresh.Hosts[host] = saved
+			if err := fresh.Save(); err != nil {
+				return err
+			}
+
+			hc.Token = saved.Token
+			hc.RefreshToken = saved.RefreshToken
+			hc.TokenEndpoint = saved.TokenEndpoint
+			hc.ExpiresAt = saved.ExpiresAt
 			cfg.Hosts[host] = hc
 
-			return cfg.Save()
+			return nil
 		},
 	})
 }

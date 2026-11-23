@@ -1,21 +1,26 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package list
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -23,18 +28,24 @@ import (
 	"go.probo.inc/probo/pkg/cmd/cmdutil"
 )
 
-const listQuery = `
-query($id: ID!, $first: Int, $after: CursorKey, $orderBy: WebhookEventOrder) {
+func eventsListQuery(includePayload bool) string {
+	payloadField := ""
+	if includePayload {
+		payloadField = "\n            payload"
+	}
+
+	return fmt.Sprintf(`
+query WebhookEventList($id: ID!, $first: Int, $after: CursorKey, $orderBy: WebhookEventOrder, $filter: WebhookEventFilter) {
   node(id: $id) {
     __typename
     ... on WebhookSubscription {
-      events(first: $first, after: $after, orderBy: $orderBy) {
+      events(first: $first, after: $after, orderBy: $orderBy, filter: $filter) {
         totalCount
         edges {
           node {
             id
             status
-            createdAt
+            createdAt%s
           }
         }
         pageInfo {
@@ -45,19 +56,23 @@ query($id: ID!, $first: Int, $after: CursorKey, $orderBy: WebhookEventOrder) {
     }
   }
 }
-`
+`, payloadField)
+}
 
 type webhookEvent struct {
-	ID        string `json:"id"`
-	Status    string `json:"status"`
-	CreatedAt string `json:"createdAt"`
+	ID        string  `json:"id"`
+	Status    string  `json:"status"`
+	CreatedAt string  `json:"createdAt"`
+	Payload   *string `json:"payload,omitempty"`
 }
 
 func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	var (
 		flagLimit    int
+		flagAfter    string
 		flagOrderBy  string
 		flagOrderDir string
+		flagStatus   string
 		flagOutput   *string
 	)
 
@@ -71,23 +86,14 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
-			cfg, err := f.Config()
-			if err != nil {
+			if err := cmdutil.ValidateLimit(flagLimit); err != nil {
 				return err
 			}
 
-			host, hc, err := cfg.DefaultHost()
+			client, _, err := f.GraphQLClient(cmdutil.ConsoleEndpoint)
 			if err != nil {
 				return err
 			}
-
-			client := api.NewClient(
-				host,
-				hc.Token,
-				"/api/console/v1/graphql",
-				cfg.HTTPTimeoutDuration(),
-				cmdutil.TokenRefreshOption(cfg, host, hc),
-			)
 
 			variables := map[string]any{
 				"id": args[0],
@@ -104,79 +110,59 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				}
 			}
 
-			events, totalCount, err := api.Paginate(
+			if flagStatus != "" {
+				if err := cmdutil.ValidateEnum(
+					"status",
+					flagStatus,
+					[]string{"PENDING", "SUCCEEDED", "FAILED"},
+				); err != nil {
+					return err
+				}
+
+				variables["filter"] = map[string]any{
+					"status": flagStatus,
+				}
+			}
+
+			events, totalCount, nextCursor, err := api.Paginate(
 				client,
-				listQuery,
+				eventsListQuery(*flagOutput == cmdutil.OutputJSON),
 				variables,
 				flagLimit,
-				func(data json.RawMessage) (*api.Connection[webhookEvent], error) {
-					var resp struct {
-						Node *struct {
-							Typename string                       `json:"__typename"`
-							Events   api.Connection[webhookEvent] `json:"events"`
-						} `json:"node"`
-					}
-					if err := json.Unmarshal(data, &resp); err != nil {
-						return nil, err
-					}
-
-					if resp.Node == nil {
-						return nil, fmt.Errorf("webhook subscription %s not found", args[0])
-					}
-
-					if resp.Node.Typename != "WebhookSubscription" {
-						return nil, fmt.Errorf("expected WebhookSubscription node, got %s", resp.Node.Typename)
-					}
-
-					return &resp.Node.Events, nil
-				},
+				flagAfter,
+				api.NodeConnection[webhookEvent]("events", "WebhookSubscription", fmt.Sprintf("webhook subscription %s not found", args[0])),
 			)
 			if err != nil {
 				return err
 			}
 
-			if *flagOutput == cmdutil.OutputJSON {
-				if events == nil {
-					events = []webhookEvent{}
-				}
-
-				return cmdutil.PrintJSON(f.IOStreams.Out, events)
-			}
-
-			if len(events) == 0 {
-				_, _ = fmt.Fprintln(f.IOStreams.Out, "No webhook events found.")
-				return nil
-			}
-
-			rows := make([][]string, 0, len(events))
-			for _, e := range events {
-				rows = append(rows, []string{
-					e.ID,
-					e.Status,
-					cmdutil.FormatTime(e.CreatedAt),
-				})
-			}
-
-			t := cmdutil.NewTable("ID", "STATUS", "CREATED").Rows(rows...)
-
-			_, _ = fmt.Fprintln(f.IOStreams.Out, t)
-
-			if totalCount > len(events) {
-				_, _ = fmt.Fprintf(
-					f.IOStreams.ErrOut,
-					"\nShowing %d of %d events\n",
-					len(events),
-					totalCount,
-				)
-			}
-
-			return nil
+			return cmdutil.PrintList(
+				f.IOStreams,
+				*flagOutput,
+				events,
+				totalCount,
+				cmdutil.ListView[webhookEvent]{
+					Empty:      "No webhook events found.",
+					Noun:       "events",
+					NextCursor: nextCursor,
+					Headers:    []string{"ID", "STATUS", "CREATED"},
+					Row: func(e webhookEvent) ([]string, error) {
+						return []string{
+							e.ID,
+							e.Status,
+							cmdutil.FormatTime(e.CreatedAt),
+						}, nil
+					},
+				},
+			)
 		},
 	}
 
 	cmd.Flags().IntVarP(&flagLimit, "limit", "L", 30, "Maximum number of events to list")
+	cmdutil.AddAfterFlag(cmd, &flagAfter)
 	cmd.Flags().StringVar(&flagOrderBy, "order-by", "", "Order by field (CREATED_AT)")
-	cmd.Flags().StringVar(&flagOrderDir, "order-direction", "DESC", "Sort direction (ASC, DESC)")
+	cmdutil.AddOrderDirectionFlag(cmd, &flagOrderDir, "DESC")
+	cmd.Flags().StringVar(&flagStatus, "status", "", "Filter by status (PENDING, SUCCEEDED, FAILED)")
 	flagOutput = cmdutil.AddOutputFlag(cmd)
 
 	return cmd

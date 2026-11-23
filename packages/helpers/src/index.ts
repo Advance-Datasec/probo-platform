@@ -1,20 +1,28 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 export { objectKeys, objectEntries, cleanFormData } from "./object";
-export { sprintf, faviconUrl, slugify } from "./string";
+export { avatarColor, avatarInitial } from "./avatar";
+export { sprintf, faviconUrl, slugify, emptyToNull, clampUtf8 } from "./string";
 export {
+  getCertificateProvisioningErrorMessage,
   getCustomDomainStatusBadgeLabel,
   getCustomDomainStatusBadgeVariant,
 } from "./customDomain";
@@ -22,7 +30,13 @@ export {
   getTreatment,
   getRiskImpacts,
   getRiskLikelihoods,
+  defaultScoreLevels,
+  getRiskScoreLevel,
   getSeverity,
+  riskScoreLevelOrder,
+  type RiskMatrixSize,
+  type RiskScoreLevel,
+  type RiskScoreLevelMapping,
 } from "./risk";
 export {
   withViewTransition,
@@ -33,7 +47,14 @@ export {
 } from "./dom";
 export { times, groupBy, isEmpty } from "./array";
 export { randomInt } from "./number";
-export { getMeasureStateLabel, measureStates } from "./measure";
+export {
+  getInternalControlStateLabel,
+  internalControlImplementationStatuses,
+  internalControlNatures,
+  internalControlOperatingModes,
+  internalControlTypes,
+  internalControlStates,
+} from "./internalControl";
 export { getRole, getRoles, peopleRoles } from "./people";
 export { certificationCategoryLabel, certifications } from "./certifications";
 export {
@@ -77,14 +98,16 @@ export {
     getObligationTypeOptions,
 } from "./obligationType";
 export {
-    getTrustCenterVisibilityVariant,
-    getTrustCenterVisibilityLabel,
-    getTrustCenterVisibilityOptions,
-    trustCenterVisibilities,
-    type TrustCenterVisibility,
-} from "./trustCenterVisibility";
+    getCompliancePortalVisibilityVariant,
+    getCompliancePortalVisibilityLabel,
+    getCompliancePortalVisibilityOptions,
+    getCompliancePortalLinkedVisibilityOptions,
+    compliancePortalVisibilities,
+    compliancePortalLinkedVisibilities,
+    type CompliancePortalVisibility,
+    type CompliancePortalLinkedVisibility,
+} from "./compliancePortalVisibility";
 export { promisifyMutation } from "./relay";
-export { fileType, fileSize } from "./file";
 export {
   acceptDocument,
   acceptSpreadsheet,
@@ -97,28 +120,48 @@ export {
 } from "./fileAccept";
 export {
   formatDatetime,
-  formatDate,
+  toPeriod,
   toDateInput,
   todayAsDateInput,
-  formatDuration,
   parseDate,
+  isPastDueDate,
+  type Period,
 } from "./date";
 export {
-  humanizeSeconds,
+  getMembershipSessionStatus,
+  type MembershipSessionStatus,
+} from "./membershipSession";
+export {
   DURATION_UNITS,
   toMaxAgeSeconds,
   fromMaxAgeSeconds,
 } from "./duration";
 export { getTrackerTypeBadge, getTrackerSourceBadge } from "./tracker";
-export { getTrustCenterUrl } from "./trustCenter";
 export { detectSocialName } from "./socialUrl";
-export { formatError, type GraphQLError } from "./error";
-export { Role, roles, getAssignableRoles } from "./roles";
 export {
-  getTrustCenterDocumentAccessStatusBadgeVariant,
-  getTrustCenterDocumentAccessStatusLabel,
-  type TrustCenterDocumentAccessInfo,
-} from "./trustCenterDocumentAccess";
+  catchResultValue,
+  type CatchResult,
+  type FieldRejection,
+  formatError,
+  graphqlErrorField,
+  graphqlErrorMessage,
+  graphqlErrorsMessage,
+  isForbiddenGraphqlError,
+  toFieldErrors,
+  toFieldRejections,
+  type GraphQLError,
+} from "./error";
+export {
+  Role,
+  roles,
+  getAssignableRoles,
+  getMembershipRole,
+  getMembershipRoles,
+} from "./roles";
+export {
+  getCompliancePortalDocumentAccessStatusLabel,
+  type CompliancePortalDocumentAccessInfo,
+} from "./compliancePortalDocumentAccess";
 export {
   getRightsRequestTypeLabel,
   getRightsRequestTypeOptions,

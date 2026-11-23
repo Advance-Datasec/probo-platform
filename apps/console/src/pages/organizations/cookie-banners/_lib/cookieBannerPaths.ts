@@ -1,0 +1,87 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import { navGroupByKey, navHref } from "#/pages/iam/organizations/_lib/navigation";
+
+// Cookie banners live under whichever product segment NAV_GROUPS assigns to the
+// cmp group, so the segment is read from there rather than spelled out.
+export function cookieBannersBasePath(organizationId: string): string {
+  return navHref(organizationId, navGroupByKey("cmp"), "cookie-banners");
+}
+
+export function cookieBannerPath(organizationId: string, cookieBannerId: string): string {
+  return `${cookieBannersBasePath(organizationId)}/${cookieBannerId}`;
+}
+
+export function cookieBannersNewPath(organizationId: string): string {
+  return `${cookieBannersBasePath(organizationId)}/new`;
+}
+
+export function cookieBannerInstallPath(organizationId: string, cookieBannerId: string): string {
+  return `${cookieBannerPath(organizationId, cookieBannerId)}/install`;
+}
+
+export function cookieBannerSettingsPath(organizationId: string, cookieBannerId: string): string {
+  return `${cookieBannerPath(organizationId, cookieBannerId)}/settings`;
+}
+
+export function cookieBannerTranslationsPath(organizationId: string, cookieBannerId: string): string {
+  return `${cookieBannerPath(organizationId, cookieBannerId)}/translations`;
+}
+
+export function cookieBannerTrackersPath(organizationId: string, cookieBannerId: string): string {
+  return `${cookieBannerPath(organizationId, cookieBannerId)}/trackers`;
+}
+
+export function cookieBannerNewTrackerPath(organizationId: string, cookieBannerId: string): string {
+  return `${cookieBannerTrackersPath(organizationId, cookieBannerId)}/new`;
+}
+
+export function cookieBannerResourcesPath(organizationId: string, cookieBannerId: string): string {
+  return `${cookieBannerPath(organizationId, cookieBannerId)}/resources`;
+}
+
+export function cookieBannerScansPath(organizationId: string, cookieBannerId: string): string {
+  return `${cookieBannerPath(organizationId, cookieBannerId)}/scans`;
+}
+
+export function cookieBannerScanPath(
+  organizationId: string,
+  cookieBannerId: string,
+  scanId: string,
+): string {
+  return `${cookieBannerScansPath(organizationId, cookieBannerId)}/${scanId}`;
+}
+
+export function cookieBannerTrailPath(organizationId: string, cookieBannerId: string): string {
+  return `${cookieBannerPath(organizationId, cookieBannerId)}/trail`;
+}
+
+export function cookieBannerConsentRecordPath(
+  organizationId: string,
+  cookieBannerId: string,
+  consentRecordId: string,
+): string {
+  return `${cookieBannerPath(organizationId, cookieBannerId)}/consent-records/${consentRecordId}`;
+}
+
+export function cookieBannerTCFPath(organizationId: string, cookieBannerId: string): string {
+  return `${cookieBannerPath(organizationId, cookieBannerId)}/tcf`;
+}

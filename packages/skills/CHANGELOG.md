@@ -1,0 +1,167 @@
+# Changelog
+
+All notable changes to the `@probo/skills` package will be documented in
+this file.
+
+## Unreleased
+
+### Added
+
+- `using-prb` explains that `prb evidence link` uploads a `.uri` file
+  containing the URL, the same way as the console link form
+
+## [0.6.1] - 2026-11-11
+
+### Changed
+
+- `using-prb` lists `--title` on `finding create`, which the CLI now
+  requires
+
+## [0.6.0] - 2026-11-02
+
+### Changed
+
+- `access-review` reference describes `retryAccessReviewCampaignSourceFetch`
+  as a recovery step for a failed source fetch, called only when the user
+  asks
+- `using-prb` tells agents to ask for a US, EU, or custom host before
+  `prb auth login --hostname`. Omitting `--hostname` fails because prompts
+  are disabled
+
+## [0.5.0] - 2026-10-27
+
+### Added
+
+- `using-prb` tells an agent how to call the `prb` CLI, including sign-in,
+  organization choice, and record changes. Install it from the repository
+  pinned to the `@probo/skills` tag that matches the installed CLI:
+
+  ```bash
+  gh skill install getprobo/probo using-prb --pin @probo/skills/vX.Y.Z
+  npx skills add "getprobo/probo#@probo/skills/vX.Y.Z" --skill using-prb
+  ```
+
+  The `prb` binary does not embed a second copy. This skill sits next to
+  the MCP workflows and does not call MCP.
+
+## [0.4.1] - 2026-10-09
+
+### Changed
+
+- The `open-source-compliance` skill and the MCP specification call linked safeguards internal controls instead of measures
+
+## [0.4.0] - 2026-10-05
+
+### Added
+
+- `listOrganizations` exposes `legal_name`, the organization's registered legal name, alongside `name` (the operating name). Skills that draft legal documents use `legal_name` when it is set.
+
+## [0.3.2] - 2026-09-04
+
+### Changed
+
+- Access review decision rubric no longer keys on `incremental_tag`, matching campaigns that are now independent snapshots
+
+## [0.3.1] - 2026-08-24
+
+### Fixed
+
+- `access-review` skill reference: `auth_method` now lists `SSO`, `PASSWORD`, `API_KEY`, `OAUTH2`, `SSH`, and `SERVICE_ACCOUNT`, matching the API's actual values instead of omitting `OAUTH2` and `SSH`
+
+## [0.3.0] - 2026-08-10
+
+### Added
+
+- Agent Plugins 1.0.0 portable package: `plugin.json` and `mcp.json` at the
+  package root, both declaring the canonical
+  `https://agent-plugins.org/schemas/1.0.0/…` schema identifiers, so any
+  conformant client can load the skills and Probo MCP servers without
+  client-specific wiring
+- Both hosted Probo instances ship as Streamable HTTP servers: `probo-us`
+  (`https://us.probo.com/api/mcp/v1`) and `probo-eu`
+  (`https://eu.probo.com/api/mcp/v1`)
+- Validation of the Agent Plugins manifest and MCP schemas (closed field sets,
+  plugin name constraints, transport variants, literal HTTPS URLs, no
+  credential headers under any capitalization), of Agent Skills frontmatter
+  (parsed as YAML, `name` matching the skill directory, `description`,
+  `compatibility`, and `metadata` types, plus length limits for `description`
+  and `compatibility`), and of `.mcp.json` parity with `mcp.json`. Optional
+  fields must be absent rather than `null`, which the portable schemas reject
+
+### Fixed
+
+- MCP endpoint path: the Probo MCP API is served at `<instance-root>/api/mcp/v1`.
+  The previous `/mcp/v1` path returned the console HTML page instead of the MCP
+  endpoint, so no bundled server could connect
+- `access-review` skill: server and organization selection are now separate
+  preconditions, so both are resolved whichever one is ambiguous — a single
+  self-hosted server serving several organizations included. Discovery uses
+  `listOrganizations`, which takes no required input; it previously called
+  `listAccessReviewCampaigns`, which requires the `organization_id` that
+  discovery is meant to establish, so the step could not be executed as written.
+  A merely non-empty result never settles the region, and anything short of a
+  unique match asks the user. The reference documents both uses of
+  `listOrganizations`
+
+### Changed
+
+- **Breaking:** MCP configuration no longer reads `PROBO_BASE_URL`. Agent
+  Plugins performs no placeholder expansion in remote MCP URLs, so the hosted
+  regional endpoints are declared literally. Self-hosted users add their
+  instance in the agent, e.g.
+  `claude mcp add --transport http probo https://probo.example.com/api/mcp/v1`
+- Skills select a region instead of assuming a single `probo` server, and
+  discover it by calling a list tool on each connected server when the region
+  is unknown
+- Client manifest versions (`.claude-plugin/`, `.codex-plugin/`) track
+  `package.json`, which validation now enforces
+
+## [0.2.2] - 2026-08-04
+
+### Fixed
+
+- `access-review` skill: reference doc now points agents to the new `source_name` and `connector_id` entry fields instead of inferring the source tool from account data
+
+## [0.2.1] - 2026-08-03
+
+### Fixed
+
+- `compliance-portal-commitments` skill: reference doc corrected to use the `compliance_portal_id` argument name (previously documented the stale `trust_center_id` name, which no longer matches the current API)
+
+## [0.2.0] - 2026-07-25
+
+### Added
+
+- Skill: `compliance-portal-commitments` — create or update the public
+  commitments shown on a Probo compliance portal, grounded strictly in the
+  organization's own published Probo policies and written in a factual,
+  understated engineering voice (references: `voice.md`, `portal-mechanics.md`)
+
+## [0.1.0] - 2026-07-10
+
+### Added
+
+- `@probo/skills` npm package with multi-agent manifests (`.claude-plugin/`,
+  `.codex-plugin/`, `.agents/`) and Probo MCP wiring via `.mcp.json`
+  (`PROBO_BASE_URL`, OAuth 2.0 sign-in)
+- Skills: `open-source-compliance`, `access-review`, `missing-signatures`
+- Commands: `access-review`, `missing-signatures` (Claude Code slash commands
+  delegating to shared skills)
+- Portable relative `references/` paths in skill bodies (no
+  `${CLAUDE_PLUGIN_ROOT}`)
+- Resumable session notes for `access-review` and `missing-signatures`
+- Repo-root marketplace catalogs for Git installs (`getprobo/probo`):
+  `.claude-plugin/marketplace.json` (Claude Code) and
+  `.agents/plugins/marketplace.json` (Codex)
+- Package-local marketplace catalogs under `packages/skills/`
+- `COMPATIBILITY.md`, validation script, and release workflow
+  (`release-npm-skills.yaml`, tag `@probo/skills/v*`)
+
+### Changed
+
+- Package published as `@probo/skills` in `packages/skills/` (multi-agent
+  scope, not Claude-specific)
+- Access-review skill records entry notes only after successful API writes
+- Release checksums derived from `npm pack` tarball contents
+- Validation enforces `.claude-plugin/marketplace.json` structure and Codex
+  marketplace shape; rejects non-object JSON roots in catalog files

@@ -1,18 +1,23 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
 import {
   Close,
   Content,
@@ -36,6 +41,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
 import { tv } from "tailwind-variants";
 
 import { Button } from "../../Atoms/Button/Button";
@@ -66,6 +72,7 @@ type Props = {
   className?: string;
   ref?: DialogRef;
   onClose?: () => void;
+  onOpenChange?: (open: boolean) => void;
   closable?: boolean;
 };
 
@@ -83,6 +90,7 @@ export function Dialog({
   ref,
   defaultOpen,
   onClose,
+  onOpenChange: onOpenChangeProp,
   closable = true,
 }: Props) {
   const { overlay, content, header, title: titleClassname } = dialog();
@@ -94,9 +102,11 @@ export function Dialog({
       ref.current = {
         open() {
           setOpen(true);
+          onOpenChangeProp?.(true);
         },
         close() {
           setOpen(false);
+          onOpenChangeProp?.(false);
         },
       };
     }
@@ -107,6 +117,7 @@ export function Dialog({
       return;
     }
     setOpen(open);
+    onOpenChangeProp?.(open);
     if (!open) {
       onClose?.();
     }
@@ -114,6 +125,12 @@ export function Dialog({
 
   const preventDismissWhenPointerIsInsideContent: DialogContentPrimitiveProps["onPointerDownOutside"] = (event) => {
     const originalEvent = event.detail.originalEvent;
+    const target = originalEvent.target;
+    if (target instanceof Element && target.closest("[data-rich-editor-floating]") != null) {
+      event.preventDefault();
+      return;
+    }
+
     const rect = contentRef.current?.getBoundingClientRect();
     if (
       rect
@@ -129,6 +146,12 @@ export function Dialog({
   const contentProps = closable
     ? {
         onPointerDownOutside: preventDismissWhenPointerIsInsideContent,
+        onInteractOutside: (event: Event) => {
+          const target = event.target;
+          if (target instanceof Element && target.closest("[data-rich-editor-floating]") != null) {
+            event.preventDefault();
+          }
+        },
       }
     : {
         onEscapeKeyDown: (e: Event) => e.preventDefault(),
@@ -189,19 +212,27 @@ export function DialogFooter({
   children,
   exitLabel,
   className,
+  start,
 }: {
   children?: ReactNode;
   exitLabel?: string;
   className?: string;
+  // Optional content aligned to the footer's left edge (e.g. a documentation
+  // link), on the same line as the Cancel/confirm buttons. When set, the footer
+  // switches to justify-between; otherwise it keeps the default right alignment.
+  start?: ReactNode;
 }) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const { footer } = dialog();
   return (
-    <footer className={footer({ className })}>
-      <Close asChild>
-        <Button variant="secondary">{exitLabel ?? __("Cancel")}</Button>
-      </Close>
-      {children}
+    <footer className={footer({ className: clsx(start != null && "justify-between", className) })}>
+      {start != null && <div className="flex items-center gap-2">{start}</div>}
+      <div className="flex items-center gap-2">
+        <Close asChild>
+          <Button variant="secondary">{exitLabel ?? t("ui.actions.cancel")}</Button>
+        </Close>
+        {children}
+      </div>
     </footer>
   );
 }

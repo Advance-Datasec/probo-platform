@@ -1,0 +1,73 @@
+name: "Setup Go with isolated cache"
+description: "Install Go and cache GOCACHE/GOMODCACHE with per-job isolation, branch-aware restore, and working-set trimming."
+inputs:
+  cache-key-prefix:
+    description: "Prefix for the cache key to prevent collisions between jobs that build different things"
+    required: true
+  go-version:
+    description: "The Go version to download (if necessary) and use."
+    required: true
+  cache-dependency-path:
+    description: "Glob hashed into the cache key. Use a single glob; defaults to go.sum."
+    required: false
+    default: "go.sum"
+  max-staleness-hours:
+    description: "Whole hours of slack before job start to retain GOCACHE entries. Minimum 1 (Go's mtime touch interval)."
+    required: false
+    default: "2"
+outputs:
+  cache-hit:
+    description: "True if an exact cache key match was restored"
+    value: "${{ steps.cache.outputs.cache-hit }}"
+runs:
+  using: "composite"
+  steps:
+    - name: "Install Go"
+      id: "install-go"
+      uses: "actions/setup-go@v7.0.0"
+      with:
+        go-version: "${{ inputs.go-version }}"
+        cache: false
+    # actions/cache re-reads path in its post step. A composite step output
+    # is empty there; runner.temp is still set.
+    - name: "Select cache directories"
+      shell: "bash"
+      env:
+        GO_BUILD_CACHE: "${{ runner.temp }}/go-build"
+        GO_MOD_CACHE: "${{ runner.temp }}/go-mod"
+      run: |
+        mkdir -p "$GO_BUILD_CACHE" "$GO_MOD_CACHE"
+        echo "GOCACHE=$GO_BUILD_CACHE" >> "$GITHUB_ENV"
+        echo "GOMODCACHE=$GO_MOD_CACHE" >> "$GITHUB_ENV"
+    - name: "Cache"
+      id: "cache"
+      uses: "actions/cache@v6.1.0"
+      with:
+        path: |
+          ${{ runner.temp }}/go-build
+          ${{ runner.temp }}/go-mod
+        # End with a hash of the files that change compiled objects, not
+        # the run id. A run id made every success a new key, so the post
+        # step uploaded the cache again. An exact hit skips that upload,
+        # which is what a rerun of the same sources should do. A source
+        # change misses, restores the newest prefix match, and saves the
+        # new objects. The prefixed restore keys still match an older
+        # run-id entry and any save from the same branch or main.
+        key: "go-cache-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-key-prefix }}-${{ inputs.go-version }}-${{ github.head_ref || github.ref_name }}-${{ hashFiles(inputs.cache-dependency-path) }}-${{ hashFiles('**/*.go', '**/go.mod', '**/*.sql', '**/*.graphql', '**/gqlgen.yaml', '**/mcpgen.yaml', 'pkg/server/api/mcp/v1/specification.yaml', 'pkg/**/*.tmpl', 'apps/**/*.tmpl', 'pkg/**/*.html', 'pkg/**/*.txt', 'pkg/**/*.png', 'pkg/**/*.js', 'pkg/**/*.wasm', 'pkg/**/*.sha256', 'pkg/proboctl/seed/common-third-parties/data/data.json') }}"
+        restore-keys: |
+          go-cache-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-key-prefix }}-${{ inputs.go-version }}-${{ github.head_ref || github.ref_name }}-${{ hashFiles(inputs.cache-dependency-path) }}-
+          go-cache-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-key-prefix }}-${{ inputs.go-version }}-${{ github.head_ref || github.ref_name }}-
+          go-cache-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-key-prefix }}-${{ inputs.go-version }}-${{ github.event.repository.default_branch }}-${{ hashFiles(inputs.cache-dependency-path) }}-
+          go-cache-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-key-prefix }}-${{ inputs.go-version }}-${{ github.event.repository.default_branch }}-
+    # Trim GOCACHE to this run's working set. This action's post-hook runs in
+    # reverse declaration order: after the consumer workflow's main steps
+    # populate the cache, and before actions/cache's post-save uploads it.
+    # Without this, every save accretes another layer of stale compile outputs
+    # (Go has no GOCACHEMAXSIZE knob, and its 5-day age trim never fires
+    # anything in CI that compiles daily). Go touches mtimes on cache use, so
+    # entries untouched since job start went unused this run and are dropped.
+    - name: "Trim GOCACHE"
+      uses: "$/.github/actions/trim-gocache"
+      with:
+        gocache: "${{ runner.temp }}/go-build"
+        max-staleness-hours: "${{ inputs.max-staleness-hours }}"

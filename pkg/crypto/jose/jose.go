@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package jose
 
@@ -23,7 +29,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 )
+
+// minRSAModulusBits is the smallest RSA modulus size accepted for RS256
+// verification. NIST SP 800-131A and industry guidance both treat moduli
+// below 2048 bits as too weak for continued use.
+const minRSAModulusBits = 2048
 
 type (
 	// JWK represents a JSON Web Key (RFC 7517).
@@ -96,4 +108,167 @@ func SignJWT(privateKey *rsa.PrivateKey, kid string, claims any) (string, error)
 	signatureB64 := base64.RawURLEncoding.EncodeToString(signature)
 
 	return signingInput + "." + signatureB64, nil
+}
+
+// ValidateRSAPublicKey reports whether pub is acceptable for RS256 JWK use.
+func ValidateRSAPublicKey(pub *rsa.PublicKey) error {
+	if pub == nil || pub.N == nil {
+		return fmt.Errorf("cannot validate rsa public key: public key is required")
+	}
+
+	// BitLen reports the size of the absolute value, so a negative modulus
+	// would otherwise pass the size floor below.
+	if pub.N.Sign() != 1 {
+		return fmt.Errorf("cannot validate rsa public key: modulus must be positive")
+	}
+
+	if pub.N.BitLen() < minRSAModulusBits {
+		return fmt.Errorf(
+			"cannot validate rsa public key: modulus is %d bits, minimum is %d",
+			pub.N.BitLen(),
+			minRSAModulusBits,
+		)
+	}
+
+	// RFC 8017 section 3.1: e is an odd integer between 3 and n-1. An even
+	// exponent is not invertible modulo λ(n), so the key cannot verify.
+	if pub.E < 3 || pub.E&1 == 0 {
+		return fmt.Errorf(
+			"cannot validate rsa public key: exponent must be an odd integer at least 3, got %d",
+			pub.E,
+		)
+	}
+
+	return nil
+}
+
+// RSAPublicKeyFromJWK reconstructs an RSA public key from a JWK.
+func RSAPublicKeyFromJWK(jwk JWK) (*rsa.PublicKey, error) {
+	if jwk.KeyType != "RSA" {
+		return nil, fmt.Errorf("cannot convert jwk to rsa public key: unsupported key type %q", jwk.KeyType)
+	}
+
+	nBytes, err := base64.RawURLEncoding.DecodeString(jwk.N)
+	if err != nil {
+		return nil, fmt.Errorf("cannot decode rsa modulus: %w", err)
+	}
+
+	eBytes, err := base64.RawURLEncoding.DecodeString(jwk.E)
+	if err != nil {
+		return nil, fmt.Errorf("cannot decode rsa exponent: %w", err)
+	}
+
+	e := new(big.Int).SetBytes(eBytes)
+	if !e.IsInt64() || e.Sign() <= 0 {
+		return nil, fmt.Errorf("cannot convert jwk to rsa public key: invalid rsa exponent")
+	}
+
+	pub := &rsa.PublicKey{
+		N: new(big.Int).SetBytes(nBytes),
+		E: int(e.Int64()),
+	}
+
+	if err := ValidateRSAPublicKey(pub); err != nil {
+		return nil, fmt.Errorf("cannot convert jwk to rsa public key: %w", err)
+	}
+
+	return pub, nil
+}
+
+// PublicKeyFromJWKS returns the RSA public key matching the given key ID.
+func PublicKeyFromJWKS(jwks *JWKS, kid string) (*rsa.PublicKey, error) {
+	if jwks == nil {
+		return nil, fmt.Errorf("cannot find signing key %q in jwks: jwks is nil", kid)
+	}
+
+	for _, key := range jwks.Keys {
+		if key.KeyID == kid {
+			return RSAPublicKeyFromJWK(key)
+		}
+	}
+
+	return nil, fmt.Errorf("cannot find signing key %q in jwks", kid)
+}
+
+// VerifyJWT verifies an RS256 JWT signature and returns the decoded payload.
+func VerifyJWT(raw string, pubKey *rsa.PublicKey) ([]byte, error) {
+	parts := strings.Split(raw, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("cannot verify jwt: invalid format")
+	}
+
+	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, fmt.Errorf("cannot decode jwt header: %w", err)
+	}
+
+	var headerFields map[string]json.RawMessage
+	if err := json.Unmarshal(headerJSON, &headerFields); err != nil {
+		return nil, fmt.Errorf("cannot parse jwt header: %w", err)
+	}
+
+	if _, ok := headerFields["crit"]; ok {
+		return nil, fmt.Errorf("cannot verify jwt: unsupported critical header parameter")
+	}
+
+	var header JWTHeader
+	if err := json.Unmarshal(headerJSON, &header); err != nil {
+		return nil, fmt.Errorf("cannot parse jwt header: %w", err)
+	}
+
+	if header.Algorithm != "RS256" {
+		return nil, fmt.Errorf("cannot verify jwt: unsupported algorithm %q", header.Algorithm)
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("cannot decode jwt payload: %w", err)
+	}
+
+	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return nil, fmt.Errorf("cannot decode jwt signature: %w", err)
+	}
+
+	signedContent := parts[0] + "." + parts[1]
+	hash := sha256.Sum256([]byte(signedContent))
+
+	if err := rsa.VerifyPKCS1v15(pubKey, crypto.SHA256, hash[:], signature); err != nil {
+		return nil, fmt.Errorf("cannot verify jwt signature: %w", err)
+	}
+
+	return payload, nil
+}
+
+// VerifyJWTWithJWKS verifies an RS256 JWT using the matching key from a JWKS.
+func VerifyJWTWithJWKS(raw string, jwks *JWKS) ([]byte, error) {
+	if jwks == nil {
+		return nil, fmt.Errorf("cannot verify jwt: jwks is nil")
+	}
+
+	parts := strings.Split(raw, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("cannot verify jwt: invalid format")
+	}
+
+	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, fmt.Errorf("cannot decode jwt header: %w", err)
+	}
+
+	var header JWTHeader
+	if err := json.Unmarshal(headerJSON, &header); err != nil {
+		return nil, fmt.Errorf("cannot parse jwt header: %w", err)
+	}
+
+	if header.KeyID == "" {
+		return nil, fmt.Errorf("cannot verify jwt: missing key id")
+	}
+
+	pubKey, err := PublicKeyFromJWKS(jwks, header.KeyID)
+	if err != nil {
+		return nil, err
+	}
+
+	return VerifyJWT(raw, pubKey)
 }

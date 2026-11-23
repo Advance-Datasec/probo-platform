@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
@@ -53,8 +59,7 @@ type (
 		TrustPageURL                  *string
 		TermsOfServiceURL             *string
 		StatusPageURL                 *string
-		BusinessOwnerID               *gid.GID
-		SecurityOwnerID               *gid.GID
+		AdministratorIDs              []gid.GID
 		ParentThirdPartyID            *gid.GID
 	}
 
@@ -77,9 +82,7 @@ type (
 		SecurityPageURL               **string
 		TrustPageURL                  **string
 		StatusPageURL                 **string
-		BusinessOwnerID               **gid.GID
-		SecurityOwnerID               **gid.GID
-		ShowOnTrustCenter             *bool
+		AdministratorIDs              *[]gid.GID
 	}
 
 	CreateThirdPartyRiskAssessmentRequest struct {
@@ -124,8 +127,11 @@ func (cvr *CreateThirdPartyRequest) Validate() error {
 	v.Check(cvr.TrustPageURL, "trust_page_url", validator.SafeText(2048))
 	v.Check(cvr.TermsOfServiceURL, "terms_of_service_url", validator.SafeText(2048))
 	v.Check(cvr.StatusPageURL, "status_page_url", validator.SafeText(2048))
-	v.Check(cvr.BusinessOwnerID, "business_owner_id", validator.GID(coredata.MembershipProfileEntityType))
-	v.Check(cvr.SecurityOwnerID, "security_owner_id", validator.GID(coredata.MembershipProfileEntityType))
+	v.Check(len(cvr.AdministratorIDs), "administrator_ids", validator.Max(100))
+	v.Check(cvr.AdministratorIDs, "administrator_ids", validator.NoDuplicates())
+	v.CheckEach(cvr.AdministratorIDs, "administrator_ids", func(_ int, item any) {
+		v.Check(item, "administrator_ids", validator.GID(coredata.MembershipProfileEntityType))
+	})
 
 	return v.Error()
 }
@@ -149,8 +155,14 @@ func (uvr *UpdateThirdPartyRequest) Validate() error {
 	v.Check(uvr.TrustPageURL, "trust_page_url", validator.SafeText(2048))
 	v.Check(uvr.TermsOfServiceURL, "terms_of_service_url", validator.SafeText(2048))
 	v.Check(uvr.StatusPageURL, "status_page_url", validator.SafeText(2048))
-	v.Check(uvr.BusinessOwnerID, "business_owner_id", validator.GID(coredata.MembershipProfileEntityType))
-	v.Check(uvr.SecurityOwnerID, "security_owner_id", validator.GID(coredata.MembershipProfileEntityType))
+
+	if uvr.AdministratorIDs != nil {
+		v.Check(len(*uvr.AdministratorIDs), "administrator_ids", validator.Max(100))
+		v.Check(*uvr.AdministratorIDs, "administrator_ids", validator.NoDuplicates())
+		v.CheckEach(*uvr.AdministratorIDs, "administrator_ids", func(_ int, item any) {
+			v.Check(item, "administrator_ids", validator.GID(coredata.MembershipProfileEntityType))
+		})
+	}
 
 	return v.Error()
 }
@@ -174,7 +186,7 @@ func (s ThirdPartyService) CountForOrganizationID(
 	var count int
 
 	if filter == nil {
-		filter = coredata.NewThirdPartyFilter(nil, nil, nil)
+		filter = coredata.NewThirdPartyFilter(nil, nil, nil, nil)
 	}
 
 	err := s.svc.pg.WithConn(
@@ -231,9 +243,9 @@ func (s ThirdPartyService) ListForOrganizationID(
 	return page.NewPage(thirdParties, cursor), nil
 }
 
-func (s ThirdPartyService) CountForMeasureID(
+func (s ThirdPartyService) CountForInternalControlID(
 	ctx context.Context, scope coredata.Scoper,
-	measureID gid.GID,
+	internalControlID gid.GID,
 ) (int, error) {
 	var count int
 
@@ -242,7 +254,7 @@ func (s ThirdPartyService) CountForMeasureID(
 		func(ctx context.Context, conn pg.Querier) (err error) {
 			thirdParties := coredata.ThirdParties{}
 
-			count, err = thirdParties.CountByMeasureID(ctx, conn, scope, measureID)
+			count, err = thirdParties.CountByInternalControlID(ctx, conn, scope, internalControlID)
 			if err != nil {
 				return fmt.Errorf("cannot count thirdParties: %w", err)
 			}
@@ -257,27 +269,27 @@ func (s ThirdPartyService) CountForMeasureID(
 	return count, nil
 }
 
-func (s ThirdPartyService) ListForMeasureID(
+func (s ThirdPartyService) ListForInternalControlID(
 	ctx context.Context, scope coredata.Scoper,
-	measureID gid.GID,
+	internalControlID gid.GID,
 	cursor *page.Cursor[coredata.ThirdPartyOrderField],
 ) (*page.Page[*coredata.ThirdParty, coredata.ThirdPartyOrderField], error) {
 	var thirdParties coredata.ThirdParties
 
-	measure := &coredata.Measure{}
+	internalControl := &coredata.InternalControl{}
 
 	err := s.svc.pg.WithConn(
 		ctx,
 		func(ctx context.Context, conn pg.Querier) error {
-			if err := measure.LoadByID(ctx, conn, scope, measureID); err != nil {
-				return fmt.Errorf("cannot load measure: %w", err)
+			if err := internalControl.LoadByID(ctx, conn, scope, internalControlID); err != nil {
+				return fmt.Errorf("cannot load internalControl: %w", err)
 			}
 
-			if err := thirdParties.LoadByMeasureID(
+			if err := thirdParties.LoadByInternalControlID(
 				ctx,
 				conn,
 				scope,
-				measure.ID,
+				internalControl.ID,
 				cursor,
 			); err != nil {
 				return fmt.Errorf("cannot load thirdParties: %w", err)
@@ -362,6 +374,13 @@ func (s ThirdPartyService) Update(
 				return fmt.Errorf("cannot load thirdParty %q: %w", req.ID, err)
 			}
 
+			previousAdministratorIDs, err := loadThirdPartyAdministratorIDs(ctx, conn, scope, thirdParty.ID)
+			if err != nil {
+				return err
+			}
+
+			previousThirdParty := webhooktypes.NewThirdParty(thirdParty, previousAdministratorIDs)
+
 			if req.Name != nil {
 				thirdParty.Name = *req.Name
 			}
@@ -400,16 +419,10 @@ func (s ThirdPartyService) Update(
 
 			if req.Category != nil {
 				thirdParty.Category = *req.Category
-			} else {
-				thirdParty.Category = coredata.ThirdPartyCategoryOther
 			}
 
 			if req.SecurityPageURL != nil {
 				thirdParty.SecurityPageURL = *req.SecurityPageURL
-			}
-
-			if req.ShowOnTrustCenter != nil {
-				thirdParty.ShowOnTrustCenter = *req.ShowOnTrustCenter
 			}
 
 			if req.TrustPageURL != nil {
@@ -440,29 +453,24 @@ func (s ThirdPartyService) Update(
 				thirdParty.Countries = req.Countries
 			}
 
-			if req.BusinessOwnerID != nil {
-				if *req.BusinessOwnerID != nil {
-					businessOwner := &coredata.MembershipProfile{}
-					if err := businessOwner.LoadByID(ctx, conn, scope, **req.BusinessOwnerID); err != nil {
-						return fmt.Errorf("cannot load business owner profile: %w", err)
+			if req.AdministratorIDs != nil {
+				if len(*req.AdministratorIDs) > 0 {
+					profiles := coredata.MembershipProfiles{}
+					if err := profiles.LoadByIDs(ctx, conn, scope, *req.AdministratorIDs); err != nil {
+						return fmt.Errorf("cannot load administrator profiles: %w", err)
 					}
-
-					thirdParty.BusinessOwnerID = &businessOwner.ID
-				} else {
-					thirdParty.BusinessOwnerID = nil
 				}
-			}
 
-			if req.SecurityOwnerID != nil {
-				if *req.SecurityOwnerID != nil {
-					securityOwner := &coredata.MembershipProfile{}
-					if err := securityOwner.LoadByID(ctx, conn, scope, **req.SecurityOwnerID); err != nil {
-						return fmt.Errorf("cannot load security owner profile: %w", err)
-					}
-
-					thirdParty.SecurityOwnerID = &securityOwner.ID
-				} else {
-					thirdParty.SecurityOwnerID = nil
+				administrators := &coredata.ThirdPartyAdministrators{}
+				if err := administrators.MergeByThirdPartyID(
+					ctx,
+					conn,
+					scope,
+					thirdParty.ID,
+					thirdParty.OrganizationID,
+					*req.AdministratorIDs,
+				); err != nil {
+					return fmt.Errorf("cannot merge third party administrators: %w", err)
 				}
 			}
 
@@ -472,13 +480,30 @@ func (s ThirdPartyService) Update(
 				return fmt.Errorf("cannot update thirdParty: %w", err)
 			}
 
-			if err := webhook.InsertData(
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				thirdParty.ID,
+				thirdParty.OrganizationID,
+				thirdParty.Name,
+				thirdParty.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
+			administratorIDs, err := loadThirdPartyAdministratorIDs(ctx, conn, scope, thirdParty.ID)
+			if err != nil {
+				return err
+			}
+
+			if err := webhook.InsertUpdateData(
 				ctx,
 				conn,
 				scope,
 				thirdParty.OrganizationID,
 				coredata.WebhookEventTypeThirdPartyUpdated,
-				webhooktypes.NewThirdParty(thirdParty),
+				webhooktypes.NewThirdParty(thirdParty, administratorIDs),
+				previousThirdParty,
 			); err != nil {
 				return fmt.Errorf("cannot insert webhook event: %w", err)
 			}
@@ -526,7 +551,7 @@ func (s ThirdPartyService) GetByIDs(
 				conn,
 				scope,
 				thirdPartyIDs,
-			); err != nil {
+			); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 				return fmt.Errorf("cannot load thirdParties by ids: %w", err)
 			}
 
@@ -553,15 +578,24 @@ func (s ThirdPartyService) Delete(
 				return fmt.Errorf("cannot load thirdParty: %w", err)
 			}
 
+			administratorIDs, err := loadThirdPartyAdministratorIDs(ctx, conn, scope, thirdParty.ID)
+			if err != nil {
+				return err
+			}
+
 			if err := webhook.InsertData(
 				ctx,
 				conn,
 				scope,
 				thirdParty.OrganizationID,
 				coredata.WebhookEventTypeThirdPartyDeleted,
-				webhooktypes.NewThirdParty(thirdParty),
+				webhooktypes.NewThirdParty(thirdParty, administratorIDs),
 			); err != nil {
 				return fmt.Errorf("cannot insert webhook event: %w", err)
+			}
+
+			if err := clearThirdPartySearch(ctx, conn, scope, thirdParty.ID); err != nil {
+				return err
 			}
 
 			return thirdParty.Delete(ctx, conn, scope)
@@ -598,7 +632,6 @@ func (s ThirdPartyService) Create(
 		TrustPageURL:                  req.TrustPageURL,
 		StatusPageURL:                 req.StatusPageURL,
 		TermsOfServiceURL:             req.TermsOfServiceURL,
-		ShowOnTrustCenter:             false,
 		Level:                         1,
 	}
 
@@ -613,6 +646,10 @@ func (s ThirdPartyService) Create(
 			thirdParty.OrganizationID = organization.ID
 
 			if req.ParentThirdPartyID != nil {
+				if err := coredata.LockID(ctx, conn, scope, "third_parties", *req.ParentThirdPartyID); err != nil {
+					return fmt.Errorf("cannot lock parent third party: %w", err)
+				}
+
 				parent := &coredata.ThirdParty{}
 				if err := parent.LoadByID(ctx, conn, scope, *req.ParentThirdPartyID); err != nil {
 					return fmt.Errorf("cannot load parent third party: %w", err)
@@ -635,24 +672,6 @@ func (s ThirdPartyService) Create(
 				return err
 			}
 
-			if req.BusinessOwnerID != nil {
-				businessOwner := &coredata.MembershipProfile{}
-				if err := businessOwner.LoadByID(ctx, conn, scope, *req.BusinessOwnerID); err != nil {
-					return fmt.Errorf("cannot load business owner profile: %w", err)
-				}
-
-				thirdParty.BusinessOwnerID = &businessOwner.ID
-			}
-
-			if req.SecurityOwnerID != nil {
-				securityOwner := &coredata.MembershipProfile{}
-				if err := securityOwner.LoadByID(ctx, conn, scope, *req.SecurityOwnerID); err != nil {
-					return fmt.Errorf("cannot load security owner profile: %w", err)
-				}
-
-				thirdParty.SecurityOwnerID = &securityOwner.ID
-			}
-
 			if req.Category != nil {
 				thirdParty.Category = *req.Category
 			} else {
@@ -663,13 +682,43 @@ func (s ThirdPartyService) Create(
 				return fmt.Errorf("cannot insert thirdParty: %w", err)
 			}
 
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				thirdParty.ID,
+				thirdParty.OrganizationID,
+				thirdParty.Name,
+				thirdParty.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
+			if len(req.AdministratorIDs) > 0 {
+				profiles := coredata.MembershipProfiles{}
+				if err := profiles.LoadByIDs(ctx, conn, scope, req.AdministratorIDs); err != nil {
+					return fmt.Errorf("cannot load administrator profiles: %w", err)
+				}
+
+				administrators := &coredata.ThirdPartyAdministrators{}
+				if err := administrators.MergeByThirdPartyID(
+					ctx,
+					conn,
+					scope,
+					thirdParty.ID,
+					organization.ID,
+					req.AdministratorIDs,
+				); err != nil {
+					return fmt.Errorf("cannot merge third party administrators: %w", err)
+				}
+			}
+
 			if err := webhook.InsertData(
 				ctx,
 				conn,
 				scope,
 				organization.ID,
 				coredata.WebhookEventTypeThirdPartyCreated,
-				webhooktypes.NewThirdParty(thirdParty),
+				webhooktypes.NewThirdParty(thirdParty, req.AdministratorIDs),
 			); err != nil {
 				return fmt.Errorf("cannot insert webhook event: %w", err)
 			}
@@ -687,14 +736,8 @@ func (s ThirdPartyService) Create(
 // ImportFromCommon creates an org ThirdParty seeded from the global
 // CommonThirdParty catalog entry, or returns the existing one when the
 // organization already imported it (idempotent on the
-// (organization_id, common_third_party_id) pair). It then backfills
-// tracker_patterns.third_party_id for the organization's unlinked
-// patterns whose catalog row resolves to the same common third party, so
-// the trackers UI and tracker-policy document surface the managed vendor
-// instead of the catalog entry. The backfill runs on both the create and
-// reuse paths because new patterns may have been detected since a prior
-// import; it only touches patterns with no existing link. Returns the
-// org ThirdParty and whether it was newly created.
+// (organization_id, common_third_party_id) pair). Returns the org
+// ThirdParty and whether it was newly created.
 func (s ThirdPartyService) ImportFromCommon(
 	ctx context.Context, scope coredata.Scoper,
 	req ImportThirdPartyFromCommonRequest,
@@ -761,7 +804,6 @@ func (s ThirdPartyService) ImportFromCommon(
 					TermsOfServiceURL:             commonParty.TermsOfServiceURL,
 					SecurityPageURL:               commonParty.SecurityPageURL,
 					TrustPageURL:                  commonParty.TrustPageURL,
-					ShowOnTrustCenter:             false,
 					Level:                         1,
 					CreatedAt:                     now,
 					UpdatedAt:                     now,
@@ -769,6 +811,17 @@ func (s ThirdPartyService) ImportFromCommon(
 
 				if err := thirdParty.Insert(ctx, conn, scope); err != nil {
 					return fmt.Errorf("cannot insert third party: %w", err)
+				}
+
+				if err := coredata.UpsertSearchResource(
+					ctx,
+					conn,
+					thirdParty.ID,
+					thirdParty.OrganizationID,
+					thirdParty.Name,
+					thirdParty.SearchText(),
+				); err != nil {
+					return fmt.Errorf("cannot sync search: %w", err)
 				}
 
 				created = true
@@ -779,24 +832,12 @@ func (s ThirdPartyService) ImportFromCommon(
 					scope,
 					organization.ID,
 					coredata.WebhookEventTypeThirdPartyCreated,
-					webhooktypes.NewThirdParty(thirdParty),
+					webhooktypes.NewThirdParty(thirdParty, nil),
 				); err != nil {
 					return fmt.Errorf("cannot insert webhook event: %w", err)
 				}
 			default:
 				return fmt.Errorf("cannot load third party by common id: %w", err)
-			}
-
-			var patterns coredata.TrackerPatterns
-			if err := patterns.LinkThirdPartyByCommonThirdPartyID(
-				ctx,
-				conn,
-				scope,
-				organization.ID,
-				req.CommonThirdPartyID,
-				thirdParty.ID,
-			); err != nil {
-				return fmt.Errorf("cannot link tracker patterns to imported third party: %w", err)
 			}
 
 			return nil
@@ -1068,4 +1109,81 @@ func (s ThirdPartyService) ListForParentThirdPartyID(
 	}
 
 	return page.NewPage(thirdParties, cursor), nil
+}
+
+func (s ThirdPartyService) MapAdministratorIDsForThirdPartyIDs(
+	ctx context.Context, scope coredata.Scoper,
+	thirdPartyIDs []gid.GID,
+) (map[gid.GID][]gid.GID, error) {
+	result := make(map[gid.GID][]gid.GID, len(thirdPartyIDs))
+	if len(thirdPartyIDs) == 0 {
+		return result, nil
+	}
+
+	var administrators coredata.ThirdPartyAdministrators
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			return administrators.LoadByThirdPartyIDs(ctx, conn, scope, thirdPartyIDs)
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot load third party administrators: %w", err)
+	}
+
+	for _, a := range administrators {
+		result[a.ThirdPartyID] = append(result[a.ThirdPartyID], a.AdministratorProfileID)
+	}
+
+	return result, nil
+}
+
+func loadThirdPartyAdministratorIDs(
+	ctx context.Context,
+	conn pg.Querier,
+	scope coredata.Scoper,
+	thirdPartyID gid.GID,
+) ([]gid.GID, error) {
+	administrators := &coredata.ThirdPartyAdministrators{}
+	if err := administrators.LoadByThirdPartyID(ctx, conn, scope, thirdPartyID); err != nil {
+		return nil, fmt.Errorf("cannot load third party administrators: %w", err)
+	}
+
+	ids := make([]gid.GID, len(*administrators))
+	for i, a := range *administrators {
+		ids[i] = a.AdministratorProfileID
+	}
+
+	return ids, nil
+}
+
+func clearThirdPartySearch(
+	ctx context.Context,
+	conn pg.Querier,
+	scope coredata.Scoper,
+	thirdPartyID gid.GID,
+) error {
+	if err := coredata.LockID(ctx, conn, scope, "third_parties", thirdPartyID); err != nil {
+		return err
+	}
+
+	var children coredata.ThirdParties
+
+	childIDs, err := children.LoadIDsByParentThirdPartyID(ctx, conn, scope, thirdPartyID)
+	if err != nil {
+		return fmt.Errorf("cannot list child third parties: %w", err)
+	}
+
+	for _, childID := range childIDs {
+		if err := clearThirdPartySearch(ctx, conn, scope, childID); err != nil {
+			return err
+		}
+	}
+
+	if err := coredata.DeleteSearchResource(ctx, conn, thirdPartyID); err != nil {
+		return fmt.Errorf("cannot delete search resource: %w", err)
+	}
+
+	return nil
 }

@@ -1,0 +1,188 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import { describe, expect, it } from "vitest";
+
+import {
+    catchResultValue,
+    formatError,
+    graphqlErrorField,
+    graphqlErrorsMessage,
+    isForbiddenGraphqlError,
+    toFieldErrors,
+    toFieldRejections,
+} from "./error";
+
+describe("graphqlErrorField", () => {
+    it("reads the validation field from extensions", () => {
+        expect(graphqlErrorField({
+            message: "too long",
+            extensions: { code: "INVALID", field: "name" },
+        })).toBe("name");
+    });
+
+    it("returns undefined without a field extension", () => {
+        expect(graphqlErrorField({ message: "boom", extensions: { code: "FORBIDDEN" } })).toBeUndefined();
+        expect(graphqlErrorField(new Error("boom"))).toBeUndefined();
+        expect(graphqlErrorField(null)).toBeUndefined();
+    });
+});
+
+describe("toFieldErrors", () => {
+    it("maps payload errors keyed by field", () => {
+        expect(toFieldErrors([
+            { message: "too long", extensions: { field: "name" } },
+            { message: "required", extensions: { field: "logo_file" } },
+        ])).toEqual({
+            name: "too long",
+            logo_file: "required",
+        });
+    });
+
+    it("accepts a single error", () => {
+        expect(toFieldErrors({
+            message: "too long",
+            extensions: { field: "name" },
+        })).toEqual({ name: "too long" });
+    });
+
+    it("ignores errors without a field", () => {
+        expect(toFieldErrors([
+            { message: "internal", extensions: { code: "INTERNAL_SERVER_ERROR" } },
+        ])).toBeUndefined();
+        expect(toFieldErrors(null)).toBeUndefined();
+    });
+
+    it("maps field errors nested under source.errors", () => {
+        expect(toFieldErrors({
+            message: "Unexpected error",
+            source: {
+                errors: [
+                    { message: "too long", extensions: { code: "INVALID", field: "name" } },
+                ],
+            },
+        })).toEqual({ name: "too long" });
+    });
+});
+
+describe("toFieldRejections", () => {
+    it("keeps the cause next to the message", () => {
+        expect(toFieldRejections({
+            message: "No data returned",
+            source: {
+                errors: [
+                    {
+                        message: "Better Stack has no team with this name for this API token.",
+                        extensions: { code: "INVALID", field: "teamName", cause: "better_stack_team_not_found" },
+                    },
+                ],
+            },
+        })).toEqual({
+            teamName: {
+                message: "Better Stack has no team with this name for this API token.",
+                cause: "better_stack_team_not_found",
+            },
+        });
+    });
+
+    it("leaves the cause unset when the server sends none", () => {
+        expect(toFieldRejections({ message: "too long", extensions: { field: "name" } })).toEqual({
+            name: { message: "too long", cause: undefined },
+        });
+    });
+
+    it("ignores errors without a field", () => {
+        expect(toFieldRejections({ message: "boom", extensions: { code: "INTERNAL_SERVER_ERROR" } })).toBeUndefined();
+    });
+});
+
+describe("isForbiddenGraphqlError", () => {
+    it("reads FORBIDDEN from extensions", () => {
+        expect(isForbiddenGraphqlError({
+            message: "not allowed",
+            extensions: { code: "FORBIDDEN" },
+        })).toBe(true);
+    });
+
+    it("reads FORBIDDEN from the message when extensions are absent", () => {
+        expect(isForbiddenGraphqlError({ message: "FORBIDDEN: not allowed" })).toBe(true);
+        expect(isForbiddenGraphqlError({ message: "forbidden" })).toBe(true);
+    });
+
+    it("scans an error list", () => {
+        expect(isForbiddenGraphqlError([
+            { message: "other" },
+            { message: "not allowed", extensions: { code: "FORBIDDEN" } },
+        ])).toBe(true);
+    });
+
+    it("returns false for other codes", () => {
+        expect(isForbiddenGraphqlError({
+            message: "boom",
+            extensions: { code: "INTERNAL" },
+        })).toBe(false);
+        expect(isForbiddenGraphqlError(null)).toBe(false);
+    });
+});
+
+describe("catchResultValue", () => {
+    it("returns the value when the catch result is ok", () => {
+        expect(catchResultValue({ ok: true, value: { id: "1" } }, "cannot list")).toEqual({
+            id: "1",
+        });
+    });
+
+    it("returns null when the result is missing or forbidden", () => {
+        expect(catchResultValue(null, "cannot list")).toBeNull();
+        expect(catchResultValue({
+            ok: false,
+            errors: { message: "not allowed", extensions: { code: "FORBIDDEN" } },
+        }, "cannot list")).toBeNull();
+    });
+
+    it("throws other field errors", () => {
+        expect(() =>
+            catchResultValue({
+                ok: false,
+                errors: { message: "timed out" },
+            }, "cannot list")
+        ).toThrow("timed out");
+    });
+});
+
+describe("graphqlErrorsMessage", () => {
+    it("returns the first message", () => {
+        expect(graphqlErrorsMessage([
+            { message: "first" },
+            { message: "second" },
+        ])).toBe("first");
+    });
+
+    it("returns undefined without a message", () => {
+        expect(graphqlErrorsMessage([{ extensions: { code: "INTERNAL" } }])).toBeUndefined();
+        expect(graphqlErrorsMessage(null)).toBeUndefined();
+    });
+});
+
+describe("formatError", () => {
+    it("joins GraphQL messages onto the title", () => {
+        expect(formatError("Update failed", { message: "too long" })).toBe("Update failed: too long.");
+    });
+});

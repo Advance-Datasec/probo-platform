@@ -1,31 +1,36 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   IconPageTextLine,
   IconPlusLarge,
   IconUpload,
   PageHeader,
-  RisksChart,
   Tbody,
   Th,
   Thead,
   Tr,
 } from "@probo/ui";
+import { useTranslation } from "react-i18next";
 import {
   graphql,
   type PreloadedQuery,
@@ -66,8 +71,8 @@ const risksFragment = graphql`
     before: { type: "CursorKey", defaultValue: null }
     last: { type: "Int", defaultValue: null }
   ) {
-    canCreateRisk: permission(action: "core:risk:create")
-    canPublishRisk: permission(action: "core:risk:publish")
+    canCreateRisk: permission(action: "risk-management:risk:create")
+    canPublishRisk: permission(action: "risk-management:risk:publish")
     risksDocument {
       id
       defaultApprovers {
@@ -85,13 +90,10 @@ const risksFragment = graphql`
       edges {
         node {
           id
+          referenceId
           name
-          inherentLikelihood
-          inherentImpact
-          residualLikelihood
-          residualImpact
-          canUpdate: permission(action: "core:risk:update")
-          canDelete: permission(action: "core:risk:delete")
+          canUpdate: permission(action: "risk-management:risk:update")
+          canDelete: permission(action: "risk-management:risk:delete")
           ...RiskRow_risk
         }
       }
@@ -106,7 +108,7 @@ interface RisksPageProps {
 }
 
 export default function RisksPage(props: RisksPageProps) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const organizationId = useOrganizationId();
   const navigate = useNavigate();
 
@@ -122,22 +124,6 @@ export default function RisksPage(props: RisksPageProps) {
   const risks = fragmentData.risks?.edges.map(edge => edge.node) ?? [];
   const connectionId = fragmentData.risks.__id;
 
-  const chartRisks = risks.map(({
-    id,
-    name,
-    inherentLikelihood,
-    inherentImpact,
-    residualLikelihood,
-    residualImpact,
-  }) => ({
-    id,
-    name,
-    inherentLikelihood,
-    inherentImpact,
-    residualLikelihood,
-    residualImpact,
-  }));
-
   const refetch = ({
     order,
   }: {
@@ -148,12 +134,9 @@ export default function RisksPage(props: RisksPageProps) {
         order: {
           direction: order.direction as "ASC" | "DESC",
           field: order.field as
+          | "REFERENCE_ID"
           | "NAME"
           | "CATEGORY"
-          | "TREATMENT"
-          | "INHERENT_RISK_SCORE"
-          | "RESIDUAL_RISK_SCORE"
-          | "OWNER_FULL_NAME"
           | "CREATED_AT",
         },
       },
@@ -161,7 +144,7 @@ export default function RisksPage(props: RisksPageProps) {
     );
   };
 
-  usePageTitle(__("Risks"));
+  usePageTitle(t("nav.risks"));
 
   const hasAnyAction = risks.some(
     ({ canDelete, canUpdate }) => canUpdate || canDelete,
@@ -173,10 +156,8 @@ export default function RisksPage(props: RisksPageProps) {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={__("Risks")}
-        description={__(
-          "Risks are potential threats to your organization. Manage them by identifying, assessing, and implementing mitigation measures.",
-        )}
+        title={t("nav.risks")}
+        description={t("risksPage.description")}
       >
         <div className="flex gap-2">
           {risksDocument && (
@@ -184,10 +165,10 @@ export default function RisksPage(props: RisksPageProps) {
               variant="secondary"
               icon={IconPageTextLine}
               onClick={() => void navigate(
-                `/organizations/${organizationId}/documents/${risksDocument.id}`,
+                `/organizations/${organizationId}/governance/documents/${risksDocument.id}`,
               )}
             >
-              {__("Document")}
+              {t("risksPage.actions.document")}
             </Button>
           )}
           {canPublishRisk && (
@@ -195,11 +176,11 @@ export default function RisksPage(props: RisksPageProps) {
               organizationId={organizationId}
               defaultApproverIds={defaultApproverIds}
               onPublished={documentId => void navigate(
-                `/organizations/${organizationId}/documents/${documentId}`,
+                `/organizations/${organizationId}/governance/documents/${documentId}`,
               )}
             >
               <Button variant="secondary" icon={IconUpload}>
-                {__("Publish")}
+                {t("risksPage.actions.publish")}
               </Button>
             </PublishRiskListDialog>
           )}
@@ -209,37 +190,18 @@ export default function RisksPage(props: RisksPageProps) {
               onSuccess={() => {
                 pagination.refetch({});
               }}
-              trigger={<Button icon={IconPlusLarge}>{__("New Risk")}</Button>}
+              trigger={<Button icon={IconPlusLarge}>{t("risksPage.actions.newRisk")}</Button>}
             />
           )}
         </div>
       </PageHeader>
 
-      <div className="grid grid-cols-2 gap-4">
-        <RisksChart
-          organizationId={organizationId}
-          type="inherent"
-          risks={chartRisks}
-        />
-        <RisksChart
-          organizationId={organizationId}
-          type="residual"
-          risks={chartRisks}
-        />
-      </div>
       <SortableTable {...pagination} refetch={refetch}>
         <Thead>
           <Tr>
-            <SortableTh field="NAME">{__("Risk name")}</SortableTh>
-            <SortableTh field="CATEGORY">{__("Category")}</SortableTh>
-            <SortableTh field="TREATMENT">{__("Treatment")}</SortableTh>
-            <SortableTh field="INHERENT_RISK_SCORE">
-              {__("Initial Risk")}
-            </SortableTh>
-            <SortableTh field="RESIDUAL_RISK_SCORE">
-              {__("Residual Risk")}
-            </SortableTh>
-            <SortableTh field="OWNER_FULL_NAME">{__("Owner")}</SortableTh>
+            <SortableTh field="REFERENCE_ID">{t("risksPage.columns.referenceId")}</SortableTh>
+            <SortableTh field="NAME">{t("risksPage.columns.name")}</SortableTh>
+            <SortableTh field="CATEGORY">{t("risksPage.columns.category")}</SortableTh>
             {hasAnyAction && <Th></Th>}
           </Tr>
         </Thead>

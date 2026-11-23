@@ -1,16 +1,63 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import { parseDate } from "@probo/helpers";
+import {
+  IconCircleCheck,
+  IconCircleQuestionmark,
+  IconCircleX,
+} from "@probo/ui";
+
+const MS_PER_SECOND = 1000;
+const MS_PER_MINUTE = MS_PER_SECOND * 60;
+const MS_PER_HOUR = MS_PER_MINUTE * 60;
+const MS_PER_DAY = MS_PER_HOUR * 24;
+
+// Compact elapsed age for dense list cells (e.g. "now", "5s", "20m", "4h", "1d", "1mo", "2y").
+function shortAgeFormat(date: string, now: Date = new Date()): string {
+  const elapsedMs = Math.max(0, now.getTime() - parseDate(date).getTime());
+  const seconds = Math.floor(elapsedMs / MS_PER_SECOND);
+
+  if (seconds < 60) {
+    return seconds === 0 ? "now" : `${seconds}s`;
+  }
+
+  const minutes = Math.floor(elapsedMs / MS_PER_MINUTE);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+
+  const hours = Math.floor(elapsedMs / MS_PER_HOUR);
+  if (hours < 24) {
+    return `${hours}h`;
+  }
+
+  const days = Math.floor(elapsedMs / MS_PER_DAY);
+  if (days < 30) {
+    return `${days}d`;
+  }
+  if (days < 365) {
+    return `${Math.floor(days / 30)}mo`;
+  }
+  return `${Math.floor(days / 365)}y`;
+}
 
 type BadgeVariant = "neutral" | "info" | "warning" | "success" | "danger";
 
@@ -31,39 +78,8 @@ export function statusBadgeVariant(status: string): BadgeVariant {
   }
 }
 
-export function fetchStatusBadgeVariant(status: string): BadgeVariant {
-  switch (status) {
-    case "SUCCESS":
-      return "success";
-    case "FAILED":
-      return "danger";
-    case "FETCHING":
-      return "info";
-    case "QUEUED":
-      return "neutral";
-    default:
-      return "info";
-  }
-}
-
-export function statusLabel(
-  __: (key: string) => string,
-  status: string,
-): string {
-  switch (status) {
-    case "DRAFT":
-      return __("Draft");
-    case "IN_PROGRESS":
-      return __("In progress");
-    case "PENDING_ACTIONS":
-      return __("Pending actions");
-    case "COMPLETED":
-      return __("Completed");
-    case "CANCELLED":
-      return __("Cancelled");
-    default:
-      return status;
-  }
+export function isCampaignDeletableStatus(status: string): boolean {
+  return status !== "IN_PROGRESS";
 }
 
 export function decisionBadgeVariant(decision: string): BadgeVariant {
@@ -78,26 +94,6 @@ export function decisionBadgeVariant(decision: string): BadgeVariant {
       return "info";
     default:
       return "neutral";
-  }
-}
-
-export function decisionLabel(
-  __: (key: string) => string,
-  decision: string,
-): string {
-  switch (decision) {
-    case "PENDING":
-      return __("Pending");
-    case "APPROVED":
-      return __("Approved");
-    case "REVOKE":
-      return __("Revoked");
-    case "DEFER":
-      return __("Modified");
-    case "ESCALATE":
-      return __("Escalated");
-    default:
-      return decision;
   }
 }
 
@@ -154,26 +150,140 @@ export const flagGroups = [
   },
 ];
 
-export function flagLabel(flag: string): string {
-  for (const group of flagGroups) {
-    for (const f of group.flags) {
-      if (f.value === flag) return f.label;
-    }
+export function MfaStatusIcon({
+  status,
+  label,
+}: {
+  status: string;
+  label: string;
+}) {
+  if (status === "ENABLED") {
+    return (
+      <span role="img" aria-label={label} title={label} className="inline-flex text-txt-success">
+        <IconCircleCheck size={16} />
+      </span>
+    );
   }
-  if (flag === "NONE") return "None";
-  // Legacy flag values not shown in the grouped dropdown
-  if (flag === "INACTIVE") return "Inactive";
-  if (flag === "ROLE_MISMATCH") return "Role mismatch";
-  if (flag === "NEW") return "New";
-  return flag;
-}
 
-export function formatStatus(status: string): string {
-  return status.replace(/_/g, " ");
-}
+  if (status === "DISABLED") {
+    return (
+      <span role="img" aria-label={label} title={label} className="inline-flex text-txt-danger">
+        <IconCircleX size={16} />
+      </span>
+    );
+  }
 
-export function NotAvailable() {
   return (
-    <span className="text-xs text-txt-tertiary">N/A</span>
+    <span role="img" aria-label={label} title={label} className="inline-flex text-txt-tertiary">
+      <IconCircleQuestionmark size={16} />
+    </span>
+  );
+}
+
+export function AuthMethodStatus({
+  method,
+  label,
+  unknownLabel,
+}: {
+  method: string;
+  label: string;
+  unknownLabel: string;
+}) {
+  if (method === "UNKNOWN") {
+    return (
+      <span
+        role="img"
+        aria-label={unknownLabel}
+        title={unknownLabel}
+        className="inline-flex text-txt-tertiary"
+      >
+        <IconCircleQuestionmark size={16} />
+      </span>
+    );
+  }
+
+  return (
+    <span
+      aria-label={label}
+      title={label}
+      className="max-w-full truncate text-center text-xs text-txt-primary"
+    >
+      {label}
+    </span>
+  );
+}
+
+// Spelled out rather than a check/cross icon: next to MFA a green check reads as
+// "compliant", but holding admin rights is the risk signal a reviewer looks for.
+export function AdminStatus({
+  isAdmin,
+  trueLabel,
+  falseLabel,
+  unknownLabel,
+}: {
+  isAdmin: boolean | null | undefined;
+  trueLabel: string;
+  falseLabel: string;
+  unknownLabel: string;
+}) {
+  if (isAdmin == null) {
+    return (
+      <span role="img" aria-label={unknownLabel} title={unknownLabel} className="inline-flex text-txt-tertiary">
+        <IconCircleQuestionmark size={16} />
+      </span>
+    );
+  }
+
+  if (isAdmin) {
+    return (
+      <span aria-label={trueLabel} title={trueLabel} className="text-xs font-medium text-txt-warning">
+        {trueLabel}
+      </span>
+    );
+  }
+
+  return (
+    <span aria-label={falseLabel} title={falseLabel} className="text-xs text-txt-tertiary">
+      {falseLabel}
+    </span>
+  );
+}
+
+export function LastLoginStatus({
+  lastLogin,
+  formatted,
+  unknownLabel,
+  compact = false,
+}: {
+  lastLogin: string | null | undefined;
+  formatted: string;
+  unknownLabel: string;
+  compact?: boolean;
+}) {
+  if (lastLogin) {
+    if (compact) {
+      return (
+        <span
+          aria-label={formatted}
+          title={formatted}
+          className="text-xs tabular-nums text-txt-primary"
+        >
+          {shortAgeFormat(lastLogin)}
+        </span>
+      );
+    }
+
+    return (
+      <span role="img" aria-label={formatted} className="inline-flex min-w-0 items-center gap-1.5" title={formatted}>
+        <IconCircleCheck size={16} className="shrink-0 text-txt-tertiary" />
+        <span className="truncate" aria-hidden="true">{formatted}</span>
+      </span>
+    );
+  }
+
+  return (
+    <span role="img" aria-label={unknownLabel} title={unknownLabel} className="inline-flex text-txt-tertiary">
+      <IconCircleQuestionmark size={16} />
+    </span>
   );
 }

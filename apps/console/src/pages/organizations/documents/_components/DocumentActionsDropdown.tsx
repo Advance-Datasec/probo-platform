@@ -1,27 +1,33 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { formatError, sprintf } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
-import { ActionDropdown, DropdownItem, IconArchive, IconArrowDown, IconTrashCan, useConfirm, useToast } from "@probo/ui";
+import { formatError } from "@probo/helpers";
+import { ActionDropdown, DropdownItem, IconArchive, IconArrowDown, IconTrashCan, useConfirm } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { use, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { useFragment, useMutation } from "react-relay";
 import { useNavigate } from "react-router";
 import { ConnectionHandler, graphql } from "relay-runtime";
 
 import type { DocumentActionsDropdown_archiveMutation } from "#/__generated__/core/DocumentActionsDropdown_archiveMutation.graphql";
-import type { DocumentActionsDropdown_deleteDocumentDraftMutation } from "#/__generated__/core/DocumentActionsDropdown_deleteDocumentDraftMutation.graphql";
 import type { DocumentActionsDropdown_documentFragment$key } from "#/__generated__/core/DocumentActionsDropdown_documentFragment.graphql";
 import type { DocumentActionsDropdown_exportVersionMutation } from "#/__generated__/core/DocumentActionsDropdown_exportVersionMutation.graphql";
 import type { DocumentActionsDropdown_unarchiveMutation } from "#/__generated__/core/DocumentActionsDropdown_unarchiveMutation.graphql";
@@ -36,11 +42,11 @@ import { DeleteDocumentDialog, type DeleteDocumentDialogRef } from "./DeleteDocu
 const documentFragment = graphql`
   fragment DocumentActionsDropdown_documentFragment on Document {
     id
+    title
     status
     canArchive: permission(action: "core:document:archive")
     canUnarchive: permission(action: "core:document:unarchive")
     canDelete: permission(action: "core:document:delete")
-    canDeleteDraft: permission(action: "core:document:delete-draft")
   }
 `;
 
@@ -78,19 +84,6 @@ const unarchiveDocumentMutation = graphql`
   }
 `;
 
-const deleteDocumentDraftMutation = graphql`
-  mutation DocumentActionsDropdown_deleteDocumentDraftMutation(
-    $input: DeleteDocumentDraftInput!
-  ) {
-    deleteDocumentDraft(input: $input) {
-      document {
-        id
-        status
-      }
-    }
-  }
-`;
-
 const versionFragment = graphql`
   fragment DocumentActionsDropdown_versionFragment on DocumentVersion {
     id
@@ -113,19 +106,18 @@ const exportDocumentVersionMutation = graphql`
 
 export function DocumentActionsDropdown(props: {
   documentFragmentRef: DocumentActionsDropdown_documentFragment$key;
-  versionFragmentRef: DocumentActionsDropdown_versionFragment$key;
-  onVersionChanged: () => void;
+  versionFragmentRef: DocumentActionsDropdown_versionFragment$key | null;
 }) {
-  const { documentFragmentRef, versionFragmentRef, onVersionChanged } = props;
+  const { documentFragmentRef, versionFragmentRef } = props;
 
   const organizationId = useOrganizationId();
   const navigate = useNavigate();
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const { email: defaultEmail } = use(CurrentUser);
   const pdfDownloadDialogRef = useRef<PdfDownloadDialogRef>(null);
   const deleteDocumentDialogRef = useRef<DeleteDocumentDialogRef>(null);
   const confirm = useConfirm();
-  const { toast } = useToast();
+  const toast = useToast();
 
   const document = useFragment<DocumentActionsDropdown_documentFragment$key>(documentFragment, documentFragmentRef);
   const version = useFragment<DocumentActionsDropdown_versionFragment$key>(versionFragment, versionFragmentRef);
@@ -134,8 +126,6 @@ export function DocumentActionsDropdown(props: {
     = useMutation<DocumentActionsDropdown_archiveMutation>(archiveDocumentMutation);
   const [unarchiveDocument, isUnarchiving]
     = useMutation<DocumentActionsDropdown_unarchiveMutation>(unarchiveDocumentMutation);
-  const [deleteDocumentDraft, isDeletingDraft]
-    = useMutation<DocumentActionsDropdown_deleteDocumentDraftMutation>(deleteDocumentDraftMutation);
   const [exportDocumentVersion, isExporting]
     = useMutation<DocumentActionsDropdown_exportVersionMutation>(exportDocumentVersionMutation);
 
@@ -147,25 +137,22 @@ export function DocumentActionsDropdown(props: {
             variables: { input: { documentId: document.id } },
             onCompleted(_, errors) {
               if (errors?.length) {
-                toast({ title: __("Error"), description: formatError(__("Failed to archive document"), errors), variant: "error" });
+                toast.add({ title: t("documentActions.errors.title"), description: formatError(t("documentActions.errors.archive"), errors), type: "error" });
               } else {
-                toast({ title: __("Success"), description: __("Document archived successfully."), variant: "success" });
+                toast.add({ title: t("documentActions.messages.successTitle"), description: t("documentActions.messages.archived"), type: "success" });
               }
               resolve();
             },
             onError(error) {
-              toast({ title: __("Error"), description: error.message, variant: "error" });
+              toast.add({ title: t("documentActions.errors.title"), description: error.message, type: "error" });
               resolve();
             },
           });
         }),
       {
-        message: sprintf(
-          __("This will archive the document \"%s\". It will no longer be editable."),
-          version.title,
-        ),
+        message: t("documentActions.confirmations.archive", { title: document.title }),
         variant: "danger",
-        label: __("Archive"),
+        label: t("documentActions.actions.archive"),
       },
     );
   };
@@ -175,45 +162,15 @@ export function DocumentActionsDropdown(props: {
       variables: { input: { documentId: document.id } },
       onCompleted(_, errors) {
         if (errors?.length) {
-          toast({ title: __("Error"), description: formatError(__("Failed to unarchive document"), errors), variant: "error" });
+          toast.add({ title: t("documentActions.errors.title"), description: formatError(t("documentActions.errors.unarchive"), errors), type: "error" });
         } else {
-          toast({ title: __("Success"), description: __("Document unarchived successfully."), variant: "success" });
+          toast.add({ title: t("documentActions.messages.successTitle"), description: t("documentActions.messages.unarchived"), type: "success" });
         }
       },
       onError(error) {
-        toast({ title: __("Error"), description: error.message, variant: "error" });
+        toast.add({ title: t("documentActions.errors.title"), description: error.message, type: "error" });
       },
     });
-  };
-
-  const handleDeleteDraft = () => {
-    confirm(
-      () =>
-        new Promise<void>((resolve) => {
-          deleteDocumentDraft({
-            variables: { input: { documentId: document.id } },
-            onCompleted(_, errors) {
-              if (errors?.length) {
-                toast({ title: __("Error"), description: formatError(__("Failed to delete draft"), errors), variant: "error" });
-              } else {
-                toast({ title: __("Success"), description: __("Draft deleted successfully."), variant: "success" });
-                onVersionChanged();
-                void navigate(`/organizations/${organizationId}/documents/${document.id}/description`);
-              }
-              resolve();
-            },
-            onError(error) {
-              toast({ title: __("Error"), description: error.message, variant: "error" });
-              resolve();
-            },
-          });
-        }),
-      {
-        message: __("This will delete the current draft and revert to the last published version."),
-        variant: "danger",
-        label: __("Delete draft"),
-      },
-    );
   };
 
   const documentsConnectionId = ConnectionHandler.getConnectionID(
@@ -225,24 +182,27 @@ export function DocumentActionsDropdown(props: {
   const handleExportDocumentVersion = (options: {
     withWatermark: boolean;
     withSignatures: boolean;
-    watermarkEmail?: string;
+    watermarkText?: string;
   }) => {
+    if (!version) {
+      return;
+    }
     const input = {
       documentVersionId: version.id,
       withWatermark: options.withWatermark,
       withSignatures: options.withSignatures,
       ...(options.withWatermark
-        && options.watermarkEmail && { watermarkEmail: options.watermarkEmail }),
+        && options.watermarkText && { watermarkText: options.watermarkText }),
     };
 
     exportDocumentVersion({
       variables: { input },
       onCompleted: (data, errors) => {
         if (errors?.length) {
-          toast({
-            title: __("Error"),
-            description: errors[0]?.message || __("Failed to generate PDF"),
-            variant: "error",
+          toast.add({
+            title: t("documentActions.errors.title"),
+            description: errors[0]?.message || t("documentActions.errors.generatePdf"),
+            type: "error",
           });
           return;
         }
@@ -257,7 +217,7 @@ export function DocumentActionsDropdown(props: {
         }
       },
       onError(error) {
-        toast({ title: __("Error"), description: error.message, variant: "error" });
+        toast.add({ title: t("documentActions.errors.title"), description: error.message, type: "error" });
       },
     });
   };
@@ -273,34 +233,25 @@ export function DocumentActionsDropdown(props: {
       <DeleteDocumentDialog
         ref={deleteDocumentDialogRef}
         documentId={document.id}
-        documentTitle={version.title}
+        documentTitle={document.title}
         connections={[documentsConnectionId]}
-        onSuccess={() => void navigate(`/organizations/${organizationId}/documents`)}
+        onSuccess={() => void navigate(`/organizations/${organizationId}/governance/documents`)}
       />
       <ActionDropdown variant="secondary">
         <DropdownItem
           onClick={() => pdfDownloadDialogRef.current?.open()}
           icon={IconArrowDown}
-          disabled={isExporting}
+          disabled={isExporting || !version}
         >
-          {__("Download PDF")}
+          {t("documentActions.actions.downloadPdf")}
         </DropdownItem>
-        {document.canDeleteDraft && version.status === "DRAFT" && !(version.major === 0 && version.minor === 1) && (
-          <DropdownItem
-            icon={IconTrashCan}
-            disabled={isDeletingDraft}
-            onClick={handleDeleteDraft}
-          >
-            {__("Delete draft")}
-          </DropdownItem>
-        )}
         {document.canArchive && document.status === "ACTIVE" && (
           <DropdownItem
             icon={IconArchive}
             disabled={isArchiving}
             onClick={handleArchive}
           >
-            {__("Archive document")}
+            {t("documentActions.actions.archiveDocument")}
           </DropdownItem>
         )}
         {document.canUnarchive && document.status === "ARCHIVED" && (
@@ -309,7 +260,7 @@ export function DocumentActionsDropdown(props: {
             disabled={isUnarchiving}
             onClick={handleUnarchive}
           >
-            {__("Unarchive document")}
+            {t("documentActions.actions.unarchiveDocument")}
           </DropdownItem>
         )}
         {document.canDelete && (
@@ -318,7 +269,7 @@ export function DocumentActionsDropdown(props: {
             icon={IconTrashCan}
             onClick={() => deleteDocumentDialogRef.current?.open()}
           >
-            {__("Delete document")}
+            {t("documentActions.actions.deleteDocument")}
           </DropdownItem>
         )}
       </ActionDropdown>

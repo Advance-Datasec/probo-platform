@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package clientip_test
 
@@ -109,6 +115,27 @@ func TestExtract(t *testing.T) {
 			remoteAddr: "10.0.0.1:1234",
 			headers:    map[string]string{"Forwarded": "for=198.51.100.17;proto=https;by=203.0.113.60"},
 			want:       "198.51.100.17",
+		},
+		{
+			name:       "unparseable forwarded falls back to remote addr",
+			remoteAddr: "10.0.0.1:1234",
+			headers:    map[string]string{"Forwarded": "for=unknown"},
+			want:       "10.0.0.1",
+		},
+		{
+			name:       "unparseable x-forwarded-for falls back to remote addr",
+			remoteAddr: "10.0.0.1:1234",
+			headers:    map[string]string{"X-Forwarded-For": "unknown"},
+			want:       "10.0.0.1",
+		},
+		{
+			name:       "unparseable forwarded falls through to x-forwarded-for",
+			remoteAddr: "10.0.0.1:1234",
+			headers: map[string]string{
+				"Forwarded":       "for=unknown",
+				"X-Forwarded-For": "203.0.113.50",
+			},
+			want: "203.0.113.50",
 		},
 	}
 

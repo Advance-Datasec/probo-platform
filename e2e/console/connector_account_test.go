@@ -1,0 +1,418 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+package console_test
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.probo.inc/probo/e2e/internal/factory"
+	"go.probo.inc/probo/e2e/internal/testutil"
+)
+
+const (
+	connectorAccountAWSRoleARN = "arn:aws:iam::123456789012:role/ProboAudit"
+	connectorAccountAWSAccount = "123456789012"
+)
+
+const connectorAccountsQuery = `
+	query($id: ID!) {
+		node(id: $id) {
+			... on Connector {
+				id
+				accounts {
+					totalCount
+					edges {
+						node {
+							id
+							externalAccountId
+							name
+						}
+					}
+				}
+			}
+		}
+	}
+`
+
+const disableConnectorAccountMutation = `
+	mutation($input: DisableConnectorAccountInput!) {
+		disableConnectorAccount(input: $input) {
+			disabledConnectorAccountId
+		}
+	}
+`
+
+const accessReviewSourceQuery = `
+	query($id: ID!) {
+		node(id: $id) {
+			... on AccessReviewSource {
+				id
+				connectorId
+				connectorAccountId
+			}
+		}
+	}
+`
+
+type accessReviewSourceResult struct {
+	Node struct {
+		ID                 string  `json:"id"`
+		ConnectorID        *string `json:"connectorId"`
+		ConnectorAccountID *string `json:"connectorAccountId"`
+	} `json:"node"`
+}
+
+type connectorAccountsResult struct {
+	Node struct {
+		ID       string `json:"id"`
+		Accounts struct {
+			TotalCount int `json:"totalCount"`
+			Edges      []struct {
+				Node struct {
+					ID                string `json:"id"`
+					ExternalAccountID string `json:"externalAccountId"`
+					Name              string `json:"name"`
+				} `json:"node"`
+			} `json:"edges"`
+		} `json:"accounts"`
+	} `json:"node"`
+}
+
+func TestConnectorAccounts_StandaloneAWSHasInitialAccount(t *testing.T) {
+	t.Parallel()
+
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	connectorID := factory.NewConnector(owner).
+		WithAWSRoleARN(connectorAccountAWSRoleARN).
+		Create()
+
+	var result connectorAccountsResult
+
+	err := owner.Execute(connectorAccountsQuery, map[string]any{"id": connectorID}, &result)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Node.Accounts.TotalCount)
+	require.Len(t, result.Node.Accounts.Edges, 1)
+	assert.Equal(t, connectorAccountAWSAccount, result.Node.Accounts.Edges[0].Node.ExternalAccountID)
+}
+
+func TestConnector_DistinctAccountCountIgnoresPagination(t *testing.T) {
+	t.Parallel()
+
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	firstID := factory.NewConnector(owner).
+		WithAWSRoleARN(connectorAccountAWSRoleARN).
+		Create()
+	secondID := factory.NewConnector(owner).
+		WithAWSRoleARN(connectorAccountAWSRoleARN).
+		Create()
+
+	factory.NewConnectorAccount(owner, firstID).
+		WithExternalAccountID("111111111111").
+		WithName("Shared").
+		Create()
+	factory.NewConnectorAccount(owner, secondID).
+		WithExternalAccountID("111111111111").
+		WithName("Shared").
+		Create()
+	factory.NewConnectorAccount(owner, firstID).
+		WithExternalAccountID("222222222222").
+		WithName("Only first").
+		Create()
+
+	const query = `
+		query($id: ID!) {
+			node(id: $id) {
+				... on Connector {
+					distinctAccountCount
+					accounts(first: 1) {
+						edges { node { id } }
+					}
+				}
+			}
+		}
+	`
+
+	var result struct {
+		Node struct {
+			DistinctAccountCount int `json:"distinctAccountCount"`
+			Accounts             struct {
+				Edges []struct {
+					Node struct {
+						ID string `json:"id"`
+					} `json:"node"`
+				} `json:"edges"`
+			} `json:"accounts"`
+		} `json:"node"`
+	}
+
+	err := owner.Execute(query, map[string]any{"id": firstID}, &result)
+	require.NoError(t, err)
+	require.Len(t, result.Node.Accounts.Edges, 1)
+	// Shared AWS account and 111111111111, plus 222222222222 on the first credential.
+	assert.Equal(t, 3, result.Node.DistinctAccountCount)
+}
+
+func TestEnableConnectorAccounts_AddsRowWithoutTouchingSource(t *testing.T) {
+	t.Parallel()
+
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	connectorID := factory.NewConnector(owner).
+		WithAWSRoleARN(connectorAccountAWSRoleARN).
+		Create()
+
+	var accounts connectorAccountsResult
+
+	err := owner.Execute(connectorAccountsQuery, map[string]any{"id": connectorID}, &accounts)
+	require.NoError(t, err)
+	require.Len(t, accounts.Node.Accounts.Edges, 1)
+
+	initialID := accounts.Node.Accounts.Edges[0].Node.ID
+	sourceID := factory.NewAccessReviewSource(owner, owner.GetOrganizationID().String()).
+		WithName("AWS prod").
+		WithConnectorID(connectorID).
+		WithConnectorAccountID(initialID).
+		Create()
+	require.NotEmpty(t, sourceID)
+
+	memberID := factory.NewConnectorAccount(owner, connectorID).
+		WithExternalAccountID("111111111111").
+		WithName("Member").
+		Create()
+	require.NotEmpty(t, memberID)
+
+	var result connectorAccountsResult
+
+	err = owner.Execute(connectorAccountsQuery, map[string]any{"id": connectorID}, &result)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Node.Accounts.TotalCount)
+
+	externals := make([]string, 0, len(result.Node.Accounts.Edges))
+	for _, edge := range result.Node.Accounts.Edges {
+		externals = append(externals, edge.Node.ExternalAccountID)
+	}
+
+	assert.ElementsMatch(t, []string{connectorAccountAWSAccount, "111111111111"}, externals)
+
+	var source accessReviewSourceResult
+
+	err = owner.Execute(accessReviewSourceQuery, map[string]any{"id": sourceID}, &source)
+	require.NoError(t, err)
+	require.NotNil(t, source.Node.ConnectorID)
+	assert.Equal(t, connectorID, *source.Node.ConnectorID)
+	require.NotNil(t, source.Node.ConnectorAccountID)
+	assert.Equal(t, initialID, *source.Node.ConnectorAccountID)
+}
+
+func TestDisableConnectorAccount_RefusedWhenSourceReferences(t *testing.T) {
+	t.Parallel()
+
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	connectorID := factory.NewConnector(owner).
+		WithAWSRoleARN(connectorAccountAWSRoleARN).
+		Create()
+
+	var accounts connectorAccountsResult
+
+	err := owner.Execute(connectorAccountsQuery, map[string]any{"id": connectorID}, &accounts)
+	require.NoError(t, err)
+	require.Len(t, accounts.Node.Accounts.Edges, 1)
+
+	impliedID := accounts.Node.Accounts.Edges[0].Node.ID
+	sourceID := factory.NewAccessReviewSource(owner, owner.GetOrganizationID().String()).
+		WithName("AWS prod").
+		WithConnectorID(connectorID).
+		WithConnectorAccountID(impliedID).
+		Create()
+	require.NotEmpty(t, sourceID)
+
+	err = owner.Execute(
+		disableConnectorAccountMutation,
+		map[string]any{"input": map[string]any{"connectorAccountId": impliedID}},
+		&struct {
+			DisableConnectorAccount struct {
+				DisabledConnectorAccountID string `json:"disabledConnectorAccountId"`
+			} `json:"disableConnectorAccount"`
+		}{},
+	)
+	testutil.RequireErrorCode(t, err, "CONFLICT")
+
+	memberID := factory.NewConnectorAccount(owner, connectorID).
+		WithExternalAccountID("111111111111").
+		WithName("Member").
+		Create()
+
+	var disabled struct {
+		DisableConnectorAccount struct {
+			DisabledConnectorAccountID string `json:"disabledConnectorAccountId"`
+		} `json:"disableConnectorAccount"`
+	}
+
+	err = owner.Execute(
+		disableConnectorAccountMutation,
+		map[string]any{"input": map[string]any{"connectorAccountId": memberID}},
+		&disabled,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, memberID, disabled.DisableConnectorAccount.DisabledConnectorAccountID)
+}
+
+func TestDisableConnectorAccount_RefusedWhenInitial(t *testing.T) {
+	t.Parallel()
+
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	connectorID := factory.NewConnector(owner).
+		WithAWSRoleARN(connectorAccountAWSRoleARN).
+		Create()
+
+	var accounts connectorAccountsResult
+
+	err := owner.Execute(connectorAccountsQuery, map[string]any{"id": connectorID}, &accounts)
+	require.NoError(t, err)
+	require.Len(t, accounts.Node.Accounts.Edges, 1)
+
+	initialID := accounts.Node.Accounts.Edges[0].Node.ID
+
+	err = owner.Execute(
+		disableConnectorAccountMutation,
+		map[string]any{"input": map[string]any{"connectorAccountId": initialID}},
+		&struct {
+			DisableConnectorAccount struct {
+				DisabledConnectorAccountID string `json:"disabledConnectorAccountId"`
+			} `json:"disableConnectorAccount"`
+		}{},
+	)
+	testutil.RequireErrorCode(t, err, "CONFLICT")
+
+	err = owner.Execute(connectorAccountsQuery, map[string]any{"id": connectorID}, &accounts)
+	require.NoError(t, err)
+	require.Len(t, accounts.Node.Accounts.Edges, 1)
+	assert.Equal(t, initialID, accounts.Node.Accounts.Edges[0].Node.ID)
+}
+
+func TestCreateAccessReviewSource_ConnectorIdOnlyResolvesAccount(t *testing.T) {
+	t.Parallel()
+
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	connectorID := factory.NewConnector(owner).
+		WithAWSRoleARN(connectorAccountAWSRoleARN).
+		Create()
+
+	sourceID := factory.NewAccessReviewSource(owner, owner.GetOrganizationID().String()).
+		WithName("AWS dual-write").
+		WithConnectorID(connectorID).
+		Create()
+	require.NotEmpty(t, sourceID)
+
+	var result accessReviewSourceResult
+
+	err := owner.Execute(accessReviewSourceQuery, map[string]any{"id": sourceID}, &result)
+	require.NoError(t, err)
+	require.NotNil(t, result.Node.ConnectorID)
+	assert.Equal(t, connectorID, *result.Node.ConnectorID)
+	require.NotNil(t, result.Node.ConnectorAccountID)
+	assert.NotEmpty(t, *result.Node.ConnectorAccountID)
+}
+
+func TestConnectorProviders_OrganizationInstallSupported(t *testing.T) {
+	t.Parallel()
+
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+
+	const query = `
+		query {
+			connectorProviders {
+				provider
+				organizationInstallSupported
+			}
+		}
+	`
+
+	var result struct {
+		ConnectorProviders []struct {
+			Provider                     string `json:"provider"`
+			OrganizationInstallSupported bool   `json:"organizationInstallSupported"`
+		} `json:"connectorProviders"`
+	}
+
+	err := owner.Execute(query, nil, &result)
+	require.NoError(t, err)
+	require.NotEmpty(t, result.ConnectorProviders)
+
+	supported := map[string]bool{}
+	for _, driver := range result.ConnectorProviders {
+		supported[driver.Provider] = driver.OrganizationInstallSupported
+	}
+
+	assert.True(t, supported["AWS"])
+	assert.True(t, supported["GCP"])
+	assert.True(t, supported["AZURE"])
+}
+
+func TestDiscoveredAccounts_ViewerGetsNone(t *testing.T) {
+	t.Parallel()
+
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
+	connectorID := factory.NewConnector(owner).
+		WithAWSRoleARN(connectorAccountAWSRoleARN).
+		Create()
+
+	var result struct {
+		Node *struct {
+			DiscoveredAccounts []struct {
+				ExternalAccountID string `json:"externalAccountId"`
+				Enabled           bool   `json:"enabled"`
+			} `json:"discoveredAccounts"`
+			AccountDiscovery struct {
+				Status string `json:"status"`
+				Nodes  []struct {
+					ExternalAccountID string `json:"externalAccountId"`
+				} `json:"nodes"`
+			} `json:"accountDiscovery"`
+		} `json:"node"`
+	}
+
+	err := viewer.Execute(`
+		query($id: ID!) {
+			node(id: $id) {
+				... on Connector {
+					discoveredAccounts {
+						externalAccountId
+						enabled
+					}
+					accountDiscovery {
+						status
+						nodes {
+							externalAccountId
+						}
+					}
+				}
+			}
+		}
+	`, map[string]any{"id": connectorID}, &result)
+	require.NoError(t, err)
+	require.NotNil(t, result.Node)
+	assert.Empty(t, result.Node.DiscoveredAccounts)
+	assert.Equal(t, "NOT_PERMITTED", result.Node.AccountDiscovery.Status)
+	assert.Empty(t, result.Node.AccountDiscovery.Nodes)
+}

@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -25,11 +31,15 @@ import (
 	"go.probo.inc/probo/pkg/coredata"
 )
 
-const renderAPIBaseURL = "https://api.render.com/v1"
+const (
+	renderOwnersPath  = "owners"
+	renderMembersPath = "members"
+)
 
 type RenderDriver struct {
 	httpClient *http.Client
 	ownerID    string
+	baseURL    string
 }
 
 var _ Driver = (*RenderDriver)(nil)
@@ -47,19 +57,22 @@ type renderMember struct {
 	MFAEnabled bool   `json:"mfaEnabled"`
 }
 
-func NewRenderDriver(httpClient *http.Client, ownerID string) *RenderDriver {
+// NewRenderDriver builds a driver against baseURL, the versioned Render API
+// origin (e.g. https://api.render.com/v1).
+func NewRenderDriver(httpClient *http.Client, ownerID, baseURL string) *RenderDriver {
 	return &RenderDriver{
 		httpClient: httpClient,
 		ownerID:    ownerID,
+		baseURL:    baseURL,
 	}
 }
 
 func (d *RenderDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error) {
 	endpoint, err := url.JoinPath(
-		renderAPIBaseURL,
-		"owners",
+		d.baseURL,
+		renderOwnersPath,
 		url.PathEscape(d.ownerID),
-		"members",
+		renderMembersPath,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("cannot build render members URL: %w", err)
@@ -101,7 +114,7 @@ func (d *RenderDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error
 			FullName:    renderFullName(member),
 			Roles:       renderRoles(member.Role),
 			Active:      renderActive(member.Status),
-			IsAdmin:     renderIsAdmin(member.Role),
+			IsAdmin:     new(renderIsAdmin(member.Role)),
 			MFAStatus:   renderMFAStatus(member.MFAEnabled),
 			AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
 			AccountType: coredata.AccessReviewEntryAccountTypeUser,
@@ -176,4 +189,62 @@ func renderActive(status string) *bool {
 	default:
 		return nil
 	}
+}
+
+// renderNameResolver resolves the Render workspace (owner) name from
+// GET /v1/owners/{ownerId}, used to title the AccessReviewSource "Render <name>".
+type renderNameResolver struct {
+	httpClient *http.Client
+	ownerID    string
+	baseURL    string
+}
+
+func NewRenderNameResolver(httpClient *http.Client, ownerID, baseURL string) NameResolver {
+	return &renderNameResolver{
+		httpClient: httpClient,
+		ownerID:    ownerID,
+		baseURL:    baseURL,
+	}
+}
+
+func (r *renderNameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
+	if r.ownerID == "" {
+		return "", nil
+	}
+
+	endpoint, err := url.JoinPath(r.baseURL, renderOwnersPath, url.PathEscape(r.ownerID))
+	if err != nil {
+		return "", fmt.Errorf("cannot build render owner URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("cannot create render owner request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	httpResp, err := r.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("cannot execute render owner request: %w", err)
+	}
+
+	defer func() { _ = httpResp.Body.Close() }()
+
+	// Best-effort: a non-2xx (revoked token, deleted workspace, stale ID) must
+	// not make the source-name worker retry forever. Give up gracefully and
+	// keep the generic source name; a dead token surfaces on the next
+	// ListAccounts.
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return "", nil
+	}
+
+	var resp struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		return "", fmt.Errorf("cannot decode render owner response: %w", err)
+	}
+
+	return resp.Name, nil
 }

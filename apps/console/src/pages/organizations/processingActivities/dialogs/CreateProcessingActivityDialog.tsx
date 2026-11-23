@@ -1,19 +1,24 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatDatetime, formatError, type GraphQLError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   Breadcrumb,
   Button,
@@ -27,15 +32,16 @@ import {
   Select,
   Textarea,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { type ReactNode } from "react";
 import { Controller } from "react-hook-form";
-import { z } from "zod";
+import { useTranslation } from "react-i18next";
 
 import { PeopleSelectField } from "#/components/form/PeopleSelectField";
 import { ThirdPartiesMultiSelectField } from "#/components/form/ThirdPartiesMultiSelectField";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
+import { z } from "#/lib/zod";
 
 import {
   DataProtectionImpactAssessmentOptions,
@@ -47,30 +53,15 @@ import {
 } from "../../../../components/form/ProcessingActivityEnumOptions";
 import { useCreateProcessingActivity } from "../../../../hooks/graph/ProcessingActivityGraph";
 
-const schema = z.object({
-  name: z.string().min(1, "Name is required"),
-  purpose: z.string().optional(),
-  dataSubjectCategory: z.string().optional(),
-  personalDataCategory: z.string().optional(),
-  specialOrCriminalData: z.enum(["YES", "NO", "POSSIBLE"] as const),
-  consentEvidenceLink: z.string().optional(),
-  lawfulBasis: z.enum(["CONSENT", "CONTRACTUAL_NECESSITY", "LEGAL_OBLIGATION", "LEGITIMATE_INTEREST", "PUBLIC_TASK", "VITAL_INTERESTS"] as const),
-  recipients: z.string().optional(),
-  location: z.string().optional(),
-  internationalTransfers: z.boolean(),
-  transferSafeguards: z.string(),
-  retentionPeriod: z.string().optional(),
-  securityMeasures: z.string().optional(),
-  dataProtectionImpactAssessmentNeeded: z.enum(["NEEDED", "NOT_NEEDED"] as const),
-  transferImpactAssessmentNeeded: z.enum(["NEEDED", "NOT_NEEDED"] as const),
-  lastReviewDate: z.string().optional(),
-  nextReviewDate: z.string().optional(),
-  role: z.enum(["CONTROLLER", "PROCESSOR"] as const),
-  dataProtectionOfficerId: z.string().optional(),
-  thirdPartyIds: z.array(z.string()).optional(),
-});
-
-type FormData = z.infer<typeof schema>;
+type FormData = {
+  name: string; purpose?: string; dataSubjectCategory?: string; personalDataCategory?: string;
+  specialOrCriminalData: "YES" | "NO" | "POSSIBLE"; consentEvidenceLink?: string;
+  lawfulBasis: "CONSENT" | "CONTRACTUAL_NECESSITY" | "LEGAL_OBLIGATION" | "LEGITIMATE_INTEREST" | "PUBLIC_TASK" | "VITAL_INTERESTS";
+  recipients?: string; location?: string; internationalTransfers: boolean; transferSafeguards: string;
+  retentionPeriod?: string; securityMeasures?: string; dataProtectionImpactAssessmentNeeded: "NEEDED" | "NOT_NEEDED";
+  transferImpactAssessmentNeeded: "NEEDED" | "NOT_NEEDED"; lastReviewDate?: string; nextReviewDate?: string;
+  role: "CONTROLLER" | "PROCESSOR"; dataProtectionOfficerId?: string; thirdPartyIds?: string[];
+};
 
 interface CreateProcessingActivityDialogProps {
   children: ReactNode;
@@ -83,11 +74,14 @@ export function CreateProcessingActivityDialog({
   organizationId,
   connectionId,
 }: CreateProcessingActivityDialogProps) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
   const dialogRef = useDialogRef();
 
   const createProcessingActivity = useCreateProcessingActivity(connectionId);
+  const schema = z.object({
+    name: z.string().min(1, t("createProcessingActivityDialog.validation.nameRequired")), purpose: z.string().optional(), dataSubjectCategory: z.string().optional(), personalDataCategory: z.string().optional(), specialOrCriminalData: z.enum(["YES", "NO", "POSSIBLE"] as const), consentEvidenceLink: z.string().optional(), lawfulBasis: z.enum(["CONSENT", "CONTRACTUAL_NECESSITY", "LEGAL_OBLIGATION", "LEGITIMATE_INTEREST", "PUBLIC_TASK", "VITAL_INTERESTS"] as const), recipients: z.string().optional(), location: z.string().optional(), internationalTransfers: z.boolean(), transferSafeguards: z.string(), retentionPeriod: z.string().optional(), securityMeasures: z.string().optional(), dataProtectionImpactAssessmentNeeded: z.enum(["NEEDED", "NOT_NEEDED"] as const), transferImpactAssessmentNeeded: z.enum(["NEEDED", "NOT_NEEDED"] as const), lastReviewDate: z.string().optional(), nextReviewDate: z.string().optional(), role: z.enum(["CONTROLLER", "PROCESSOR"] as const), dataProtectionOfficerId: z.string().optional(), thirdPartyIds: z.array(z.string()).optional(),
+  });
 
   const { register, handleSubmit, formState, reset, control } = useFormWithSchema(schema, {
     defaultValues: {
@@ -140,19 +134,19 @@ export function CreateProcessingActivityDialog({
         thirdPartyIds: formData.thirdPartyIds,
       });
 
-      toast({
-        title: __("Success"),
-        description: __("Processing activity created successfully"),
-        variant: "success",
+      toast.add({
+        title: t("createProcessingActivityDialog.messages.success"),
+        description: t("createProcessingActivityDialog.messages.created"),
+        type: "success",
       });
 
       reset();
       dialogRef.current?.close();
     } catch (error) {
-      toast({
-        title: __("Error"),
-        description: formatError(__("Failed to create processing activity"), error as GraphQLError),
-        variant: "error",
+      toast.add({
+        title: t("createProcessingActivityDialog.messages.error"),
+        description: formatError(t("createProcessingActivityDialog.errors.create"), error as GraphQLError),
+        type: "error",
       });
     }
   };
@@ -161,7 +155,7 @@ export function CreateProcessingActivityDialog({
     <Dialog
       ref={dialogRef}
       trigger={children}
-      title={<Breadcrumb items={[__("Processing Activities"), __("Create Processing Activity")]} />}
+      title={<Breadcrumb items={[t("createProcessingActivityDialog.breadcrumb.activities"), t("createProcessingActivityDialog.breadcrumb.create")]} />}
       className="max-w-4xl"
     >
       <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
@@ -169,22 +163,22 @@ export function CreateProcessingActivityDialog({
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="space-y-4">
               <Field
-                label={__("Name")}
+                label={t("processingActivityDetailsPage.fields.name")}
                 {...register("name")}
-                placeholder={__("Processing activity name")}
+                placeholder={t("createProcessingActivityDialog.placeholders.name")}
                 error={formState.errors.name?.message}
                 required
               />
 
               <div>
-                <Label htmlFor="role">{__("Role")}</Label>
+                <Label htmlFor="role">{t("processingActivityDetailsPage.fields.role")}</Label>
                 <Controller
                   control={control}
                   name="role"
                   render={({ field }) => (
                     <Select
                       id="role"
-                      placeholder={__("Select role")}
+                      placeholder={t("processingActivityDetailsPage.placeholders.role")}
                       onValueChange={field.onChange}
                       value={field.value}
                       className="w-full"
@@ -199,31 +193,31 @@ export function CreateProcessingActivityDialog({
               </div>
 
               <div>
-                <Label>{__("Purpose")}</Label>
+                <Label>{t("processingActivityDetailsPage.fields.purpose")}</Label>
                 <Textarea
                   {...register("purpose")}
-                  placeholder={__("Describe the purpose of processing")}
+                  placeholder={t("processingActivityDetailsPage.placeholders.purpose")}
                   rows={3}
                 />
               </div>
 
               <Field
-                label={__("Data Subject Category")}
+                label={t("processingActivityDetailsPage.fields.dataSubjectCategory")}
                 {...register("dataSubjectCategory")}
-                placeholder={__("e.g., employees, customers, prospects")}
+                placeholder={t("processingActivityDetailsPage.placeholders.dataSubjectCategory")}
                 error={formState.errors.dataSubjectCategory?.message}
               />
 
               <Field
-                label={__("Personal Data Category")}
+                label={t("processingActivityDetailsPage.fields.personalDataCategory")}
                 {...register("personalDataCategory")}
-                placeholder={__("e.g., contact details, financial data")}
+                placeholder={t("processingActivityDetailsPage.placeholders.personalDataCategory")}
                 error={formState.errors.personalDataCategory?.message}
               />
 
               <div>
                 <Label htmlFor="specialOrCriminalData">
-                  {__("Special or Criminal Data")}
+                  {t("processingActivityDetailsPage.fields.specialOrCriminalData")}
                   {" "}
                   *
                 </Label>
@@ -233,7 +227,7 @@ export function CreateProcessingActivityDialog({
                   render={({ field }) => (
                     <Select
                       id="specialOrCriminalData"
-                      placeholder={__("Select special or criminal data status")}
+                      placeholder={t("processingActivityDetailsPage.placeholders.specialOrCriminalData")}
                       onValueChange={field.onChange}
                       value={field.value}
                       className="w-full"
@@ -248,15 +242,15 @@ export function CreateProcessingActivityDialog({
               </div>
 
               <Field
-                label={__("Consent Evidence Link")}
+                label={t("processingActivityDetailsPage.fields.consentEvidenceLink")}
                 {...register("consentEvidenceLink")}
-                placeholder={__("Link to consent evidence if applicable")}
+                placeholder={t("processingActivityDetailsPage.placeholders.consentEvidenceLink")}
                 error={formState.errors.consentEvidenceLink?.message}
               />
 
               <div>
                 <Label htmlFor="lawfulBasis">
-                  {__("Lawful Basis")}
+                  {t("processingActivityDetailsPage.fields.lawfulBasis")}
                   {" "}
                   *
                 </Label>
@@ -266,7 +260,7 @@ export function CreateProcessingActivityDialog({
                   render={({ field }) => (
                     <Select
                       id="lawfulBasis"
-                      placeholder={__("Select lawful basis for processing")}
+                      placeholder={t("processingActivityDetailsPage.placeholders.lawfulBasis")}
                       onValueChange={field.onChange}
                       value={field.value}
                       className="w-full"
@@ -281,7 +275,7 @@ export function CreateProcessingActivityDialog({
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="lastReviewDate">{__("Last Review Date")}</Label>
+                <Label htmlFor="lastReviewDate">{t("processingActivityDetailsPage.fields.lastReviewDate")}</Label>
                 <Input
                   id="lastReviewDate"
                   type="date"
@@ -290,7 +284,7 @@ export function CreateProcessingActivityDialog({
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="nextReviewDate">{__("Next Review Date")}</Label>
+                <Label htmlFor="nextReviewDate">{t("processingActivityDetailsPage.fields.nextReviewDate")}</Label>
                 <Input
                   id="nextReviewDate"
                   type="date"
@@ -302,22 +296,22 @@ export function CreateProcessingActivityDialog({
                 organizationId={organizationId}
                 control={control}
                 name="dataProtectionOfficerId"
-                label={__("Data Protection Officer")}
+                label={t("processingActivityDetailsPage.fields.dataProtectionOfficer")}
               />
             </div>
 
             <div className="space-y-4">
               <Field
-                label={__("Recipients")}
+                label={t("processingActivityDetailsPage.fields.recipients")}
                 {...register("recipients")}
-                placeholder={__("Who receives the data")}
+                placeholder={t("processingActivityDetailsPage.placeholders.recipients")}
                 error={formState.errors.recipients?.message}
               />
 
               <Field
-                label={__("Location")}
+                label={t("processingActivityDetailsPage.fields.location")}
                 {...register("location")}
-                placeholder={__("Where is the data processed")}
+                placeholder={t("processingActivityDetailsPage.placeholders.location")}
                 error={formState.errors.location?.message}
               />
 
@@ -326,27 +320,27 @@ export function CreateProcessingActivityDialog({
                 name="internationalTransfers"
                 render={({ field }) => (
                   <div>
-                    <Label>{__("International Transfers")}</Label>
+                    <Label>{t("processingActivityDetailsPage.fields.internationalTransfers")}</Label>
                     <div className="mt-2 flex items-center gap-2">
                       <Checkbox
                         checked={field.value ?? false}
                         onChange={field.onChange}
                       />
-                      <span>{__("Data is transferred internationally")}</span>
+                      <span>{t("processingActivityDetailsPage.fields.internationalTransfersDescription")}</span>
                     </div>
                   </div>
                 )}
               />
 
               <div>
-                <Label htmlFor="transferSafeguards">{__("Transfer Safeguards")}</Label>
+                <Label htmlFor="transferSafeguards">{t("processingActivityDetailsPage.fields.transferSafeguards")}</Label>
                 <Controller
                   control={control}
                   name="transferSafeguards"
                   render={({ field }) => (
                     <Select
                       id="transferSafeguards"
-                      placeholder={__("Select transfer safeguards")}
+                      placeholder={t("processingActivityDetailsPage.placeholders.transferSafeguards")}
                       onValueChange={field.onChange}
                       value={field.value}
                       className="w-full"
@@ -361,24 +355,24 @@ export function CreateProcessingActivityDialog({
               </div>
 
               <Field
-                label={__("Retention Period")}
+                label={t("processingActivityDetailsPage.fields.retentionPeriod")}
                 {...register("retentionPeriod")}
-                placeholder={__("How long is data retained")}
+                placeholder={t("processingActivityDetailsPage.placeholders.retentionPeriod")}
                 error={formState.errors.retentionPeriod?.message}
               />
 
               <div>
-                <Label>{__("Security Measures")}</Label>
+                <Label>{t("processingActivityDetailsPage.fields.securityMeasures")}</Label>
                 <Textarea
                   {...register("securityMeasures")}
-                  placeholder={__("Technical and organizational measures")}
+                  placeholder={t("processingActivityDetailsPage.placeholders.securityMeasures")}
                   rows={2}
                 />
               </div>
 
               <div>
                 <Label htmlFor="dataProtectionImpactAssessmentNeeded">
-                  {__("Data Protection Impact Assessment")}
+                  {t("processingActivityDetailsPage.fields.dpiaNeeded")}
                   {" "}
                   *
                 </Label>
@@ -388,7 +382,7 @@ export function CreateProcessingActivityDialog({
                   render={({ field }) => (
                     <Select
                       id="dataProtectionImpactAssessmentNeeded"
-                      placeholder={__("Is DPIA needed?")}
+                      placeholder={t("processingActivityDetailsPage.placeholders.dpiaNeeded")}
                       onValueChange={field.onChange}
                       value={field.value}
                       className="w-full"
@@ -404,7 +398,7 @@ export function CreateProcessingActivityDialog({
 
               <div>
                 <Label htmlFor="transferImpactAssessmentNeeded">
-                  {__("Transfer Impact Assessment")}
+                  {t("processingActivityDetailsPage.fields.tiaNeeded")}
                   {" "}
                   *
                 </Label>
@@ -414,7 +408,7 @@ export function CreateProcessingActivityDialog({
                   render={({ field }) => (
                     <Select
                       id="transferImpactAssessmentNeeded"
-                      placeholder={__("Is TIA needed?")}
+                      placeholder={t("processingActivityDetailsPage.placeholders.tiaNeeded")}
                       onValueChange={field.onChange}
                       value={field.value}
                       className="w-full"
@@ -435,7 +429,7 @@ export function CreateProcessingActivityDialog({
             control={control}
             name="thirdPartyIds"
             selectedThirdParties={[]}
-            label={__("Third parties")}
+            label={t("processingActivityDetailsPage.fields.thirdParties")}
           />
         </DialogContent>
 
@@ -445,7 +439,7 @@ export function CreateProcessingActivityDialog({
             variant="primary"
             disabled={formState.isSubmitting}
           >
-            {formState.isSubmitting ? __("Creating...") : __("Create Processing Activity")}
+            {formState.isSubmitting ? t("createProcessingActivityDialog.actions.creating") : t("createProcessingActivityDialog.actions.create")}
           </Button>
         </DialogFooter>
       </form>

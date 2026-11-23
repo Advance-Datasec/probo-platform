@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package create
 
@@ -25,7 +31,7 @@ import (
 )
 
 const createMutation = `
-mutation($input: CreateThirdPartyInput!) {
+mutation ThirdPartyCreate($input: CreateThirdPartyInput!) {
   createThirdParty(input: $input) {
     thirdPartyEdge {
       node {
@@ -52,23 +58,28 @@ type createResponse struct {
 
 func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 	var (
-		flagOrg         string
-		flagName        string
-		flagCategory    string
-		flagDescription string
-		flagLegalName   string
-		flagAddress     string
-		flagWebsite     string
+		flagOrg             string
+		flagName            string
+		flagCategory        string
+		flagDescription     string
+		flagLegalName       string
+		flagAddress         string
+		flagWebsite         string
+		flagAdministratorID []string
+		flagParentID        string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create a new thirdParty",
-		Example: `  # Create a third_party interactively
-  prb third_party create
+		Short: "Create a new third party",
+		Example: `  # Create a third party interactively
+  prb third-party create
 
-  # Create a third_party non-interactively
-  prb third_party create --name "Acme Corp" --category CLOUD_PROVIDER`,
+  # Create a third party non-interactively
+  prb third-party create --name "Acme Corp" --category CLOUD_PROVIDER
+
+  # Add a sub-processor to a vendor's supply chain
+  prb third-party create --name "Datadog" --category CLOUD_MONITORING --parent-id <vendor-id>`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := f.Config()
 			if err != nil {
@@ -88,18 +99,15 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 				cmdutil.TokenRefreshOption(cfg, host, hc),
 			)
 
-			if flagOrg == "" {
-				flagOrg = hc.Organization
-			}
-
-			if flagOrg == "" {
-				return fmt.Errorf("organization is required; pass --org or set a default with 'prb auth login'")
+			flagOrg, err = cmdutil.ResolveOrganization(flagOrg, hc.Organization)
+			if err != nil {
+				return err
 			}
 
 			if f.IOStreams.IsInteractive() {
 				if flagName == "" {
 					err := huh.NewInput().
-						Title("ThirdParty name").
+						Title("Third party name").
 						Value(&flagName).
 						Run()
 					if err != nil {
@@ -109,7 +117,7 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 
 				if flagCategory == "" {
 					err := huh.NewSelect[string]().
-						Title("ThirdParty category").
+						Title("Third party category").
 						Options(
 							huh.NewOption("Analytics", "ANALYTICS"),
 							huh.NewOption("Cloud Monitoring", "CLOUD_MONITORING"),
@@ -172,6 +180,14 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 				input["websiteUrl"] = flagWebsite
 			}
 
+			if len(flagAdministratorID) > 0 {
+				input["administratorIds"] = flagAdministratorID
+			}
+
+			if flagParentID != "" {
+				input["parentThirdPartyId"] = flagParentID
+			}
+
 			data, err := client.Do(
 				createMutation,
 				map[string]any{"input": input},
@@ -188,7 +204,7 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 			v := resp.CreateThirdParty.ThirdPartyEdge.Node
 			_, _ = fmt.Fprintf(
 				f.IOStreams.Out,
-				"Created thirdParty %s (%s)\n",
+				"Created third party %s (%s)\n",
 				v.ID,
 				v.Name,
 			)
@@ -197,13 +213,15 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&flagOrg, "org", "", "Organization ID")
-	cmd.Flags().StringVar(&flagName, "name", "", "ThirdParty name (required)")
-	cmd.Flags().StringVar(&flagCategory, "category", "", "ThirdParty category (required)")
-	cmd.Flags().StringVar(&flagDescription, "description", "", "ThirdParty description")
+	cmdutil.AddOrganizationFlag(cmd, &flagOrg, "Organization ID")
+	cmd.Flags().StringVar(&flagName, "name", "", "Third party name (required)")
+	cmd.Flags().StringVar(&flagCategory, "category", "", "Third party category (required)")
+	cmd.Flags().StringVar(&flagDescription, "description", "", "Third party description")
 	cmd.Flags().StringVar(&flagLegalName, "legal-name", "", "Legal name")
 	cmd.Flags().StringVar(&flagAddress, "address", "", "Headquarter address")
 	cmd.Flags().StringVar(&flagWebsite, "website", "", "Website URL")
+	cmd.Flags().StringArrayVar(&flagAdministratorID, "administrator-id", nil, "Administrator profile ID (can be repeated)")
+	cmd.Flags().StringVar(&flagParentID, "parent-id", "", "Parent third party ID, to add this third party to the parent's supply chain")
 
 	return cmd
 }

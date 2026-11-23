@@ -1,30 +1,33 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package list
 
 import (
-	"encoding/json"
-	"fmt"
-
 	"github.com/spf13/cobra"
 	"go.probo.inc/probo/pkg/cli/api"
 	"go.probo.inc/probo/pkg/cmd/cmdutil"
 )
 
 const listQuery = `
-query($first: Int, $after: CursorKey, $orderBy: ProfileOrder, $filter: ProfileFilter) {
+query OrgList($first: Int, $after: CursorKey, $orderBy: ProfileOrder, $filter: ProfileFilter) {
   viewer {
     profiles(first: $first, after: $after, orderBy: $orderBy, filter: $filter) {
       totalCount
@@ -35,6 +38,7 @@ query($first: Int, $after: CursorKey, $orderBy: ProfileOrder, $filter: ProfileFi
           organization {
             id
             name
+            legalName
           }
           membership {
             role
@@ -52,8 +56,9 @@ query($first: Int, $after: CursorKey, $orderBy: ProfileOrder, $filter: ProfileFi
 
 type (
 	organization struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
+		ID        string  `json:"id"`
+		Name      string  `json:"name"`
+		LegalName *string `json:"legalName"`
 	}
 
 	membership struct {
@@ -71,6 +76,7 @@ type (
 func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	var (
 		flagLimit  int
+		flagAfter  string
 		flagOutput *string
 	)
 
@@ -89,101 +95,76 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
-			cfg, err := f.Config()
-			if err != nil {
+			if err := cmdutil.ValidateLimit(flagLimit); err != nil {
 				return err
 			}
 
-			host, hc, err := cfg.DefaultHost()
+			client, _, err := f.GraphQLClient(cmdutil.ConnectEndpoint)
 			if err != nil {
 				return err
 			}
-
-			client := api.NewClient(
-				host,
-				hc.Token,
-				"/api/connect/v1/graphql",
-				cfg.HTTPTimeoutDuration(),
-				cmdutil.TokenRefreshOption(cfg, host, hc),
-			)
 
 			variables := map[string]any{
 				"filter": map[string]any{
-					"state": "ACTIVE",
+					"states": []string{"ACTIVE"},
 				},
 			}
 
-			profiles, totalCount, err := api.Paginate(
+			profiles, totalCount, nextCursor, err := api.Paginate(
 				client,
 				listQuery,
 				variables,
 				flagLimit,
-				func(data json.RawMessage) (*api.Connection[profile], error) {
-					var resp struct {
-						Viewer struct {
-							Profiles api.Connection[profile] `json:"profiles"`
-						} `json:"viewer"`
-					}
-					if err := json.Unmarshal(data, &resp); err != nil {
-						return nil, err
-					}
-
-					return &resp.Viewer.Profiles, nil
-				},
+				flagAfter,
+				api.ViewerConnection[profile]("profiles"),
 			)
 			if err != nil {
 				return err
 			}
 
-			if *flagOutput == cmdutil.OutputJSON {
-				return cmdutil.PrintJSON(f.IOStreams.Out, profiles)
-			}
+			return cmdutil.PrintList(
+				f.IOStreams,
+				*flagOutput,
+				profiles,
+				totalCount,
+				cmdutil.ListView[profile]{
+					Empty:      "No organizations found.",
+					Noun:       "organizations",
+					NextCursor: nextCursor,
+					Headers:    []string{"ID", "NAME", "LEGAL NAME", "ROLE"},
+					Row: func(p profile) ([]string, error) {
+						orgID := ""
+						orgName := ""
+						legalName := ""
 
-			if len(profiles) == 0 {
-				_, _ = fmt.Fprintln(f.IOStreams.Out, "No organizations found.")
-				return nil
-			}
+						if p.Organization != nil {
+							orgID = p.Organization.ID
+							orgName = p.Organization.Name
 
-			rows := make([][]string, 0, len(profiles))
-			for _, p := range profiles {
-				orgID := ""
-				orgName := ""
+							if p.Organization.LegalName != nil {
+								legalName = *p.Organization.LegalName
+							}
+						}
 
-				if p.Organization != nil {
-					orgID = p.Organization.ID
-					orgName = p.Organization.Name
-				}
+						role := ""
+						if p.Membership != nil {
+							role = p.Membership.Role
+						}
 
-				role := ""
-				if p.Membership != nil {
-					role = p.Membership.Role
-				}
-
-				rows = append(rows, []string{
-					orgID,
-					orgName,
-					role,
-				})
-			}
-
-			t := cmdutil.NewTable("ID", "NAME", "ROLE").Rows(rows...)
-
-			_, _ = fmt.Fprintln(f.IOStreams.Out, t)
-
-			if totalCount > len(profiles) {
-				_, _ = fmt.Fprintf(
-					f.IOStreams.ErrOut,
-					"\nShowing %d of %d organizations\n",
-					len(profiles),
-					totalCount,
-				)
-			}
-
-			return nil
+						return []string{
+							orgID,
+							orgName,
+							legalName,
+							role,
+						}, nil
+					},
+				},
+			)
 		},
 	}
 
 	cmd.Flags().IntVarP(&flagLimit, "limit", "L", 30, "Maximum number of organizations to list")
+	cmdutil.AddAfterFlag(cmd, &flagAfter)
 	flagOutput = cmdutil.AddOutputFlag(cmd)
 
 	return cmd

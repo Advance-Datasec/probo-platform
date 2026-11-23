@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -39,11 +45,25 @@ import (
 type GitLabDriver struct {
 	httpClient *http.Client
 	groupID    string
+	baseURL    string
 }
 
 var _ Driver = (*GitLabDriver)(nil)
 
-func NewGitLabDriver(httpClient *http.Client, groupID string) *GitLabDriver {
+const (
+	gitlabGroupsSegment  = "groups"
+	gitlabAllMembersPath = "members/all"
+)
+
+// gitlabDefaultBaseURL is the GitLab SaaS API root. It backs only the
+// exported ListGitLabOrganizations, and only when its caller resolves no
+// APIBase for the provider (unregistered, or registered without one).
+// Every other path goes through the injected baseURL instead.
+const gitlabDefaultBaseURL = "https://gitlab.com/api/v4"
+
+// NewGitLabDriver builds a driver against baseURL, the versioned GitLab API
+// origin (e.g. https://gitlab.com/api/v4).
+func NewGitLabDriver(httpClient *http.Client, groupID, baseURL string) *GitLabDriver {
 	return &GitLabDriver{
 		httpClient: &http.Client{
 			Transport: &retryRoundTripper{
@@ -52,6 +72,7 @@ func NewGitLabDriver(httpClient *http.Client, groupID string) *GitLabDriver {
 			},
 		},
 		groupID: groupID,
+		baseURL: baseURL,
 	}
 }
 
@@ -67,7 +88,7 @@ type gitlabMember struct {
 func (d *GitLabDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error) {
 	var records []AccountRecord
 
-	u, err := url.JoinPath("https://gitlab.com", "api", "v4", "groups", url.PathEscape(d.groupID), "members", "all")
+	u, err := url.JoinPath(d.baseURL, gitlabGroupsSegment, url.PathEscape(d.groupID), gitlabAllMembersPath)
 	if err != nil {
 		return nil, fmt.Errorf("cannot build gitlab members URL: %w", err)
 	}
@@ -103,7 +124,7 @@ func (d *GitLabDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error
 				FullName:    fullName,
 				Roles:       roles,
 				Active:      &active,
-				IsAdmin:     m.AccessLevel >= 50, // 50 = Owner
+				IsAdmin:     new(m.AccessLevel >= 50), // 50 = Owner
 				MFAStatus:   coredata.MFAStatusUnknown,
 				AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
 				AccountType: coredata.AccessReviewEntryAccountTypeUser,
@@ -113,9 +134,14 @@ func (d *GitLabDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error
 			records = append(records, record)
 		}
 
-		next = rfc5988.FindByRel(linkHeader, "next")
-		if next == "" {
+		rawNext := rfc5988.FindByRel(linkHeader, "next")
+		if rawNext == "" {
 			return records, nil
+		}
+
+		next, err = sameHostNextPageURL("gitlab", d.baseURL, rawNext)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -170,4 +196,126 @@ func gitlabRoles(level int) []string {
 	default:
 		return []string{}
 	}
+}
+
+// gitlabNameResolver resolves the GitLab group name.
+type gitlabNameResolver struct {
+	httpClient *http.Client
+	groupID    string
+	baseURL    string
+}
+
+// NewGitLabNameResolver resolves the group name against baseURL, the
+// versioned GitLab API origin (e.g. https://gitlab.com/api/v4).
+func NewGitLabNameResolver(httpClient *http.Client, groupID, baseURL string) NameResolver {
+	return &gitlabNameResolver{httpClient: httpClient, groupID: groupID, baseURL: baseURL}
+}
+
+func (r *gitlabNameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
+	if r.groupID == "" {
+		return "", nil
+	}
+
+	endpoint, err := url.JoinPath(r.baseURL, gitlabGroupsSegment, url.PathEscape(r.groupID))
+	if err != nil {
+		return "", fmt.Errorf("cannot build gitlab group URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("cannot create gitlab group request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	httpResp, err := r.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("cannot execute gitlab group request: %w", err)
+	}
+
+	defer func() { _ = httpResp.Body.Close() }()
+
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return "", nameStatusError("gitlab group", httpResp.StatusCode)
+	}
+
+	var resp struct {
+		Name     string `json:"name"`
+		FullPath string `json:"full_path"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		return "", fmt.Errorf("cannot decode gitlab group response: %w", err)
+	}
+
+	if resp.Name != "" {
+		return resp.Name, nil
+	}
+
+	return resp.FullPath, nil
+}
+
+// ListGitLabOrganizations fetches the GitLab groups the authenticated
+// user owns, from baseURL ("" for GitLab SaaS). Group IDs are int64; we
+// surface them as strings so they fit the Organization.Slug shape.
+func ListGitLabOrganizations(ctx context.Context, httpClient *http.Client, baseURL string) ([]Organization, error) {
+	if baseURL == "" {
+		baseURL = gitlabDefaultBaseURL
+	}
+
+	endpoint, err := url.JoinPath(baseURL, gitlabGroupsSegment)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build gitlab organizations URL: %w", err)
+	}
+
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse gitlab organizations URL: %w", err)
+	}
+
+	q := parsed.Query()
+	q.Set("min_access_level", "50")
+	q.Set("per_page", "100")
+	parsed.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create gitlab organizations request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("cannot fetch gitlab organizations: %w", err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cannot fetch gitlab organizations: unexpected status %d", resp.StatusCode)
+	}
+
+	var groups []struct {
+		ID       int64  `json:"id"`
+		Name     string `json:"name"`
+		FullPath string `json:"full_path"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&groups); err != nil {
+		return nil, fmt.Errorf("cannot decode gitlab organizations response: %w", err)
+	}
+
+	result := make([]Organization, len(groups))
+	for i, g := range groups {
+		displayName := g.Name
+		if displayName == "" {
+			displayName = g.FullPath
+		}
+
+		result[i] = Organization{
+			Slug:        strconv.FormatInt(g.ID, 10),
+			DisplayName: displayName,
+		}
+	}
+
+	return result, nil
 }

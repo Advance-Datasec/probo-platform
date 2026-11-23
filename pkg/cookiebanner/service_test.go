@@ -1,27 +1,35 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package cookiebanner
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/gid"
+	"go.probo.inc/probo/pkg/validator"
 )
 
 func TestSnapshotsEqual(t *testing.T) {
@@ -102,6 +110,17 @@ func TestSnapshotsEqual(t *testing.T) {
 		a.Categories[0].GCMConsentTypes = []string{"analytics_storage", "ad_storage"}
 		b := baseSnapshot()
 		b.Categories[0].GCMConsentTypes = []string{"ad_storage", "analytics_storage"}
+
+		assert.False(t, snapshotsEqual(a, b))
+	})
+
+	t.Run("differing TCFPurposeIDs order is not equal", func(t *testing.T) {
+		t.Parallel()
+
+		a := baseSnapshot()
+		a.Categories[0].TCFPurposeIDs = []int{1, 7, 8}
+		b := baseSnapshot()
+		b.Categories[0].TCFPurposeIDs = []int{7, 1, 8}
 
 		assert.False(t, snapshotsEqual(a, b))
 	})
@@ -254,8 +273,8 @@ func TestBuildSnapshot_RankInvariant(t *testing.T) {
 	t.Run("snapshot is identical regardless of rank values", func(t *testing.T) {
 		t.Parallel()
 
-		original := buildSnapshot(banner, mkCategories(0, 1, 2, 3), nil)
-		shuffled := buildSnapshot(banner, mkCategories(99, 50, 25, 10), nil)
+		original := buildSnapshot(banner, mkCategories(0, 1, 2, 3), nil, nil)
+		shuffled := buildSnapshot(banner, mkCategories(99, 50, 25, 10), nil, nil)
 
 		assert.True(t, snapshotsEqual(original, shuffled), "rank changes must not affect the snapshot")
 	})
@@ -266,8 +285,8 @@ func TestBuildSnapshot_RankInvariant(t *testing.T) {
 		ordered := mkCategories(0, 1, 2, 3)
 		reversed := coredata.CookieCategories{ordered[3], ordered[2], ordered[1], ordered[0]}
 
-		a := buildSnapshot(banner, ordered, nil)
-		b := buildSnapshot(banner, reversed, nil)
+		a := buildSnapshot(banner, ordered, nil, nil)
+		b := buildSnapshot(banner, reversed, nil, nil)
 
 		assert.True(t, snapshotsEqual(a, b))
 	})
@@ -276,72 +295,139 @@ func TestBuildSnapshot_RankInvariant(t *testing.T) {
 		t.Parallel()
 
 		consentOnly := mkCategories(0, 1, 2, 3)[:3]
-		snap := buildSnapshot(banner, consentOnly, nil)
+		snap := buildSnapshot(banner, consentOnly, nil, nil)
 
 		require.Len(t, snap.Categories, 3)
 		assert.Equal(t, coredata.CookieCategoryKindNecessary, snap.Categories[0].Kind)
 	})
+
+	t.Run("sorts iab vendor ids so selection order does not matter", func(t *testing.T) {
+		t.Parallel()
+
+		a := buildSnapshot(banner, mkCategories(0, 1, 2, 3), nil, []int{755, 52})
+		b := buildSnapshot(banner, mkCategories(0, 1, 2, 3), nil, []int{52, 755})
+
+		assert.True(t, snapshotsEqual(a, b))
+		assert.Equal(t, []int{52, 755}, a.IABVendorIDs)
+	})
+
+	t.Run("nil TCFPurposeIDs equals an empty-slice snapshot", func(t *testing.T) {
+		t.Parallel()
+
+		nilIDs := mkCategories(0, 1, 2, 3)[:1]
+		emptyIDs := mkCategories(0, 1, 2, 3)[:1]
+		nilIDs[0].TCFPurposeIDs = nil
+		emptyIDs[0].TCFPurposeIDs = []int{}
+
+		a := buildSnapshot(banner, nilIDs, nil, nil)
+		b := buildSnapshot(banner, emptyIDs, nil, nil)
+
+		assert.Equal(t, []int{}, a.Categories[0].TCFPurposeIDs)
+		assert.True(t, snapshotsEqual(a, b))
+	})
 }
 
-func TestRemapTextsForConsentMode(t *testing.T) {
+func TestRecordConsentRequest_Validate(t *testing.T) {
 	t.Parallel()
 
-	baseTexts := func() map[string]string {
-		return map[string]string{
-			"banner_title":       "We use cookies",
-			"banner_description": "This site uses cookies.",
-			"button_accept_all":  "Accept All",
-			"button_reject_all":  "Reject All",
-			"button_customize":   "Customize",
-			"button_dismiss":     "Dismiss",
-		}
-	}
-
-	t.Run("opt in mode keeps all buttons", func(t *testing.T) {
+	t.Run("rejects empty visitor id", func(t *testing.T) {
 		t.Parallel()
 
-		texts := baseTexts()
-		remapTextsForConsentMode(texts, ConsentModeOptIn)
+		req := RecordConsentRequest{
+			Version:   1,
+			VisitorID: "",
+			Action:    coredata.CookieConsentActionAcceptAll,
+		}
 
-		assert.Equal(t, "Accept All", texts["button_accept_all"])
-		assert.Equal(t, "Reject All", texts["button_reject_all"])
-		assert.Equal(t, "Customize", texts["button_customize"])
+		err := req.Validate()
+		require.Error(t, err)
+
+		validationErrors, ok := errors.AsType[validator.ValidationErrors](err)
+		require.True(t, ok)
+		assert.NotEmpty(t, validationErrors.ByField("visitor_id"))
 	})
 
-	t.Run("opt out mode maps opt out to reject and clears customize", func(t *testing.T) {
+	t.Run("rejects invalid action", func(t *testing.T) {
 		t.Parallel()
 
-		texts := baseTexts()
-		texts["button_opt_out"] = "Do Not Sell"
-		remapTextsForConsentMode(texts, ConsentModeOptOut)
+		req := RecordConsentRequest{
+			Version:   1,
+			VisitorID: "visitor-1",
+			Action:    coredata.CookieConsentAction("NOT_A_REAL_ACTION"),
+		}
 
-		assert.Equal(t, "Do Not Sell", texts["button_reject_all"])
-		assert.Empty(t, texts["button_customize"])
+		err := req.Validate()
+		require.Error(t, err)
+
+		validationErrors, ok := errors.AsType[validator.ValidationErrors](err)
+		require.True(t, ok)
+		assert.NotEmpty(t, validationErrors.ByField("action"))
 	})
 }
 
-func TestIsLegacySDK(t *testing.T) {
+func TestBuildBannerConfig_TCF(t *testing.T) {
+	t.Parallel()
+
+	tenant := gid.NewTenantID()
+	bannerID := gid.New(tenant, coredata.CookieBannerEntityType)
+	snapshot := coredata.CookieBannerVersionSnapshot{
+		CookiePolicyURL:   "https://example.com/cookies",
+		ConsentExpiryDays: 365,
+		DefaultLanguage:   "en",
+	}
+	version := &coredata.CookieBannerVersion{Version: 1}
+
+	t.Run("leaves tcf unset until attach", func(t *testing.T) {
+		t.Parallel()
+
+		banner := &coredata.CookieBanner{
+			ID: bannerID,
+			Capabilities: coredata.CookieBannerCapabilities{
+				ResourceReporting: true,
+				TCF:               true,
+			},
+		}
+
+		config := buildBannerConfig(banner, version, &snapshot, nil, "en")
+		assert.Nil(t, config.TCF)
+		assert.True(t, config.ResourceReportingEnabled)
+	})
+
+	t.Run("defaults to disabled", func(t *testing.T) {
+		t.Parallel()
+
+		banner := &coredata.CookieBanner{
+			ID:           bannerID,
+			Capabilities: coredata.DefaultCookieBannerCapabilities(),
+		}
+
+		config := buildBannerConfig(banner, version, &snapshot, nil, "en")
+		assert.Nil(t, config.TCF)
+	})
+}
+
+func TestTCFServesGVL_Scenario(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		version string
-		want    bool
+		name       string
+		regulation Regulation
+		want       bool
 	}{
-		{"0.1.0", true},
-		{"0.2.0", true},
-		{"0.2.5", true},
-		{"0.3.0", false},
-		{"1.0.0", false},
-		{"", false},
-		{"invalid", false},
-		{"v0.2.0", true},
+		{name: "gdpr", regulation: RegulationGDPR, want: true},
+		{name: "uk gdpr", regulation: RegulationUKGDPR, want: true},
+		{name: "ccpa", regulation: RegulationCCPA, want: false},
+		{name: "none", regulation: RegulationNone, want: false},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.version, func(t *testing.T) {
-			t.Parallel()
+		t.Run(
+			tt.name,
+			func(t *testing.T) {
+				t.Parallel()
 
-			assert.Equal(t, tt.want, isLegacySDK(tt.version))
-		})
+				assert.Equal(t, tt.want, tcfServesGVL(tt.regulation))
+			},
+		)
 	}
 }

@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_test
 
@@ -97,6 +103,8 @@ func TestOAuth2_Discovery(t *testing.T) {
 	assert.Contains(t, discovery.ClaimsSupported, "email_verified")
 	assert.Contains(t, discovery.ClaimsSupported, "name")
 	assert.True(t, discovery.ClientIDMetadataDocumentSupported)
+	assert.True(t, discovery.AuthorizationResponseIssuerSupported)
+	assert.Equal(t, []string{owner.BaseURL()}, discovery.ProtectedResources)
 }
 
 func TestOAuth2_ProtectedResourceMetadata(t *testing.T) {
@@ -117,6 +125,30 @@ func TestOAuth2_ProtectedResourceMetadata(t *testing.T) {
 	assert.Contains(t, metadata.ScopesSupported, "v1:document")
 	assert.NotContains(t, metadata.ScopesSupported, "v1:document:read")
 	assert.NotContains(t, metadata.ScopesSupported, "profile")
+
+	resource, err := url.JoinPath(owner.BaseURL(), "api", "mcp", "v1")
+	require.NoError(t, err)
+	resp, err := owner.HTTPClient().Get(resource)
+	require.NoError(t, err)
+
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	assert.Contains(
+		t,
+		resp.Header.Get("WWW-Authenticate"),
+		"/.well-known/oauth-protected-resource",
+	)
+
+	mcpMetadata, mcpRaw, err := testutil.OAuth2ProtectedResourceMetadataAt(
+		owner,
+		"/.well-known/oauth-protected-resource/api/mcp/v1",
+	)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, mcpRaw.StatusCode)
+	require.NotNil(t, mcpMetadata)
+	assert.Equal(t, resource, mcpMetadata.Resource)
+	assert.Contains(t, mcpMetadata.AuthorizationServers, expectedResource)
 }
 
 func TestOAuth2_RegisterClientWithAPIScope(t *testing.T) {
@@ -132,7 +164,7 @@ func TestOAuth2_RegisterClientWithAPIScope(t *testing.T) {
 		"grant_types":                []string{"authorization_code"},
 		"response_types":             []string{"code"},
 		"token_endpoint_auth_method": "client_secret_basic",
-		"scopes":                     "openid v1:document:read",
+		"scope":                      "openid v1:document:read",
 	})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, raw.StatusCode)
@@ -264,6 +296,303 @@ func TestOAuth2_AuthorizationCodeFlow(t *testing.T) {
 			assert.Equal(t, "Bearer", tokenResp.TokenType)
 			assert.Greater(t, tokenResp.ExpiresIn, int64(0))
 			assert.Contains(t, tokenResp.Scope, "openid")
+		},
+	)
+
+	t.Run(
+		"root resource works across APIs",
+		func(t *testing.T) {
+			t.Parallel()
+
+			client := factory.CreateOAuth2ClientWithAPIScopes(
+				owner,
+				"v1:iam:read offline_access",
+				nil,
+			)
+			redirectURI := "http://localhost:9999/callback"
+			verifier, challenge := testutil.GeneratePKCE()
+			resource := owner.BaseURL()
+			wrongResource, err := url.JoinPath(owner.BaseURL(), "api", "mcp", "v1")
+			require.NoError(t, err)
+
+			params := url.Values{
+				"client_id":             {client.ClientID},
+				"redirect_uri":          {redirectURI},
+				"resource":              {resource},
+				"response_type":         {"code"},
+				"scope":                 {"v1:iam:read offline_access"},
+				"state":                 {"resource-test"},
+				"code_challenge":        {challenge},
+				"code_challenge_method": {"S256"},
+			}
+
+			authResp, err := testutil.OAuth2Authorize(owner, params)
+			require.NoError(t, err)
+			require.True(t, testutil.IsConsentRedirect(authResp))
+
+			consentID, err := testutil.ExtractConsentIDFromResponse(authResp)
+			require.NoError(t, err)
+			consentResp, err := testutil.OAuth2ConsentApprove(owner, consentID)
+			require.NoError(t, err)
+
+			location, err := url.Parse(consentResp.Header.Get("Location"))
+			require.NoError(t, err)
+			assert.Equal(t, owner.BaseURL(), location.Query().Get("iss"))
+
+			code, err := testutil.OAuth2AuthorizeCodeFromRedirect(consentResp)
+			require.NoError(t, err)
+
+			_, wrongResourceRaw, err := testutil.OAuth2TokenWithCodeForResource(
+				owner,
+				client.ClientID,
+				client.ClientSecret,
+				code,
+				redirectURI,
+				verifier,
+				wrongResource,
+			)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusBadRequest, wrongResourceRaw.StatusCode)
+			assert.Contains(t, string(wrongResourceRaw.Body), `"error":"invalid_target"`)
+
+			tokenResp, raw, err := testutil.OAuth2TokenWithCodeForResource(
+				owner,
+				client.ClientID,
+				client.ClientSecret,
+				code,
+				redirectURI,
+				verifier,
+				resource,
+			)
+			require.NoError(t, err)
+			require.Equal(t, http.StatusOK, raw.StatusCode, string(raw.Body))
+			assert.NotEmpty(t, tokenResp.AccessToken)
+			assert.NotEmpty(t, tokenResp.RefreshToken)
+
+			userinfoURL, err := url.JoinPath(
+				owner.BaseURL(),
+				"api",
+				"connect",
+				"v1",
+				"oauth2",
+				"userinfo",
+			)
+			require.NoError(t, err)
+			userinfoReq, err := http.NewRequest(http.MethodGet, userinfoURL, nil)
+			require.NoError(t, err)
+			userinfoReq.Header.Set("Authorization", "Bearer "+tokenResp.AccessToken)
+			userinfoResp, err := owner.HTTPClient().Do(userinfoReq)
+			require.NoError(t, err)
+
+			defer func() { _ = userinfoResp.Body.Close() }()
+
+			assert.Equal(t, http.StatusOK, userinfoResp.StatusCode)
+
+			fileURL, err := url.JoinPath(owner.BaseURL(), "api", "files", "v1", "not-a-gid")
+			require.NoError(t, err)
+			fileReq, err := http.NewRequest(http.MethodGet, fileURL, nil)
+			require.NoError(t, err)
+			fileReq.Header.Set("Authorization", "Bearer "+tokenResp.AccessToken)
+			fileResp, err := owner.HTTPClient().Do(fileReq)
+			require.NoError(t, err)
+
+			defer func() { _ = fileResp.Body.Close() }()
+
+			assert.Equal(t, http.StatusNotFound, fileResp.StatusCode)
+
+			_, wrongResourceRaw, err = testutil.OAuth2TokenWithRefreshTokenForResource(
+				owner,
+				client.ClientID,
+				client.ClientSecret,
+				tokenResp.RefreshToken,
+				wrongResource,
+			)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusBadRequest, wrongResourceRaw.StatusCode)
+			assert.Contains(t, string(wrongResourceRaw.Body), `"error":"invalid_target"`)
+
+			refreshed, raw, err := testutil.OAuth2TokenWithRefreshTokenForResource(
+				owner,
+				client.ClientID,
+				client.ClientSecret,
+				tokenResp.RefreshToken,
+				resource,
+			)
+			require.NoError(t, err)
+			require.Equal(t, http.StatusOK, raw.StatusCode, string(raw.Body))
+
+			mcpClient := testutil.NewMCPClientWithAccessToken(t, owner, refreshed.AccessToken)
+
+			var result struct {
+				Organizations []struct {
+					ID string `json:"id"`
+				} `json:"organizations"`
+			}
+			mcpClient.CallToolInto("listOrganizations", map[string]any{}, &result)
+			assert.NotEmpty(t, result.Organizations)
+		},
+	)
+
+	t.Run(
+		"mcp resource is accepted",
+		func(t *testing.T) {
+			t.Parallel()
+
+			client := factory.CreateOAuth2ClientWithAPIScopes(owner, "v1:iam:read", nil)
+			redirectURI := "http://localhost:9999/callback"
+			verifier, challenge := testutil.GeneratePKCE()
+			mcpResource, err := url.JoinPath(owner.BaseURL(), "api", "mcp", "v1")
+			require.NoError(t, err)
+
+			params := url.Values{
+				"client_id":             {client.ClientID},
+				"redirect_uri":          {redirectURI},
+				"resource":              {mcpResource},
+				"response_type":         {"code"},
+				"scope":                 {"v1:iam:read"},
+				"state":                 {"mcp-resource-test"},
+				"code_challenge":        {challenge},
+				"code_challenge_method": {"S256"},
+			}
+
+			authResp, err := testutil.OAuth2Authorize(owner, params)
+			require.NoError(t, err)
+			require.True(t, testutil.IsConsentRedirect(authResp))
+
+			consentID, err := testutil.ExtractConsentIDFromResponse(authResp)
+			require.NoError(t, err)
+			consentResp, err := testutil.OAuth2ConsentApprove(owner, consentID)
+			require.NoError(t, err)
+
+			code, err := testutil.OAuth2AuthorizeCodeFromRedirect(consentResp)
+			require.NoError(t, err)
+
+			tokenResp, raw, err := testutil.OAuth2TokenWithCodeForResource(
+				owner,
+				client.ClientID,
+				client.ClientSecret,
+				code,
+				redirectURI,
+				verifier,
+				mcpResource,
+			)
+			require.NoError(t, err)
+			require.Equal(t, http.StatusOK, raw.StatusCode, string(raw.Body))
+
+			mcpClient := testutil.NewMCPClientWithAccessToken(t, owner, tokenResp.AccessToken)
+
+			var result struct {
+				Organizations []struct {
+					ID string `json:"id"`
+				} `json:"organizations"`
+			}
+			mcpClient.CallToolInto("listOrganizations", map[string]any{}, &result)
+			assert.NotEmpty(t, result.Organizations)
+		},
+	)
+
+	t.Run(
+		"omitted resource defaults to root",
+		func(t *testing.T) {
+			t.Parallel()
+
+			client := factory.CreateOAuth2ClientWithAPIScopes(owner, "v1:iam:read", nil)
+			tokenResp := testutil.OAuth2PerformAuthorizationCodeFlowWithScopes(
+				t,
+				owner,
+				client.ClientID,
+				client.ClientSecret,
+				"http://localhost:9999/callback",
+				"v1:iam:read",
+			)
+
+			mcpClient := testutil.NewMCPClientWithAccessToken(t, owner, tokenResp.AccessToken)
+
+			var result struct {
+				Organizations []struct {
+					ID string `json:"id"`
+				} `json:"organizations"`
+			}
+			mcpClient.CallToolInto("listOrganizations", map[string]any{}, &result)
+			assert.NotEmpty(t, result.Organizations)
+		},
+	)
+
+	t.Run(
+		"multiple resources redirect with issuer",
+		func(t *testing.T) {
+			t.Parallel()
+
+			client := factory.CreateOAuth2Client(owner, nil)
+			redirectURI := "http://localhost:9999/callback"
+			_, challenge := testutil.GeneratePKCE()
+			params := url.Values{
+				"client_id":             {client.ClientID},
+				"redirect_uri":          {redirectURI},
+				"response_type":         {"code"},
+				"scope":                 {"openid"},
+				"state":                 {"multiple-resource-test"},
+				"code_challenge":        {challenge},
+				"code_challenge_method": {"S256"},
+				"resource": {
+					owner.BaseURL(),
+					"https://other.example.com/api/mcp/v1",
+				},
+			}
+
+			authResp, err := testutil.OAuth2Authorize(owner, params)
+			require.NoError(t, err)
+			require.Equal(t, http.StatusFound, authResp.StatusCode)
+
+			location, err := url.Parse(authResp.Header.Get("Location"))
+			require.NoError(t, err)
+			assert.Equal(t, "invalid_target", location.Query().Get("error"))
+			assert.Equal(t, owner.BaseURL(), location.Query().Get("iss"))
+		},
+	)
+
+	t.Run(
+		"duplicate resource parameters are accepted",
+		func(t *testing.T) {
+			t.Parallel()
+
+			client := factory.CreateOAuth2Client(owner, nil)
+			redirectURI := "http://localhost:9999/callback"
+			verifier, challenge := testutil.GeneratePKCE()
+			resources := []string{owner.BaseURL(), owner.BaseURL()}
+			params := url.Values{
+				"client_id":             {client.ClientID},
+				"redirect_uri":          {redirectURI},
+				"response_type":         {"code"},
+				"scope":                 {"openid"},
+				"state":                 {"duplicate-resource-test"},
+				"code_challenge":        {challenge},
+				"code_challenge_method": {"S256"},
+				"resource":              resources,
+			}
+
+			authResp, err := testutil.OAuth2Authorize(owner, params)
+			require.NoError(t, err)
+			require.True(t, testutil.IsConsentRedirect(authResp))
+			consentID, err := testutil.ExtractConsentIDFromResponse(authResp)
+			require.NoError(t, err)
+			consentResp, err := testutil.OAuth2ConsentApprove(owner, consentID)
+			require.NoError(t, err)
+			code, err := testutil.OAuth2AuthorizeCodeFromRedirect(consentResp)
+			require.NoError(t, err)
+
+			tokenResp, raw, err := testutil.OAuth2TokenWithCodeForResources(
+				owner,
+				client.ClientID,
+				client.ClientSecret,
+				code,
+				redirectURI,
+				verifier,
+				resources,
+			)
+			require.NoError(t, err)
+			require.Equal(t, http.StatusOK, raw.StatusCode, string(raw.Body))
+			assert.NotEmpty(t, tokenResp.AccessToken)
 		},
 	)
 
@@ -746,6 +1075,7 @@ func TestOAuth2_Introspect(t *testing.T) {
 			assert.Greater(t, introspect.Exp, int64(0))
 			assert.NotEmpty(t, introspect.Scope, "introspection should return scope")
 			assert.Equal(t, client.ClientID, introspect.ClientID, "introspection should return client_id")
+			assert.Equal(t, []string{owner.BaseURL()}, introspect.Audiences)
 		},
 	)
 
@@ -866,6 +1196,7 @@ func TestOAuth2_Introspect(t *testing.T) {
 			assert.NotEmpty(t, introspect.Sub)
 			assert.Greater(t, introspect.Exp, int64(0))
 			assert.NotEmpty(t, introspect.Scope)
+			assert.Equal(t, []string{owner.BaseURL()}, introspect.Audiences)
 		},
 	)
 
@@ -1807,6 +2138,42 @@ func TestOAuth2_Security(t *testing.T) {
 	)
 
 	t.Run(
+		"private client rejects non-member at device verify",
+		func(t *testing.T) {
+			t.Parallel()
+
+			client := factory.CreatePublicOAuth2Client(owner, nil)
+
+			deviceResp, raw, err := testutil.OAuth2DeviceAuth(
+				owner,
+				client.ClientID,
+				"openid",
+			)
+			require.NoError(t, err)
+			require.Equal(t, http.StatusOK, raw.StatusCode, "device auth failed: %s", string(raw.Body))
+			require.NotNil(t, deviceResp)
+
+			otherOwner := testutil.NewClient(t, testutil.RoleOwner)
+
+			verifyResp, err := testutil.OAuth2DeviceVerify(otherOwner, deviceResp.UserCode)
+			require.NoError(t, err)
+			assert.Contains(t, strings.ToLower(string(verifyResp.Body)), "error",
+				"a member of another organization must not authorize a private client")
+			assert.NotContains(t, string(verifyResp.Body), `"success":true`)
+
+			_, errResp, _, err := testutil.OAuth2TokenWithDeviceCode(
+				owner,
+				client.ClientID,
+				deviceResp.DeviceCode,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, errResp)
+			assert.Equal(t, "authorization_pending", errResp.Code,
+				"a rejected device authorization must not issue a token")
+		},
+	)
+
+	t.Run(
 		"private client rejects non-member at authorize",
 		func(t *testing.T) {
 			t.Parallel()
@@ -2410,44 +2777,55 @@ func TestOAuth2_RegisterClient_EdgeCases(t *testing.T) {
 	owner := testutil.NewClient(t, testutil.RoleOwner)
 
 	t.Run(
-		"public client with http redirect URI rejected",
+		"public visibility is rejected",
 		func(t *testing.T) {
 			t.Parallel()
 
-			_, raw, err := testutil.OAuth2RegisterClient(owner, map[string]any{
-				"organization_id":            owner.GetOrganizationID().String(),
-				"client_name":                factory.SafeName("Public HTTP"),
-				"visibility":                 "public",
-				"redirect_uris":              []string{"http://example.com/callback"},
-				"grant_types":                []string{"authorization_code"},
-				"response_types":             []string{"code"},
-				"token_endpoint_auth_method": "none",
-				"scopes":                     "openid",
-			})
-			require.NoError(t, err)
-			assert.Equal(t, http.StatusBadRequest, raw.StatusCode,
-				"public clients must require https redirect URIs")
+			for _, redirectURI := range []string{
+				"http://example.com/callback",
+				"https://example.com/callback",
+				"https://redirect.invalid/callback",
+			} {
+				_, raw, err := testutil.OAuth2RegisterClient(owner, map[string]any{
+					"organization_id":            owner.GetOrganizationID().String(),
+					"client_name":                factory.SafeName("Public Client"),
+					"visibility":                 "public",
+					"redirect_uris":              []string{redirectURI},
+					"grant_types":                []string{"authorization_code"},
+					"response_types":             []string{"code"},
+					"token_endpoint_auth_method": "none",
+					"scopes":                     "openid",
+				})
+				require.NoError(t, err)
+				assert.Equal(t, http.StatusBadRequest, raw.StatusCode,
+					"public visibility must be rejected for %s, body: %s", redirectURI, string(raw.Body))
+
+				var errResp testutil.OAuth2ErrorResponse
+				require.NoError(t, json.Unmarshal(raw.Body, &errResp))
+				assert.Equal(t, "invalid_request", errResp.Code)
+				assert.Contains(t, errResp.Description, "must be private")
+			}
 		},
 	)
 
 	t.Run(
-		"public client with https redirect URI accepted",
+		"omitted visibility defaults to private",
 		func(t *testing.T) {
 			t.Parallel()
 
 			resp, raw, err := testutil.OAuth2RegisterClient(owner, map[string]any{
 				"organization_id":            owner.GetOrganizationID().String(),
-				"client_name":                factory.SafeName("Public HTTPS"),
-				"visibility":                 "public",
+				"client_name":                factory.SafeName("Default Visibility"),
 				"redirect_uris":              []string{"https://example.com/callback"},
 				"grant_types":                []string{"authorization_code"},
 				"response_types":             []string{"code"},
-				"token_endpoint_auth_method": "none",
+				"token_endpoint_auth_method": "client_secret_basic",
 				"scopes":                     "openid",
 			})
 			require.NoError(t, err)
 			require.Equal(t, http.StatusCreated, raw.StatusCode, "body: %s", string(raw.Body))
-			assert.NotEmpty(t, resp.ClientID)
+			assert.Equal(t, "private", resp.Visibility)
+			assert.NotEmpty(t, resp.ClientSecret)
 		},
 	)
 }
@@ -2509,8 +2887,8 @@ func TestOAuth2_IDTokenClaims(t *testing.T) {
 				"ID token must contain email when email scope is requested")
 			require.NotNil(t, claims.EmailVerified,
 				"ID token must contain email_verified when email scope is requested")
-			assert.False(t, *claims.EmailVerified,
-				"email_verified must be false for unverified e2e test identity")
+			assert.True(t, *claims.EmailVerified,
+				"email_verified must reflect the verified e2e test identity")
 			assert.NotEmpty(t, claims.Name,
 				"ID token must contain name when profile scope is requested")
 		},
@@ -2601,8 +2979,8 @@ func TestOAuth2_IDTokenClaims(t *testing.T) {
 				"refresh ID token must contain email when email scope is present")
 			require.NotNil(t, claims.EmailVerified,
 				"refresh ID token must contain email_verified when email scope is present")
-			assert.False(t, *claims.EmailVerified,
-				"email_verified must be false for unverified e2e test identity")
+			assert.True(t, *claims.EmailVerified,
+				"email_verified must reflect the verified e2e test identity")
 			assert.NotEmpty(t, claims.Name,
 				"refresh ID token must contain name when profile scope is present")
 		},

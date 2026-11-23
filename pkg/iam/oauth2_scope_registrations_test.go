@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package iam_test
 
@@ -19,11 +25,15 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"go.probo.inc/probo/pkg/accessreview"
-	"go.probo.inc/probo/pkg/agentrun"
+	"go.probo.inc/probo/pkg/agentexecution"
 	"go.probo.inc/probo/pkg/coredata"
+	employeeportalmgmt "go.probo.inc/probo/pkg/employeeportal/management"
 	"go.probo.inc/probo/pkg/iam"
 	"go.probo.inc/probo/pkg/iam/oauth2scope"
+	"go.probo.inc/probo/pkg/itam"
 	"go.probo.inc/probo/pkg/probo"
+	"go.probo.inc/probo/pkg/riskmanagement"
+	"go.probo.inc/probo/pkg/task"
 )
 
 func allRegisteredOAuth2ScopeRegistries() *oauth2scope.Registry {
@@ -31,7 +41,11 @@ func allRegisteredOAuth2ScopeRegistries() *oauth2scope.Registry {
 		Register(iam.IAMOAuth2ScopeMappings).
 		Register(probo.OAuth2ScopeMappings).
 		Register(accessreview.OAuth2ScopeMappings).
-		Register(agentrun.OAuth2ScopeMappings)
+		Register(agentexecution.OAuth2ScopeMappings).
+		Register(itam.OAuth2ScopeMappings).
+		Register(employeeportalmgmt.OAuth2ScopeMappings).
+		Register(riskmanagement.OAuth2ScopeMappings).
+		Register(task.OAuth2ScopeMappings)
 }
 
 func TestRegisteredOAuth2ScopeRegistries_OrganizationRead(t *testing.T) {
@@ -55,4 +69,45 @@ func TestRegisteredOAuth2ScopeRegistries_UnmappedActionDenies(t *testing.T) {
 	}
 
 	assert.False(t, reg.Allows(tokenScopes, "core:unmapped:action"))
+}
+
+func TestRegisteredOAuth2ScopeRegistries_EmployeePortal(t *testing.T) {
+	t.Parallel()
+
+	reg := allRegisteredOAuth2ScopeRegistries()
+
+	assert.True(t, reg.Allows(coredata.OAuth2Scopes{employeeportalmgmt.ScopeV1EmployeePortal}, employeeportalmgmt.ActionEmployeePortalUpdate))
+	assert.False(t, reg.Allows(coredata.OAuth2Scopes{employeeportalmgmt.ScopeV1EmployeePortalRead}, employeeportalmgmt.ActionEmployeePortalUpdate))
+	assert.True(t, reg.Allows(coredata.OAuth2Scopes{employeeportalmgmt.ScopeV1EmployeePortalRead}, employeeportalmgmt.ActionEmployeePortalGet))
+}
+
+func TestRegisteredOAuth2ScopeRegistries_ITAMDeviceDelete(t *testing.T) {
+	t.Parallel()
+
+	reg := allRegisteredOAuth2ScopeRegistries()
+
+	assert.True(t, reg.Allows(coredata.OAuth2Scopes{itam.ScopeV1ITAM}, itam.ActionDeviceDelete))
+	assert.False(t, reg.Allows(coredata.OAuth2Scopes{itam.ScopeV1ITAMRead}, itam.ActionDeviceDelete))
+	assert.True(t, reg.Allows(coredata.OAuth2Scopes{itam.ScopeV1ITAMRead}, itam.ActionDeviceGet))
+}
+
+func TestRegisteredOAuth2ScopeRegistries_EvidenceOnControlNotTask(t *testing.T) {
+	t.Parallel()
+
+	reg := allRegisteredOAuth2ScopeRegistries()
+
+	assert.False(t, reg.Allows(coredata.OAuth2Scopes{probo.ScopeV1TaskRead}, probo.ActionEvidenceList))
+	assert.False(t, reg.Allows(coredata.OAuth2Scopes{probo.ScopeV1Task}, probo.ActionEvidenceList))
+	assert.False(t, reg.Allows(coredata.OAuth2Scopes{probo.ScopeV1Task}, probo.ActionEvidenceDelete))
+
+	assert.True(t, reg.Allows(coredata.OAuth2Scopes{probo.ScopeV1ControlRead}, probo.ActionEvidenceList))
+	assert.False(t, reg.Allows(coredata.OAuth2Scopes{probo.ScopeV1ControlRead}, probo.ActionEvidenceDelete))
+	assert.True(t, reg.Allows(coredata.OAuth2Scopes{probo.ScopeV1Control}, probo.ActionEvidenceList))
+	assert.True(t, reg.Allows(coredata.OAuth2Scopes{probo.ScopeV1Control}, probo.ActionEvidenceDelete))
+	assert.True(t, reg.Allows(coredata.OAuth2Scopes{probo.ScopeV1Control}, probo.ActionInternalControlEvidenceUpload))
+
+	assert.True(t, reg.Allows(coredata.OAuth2Scopes{probo.ScopeV1ControlRead}, iam.ActionMembershipProfileGet))
+	assert.True(t, reg.Allows(coredata.OAuth2Scopes{probo.ScopeV1Control}, iam.ActionMembershipProfileGet))
+	assert.False(t, reg.Allows(coredata.OAuth2Scopes{probo.ScopeV1Control}, iam.ActionMembershipProfileList))
+	assert.False(t, reg.Allows(coredata.OAuth2Scopes{probo.ScopeV1Control}, iam.ActionMembershipProfileUpdate))
 }

@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package iam
 
@@ -18,6 +24,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.gearno.de/kit/pg"
@@ -26,6 +33,7 @@ import (
 	"go.probo.inc/probo/pkg/crypto/hash"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/mail"
+	"go.probo.inc/probo/pkg/page"
 	"go.probo.inc/probo/pkg/statelesstoken"
 	"go.probo.inc/probo/pkg/validator"
 )
@@ -45,8 +53,13 @@ type (
 		NewPassword     string
 	}
 
-	ActivateAccountRequest struct {
+	ActivateAccountFromInvitationRequest struct {
 		InvitationToken string
+	}
+
+	AcceptInvitationRequest struct {
+		IdentityID     gid.GID
+		OrganizationID gid.GID
 	}
 
 	CreateIdentityWithPasswordRequest struct {
@@ -56,20 +69,12 @@ type (
 	}
 
 	SendMagicLinkRequest struct {
-		Email   mail.Addr
-		URLPath string
-		// Console sign-in happens before an organization is chosen, so this is
-		// optional. When nil the email copy omits the organization entirely.
-		OrganizationID *gid.GID
-		Continue       *string
-		// If users tries to connect to compliance page, we must brand the emails accordingly
-		CompliancePageID *gid.GID
-		// Restricts the link to identities with an active membership profile, i.e.
-		// people who accepted an invitation and have not been deactivated. Set by
-		// the console, where magic links are a sign-in method rather than a way to
-		// self-register; the compliance page leaves it false so visitors can still
-		// provision themselves on first use.
-		RequireActiveProfile bool
+		Email    mail.Addr
+		URLPath  string
+		Continue *string
+		// OAuth2ClientIDRaw brands connect authorize magic-link emails.
+		OAuth2ClientIDRaw *string
+		MagicLinkBaseURL  *string
 	}
 
 	PasswordResetData struct {
@@ -79,10 +84,6 @@ type (
 	MagicLinkData struct {
 		Email    mail.Addr `json:"email"`
 		Continue *string   `json:"continue"`
-		// Carried in the signed token rather than passed to the redeeming call so
-		// the restriction cannot be dropped by redeeming a console-issued link
-		// through the compliance page endpoint.
-		RequireActiveProfile bool `json:"requireActiveProfile,omitempty"`
 	}
 )
 
@@ -90,13 +91,15 @@ const (
 	TokenTypeOrganizationInvitation = "organization_invitation"
 	TokenTypePasswordReset          = "password_reset"
 	TokenTypeMagicLink              = "magic_link"
+
+	magicLinkDefaultSenderName = "Probo"
 )
 
 func NewAuthService(svc *Service) *AuthService {
 	return &AuthService{Service: svc}
 }
 
-func (req ActivateAccountRequest) Validate() error {
+func (req ActivateAccountFromInvitationRequest) Validate() error {
 	v := validator.New()
 
 	v.Check(req.InvitationToken, "invitationToken", validator.NotEmpty())
@@ -124,7 +127,9 @@ func (req ChangePasswordRequest) Validate() error {
 	return v.Error()
 }
 
-func (req CreateIdentityWithPasswordRequest) Validate() error {
+func (req *CreateIdentityWithPasswordRequest) Validate() error {
+	req.FullName = strings.TrimSpace(req.FullName)
+
 	v := validator.New()
 
 	v.Check(req.FullName, "fullName", validator.NotEmpty(), validator.MinLen(1), validator.MaxLen(255))
@@ -133,25 +138,25 @@ func (req CreateIdentityWithPasswordRequest) Validate() error {
 	return v.Error()
 }
 
-func (s *AuthService) ActivateAccount(
+func (s *AuthService) ActivateAccountFromInvitation(
 	ctx context.Context,
-	req *ActivateAccountRequest,
-) (*coredata.Identity, *coredata.MembershipProfile, error) {
+	req *ActivateAccountFromInvitationRequest,
+) (*coredata.MembershipProfile, error) {
 	if err := req.Validate(); err != nil {
-		return nil, nil, fmt.Errorf("invalid request: %w", err)
+		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 
 	payload, err := statelesstoken.ValidateToken[InvitationTokenData](s.tokenSecret, TokenTypeOrganizationInvitation, req.InvitationToken)
 	if err != nil {
-		return nil, nil, NewInvalidTokenError()
+		return nil, NewInvalidTokenError()
 	}
 
 	var (
-		scope      = coredata.NewScopeFromObjectID(payload.Data.InvitationID)
-		invitation = &coredata.Invitation{}
-		profile    *coredata.MembershipProfile
-		identity   *coredata.Identity
-		now        = time.Now()
+		scope                 = coredata.NewScopeFromObjectID(payload.Data.InvitationID)
+		invitation            = &coredata.Invitation{}
+		profile               *coredata.MembershipProfile
+		now                   = time.Now()
+		activationNotRequired bool
 	)
 
 	if err = s.pg.WithTx(
@@ -170,29 +175,43 @@ func (s *AuthService) ActivateAccount(
 				return NewInvitationAlreadyAcceptedError(payload.Data.InvitationID)
 			}
 
-			if invitation.ExpiresAt.Before(now) {
-				return NewInvitationExpiredError(payload.Data.InvitationID)
-			}
-
 			profile = &coredata.MembershipProfile{}
 			if err := profile.LoadByID(ctx, tx, scope, invitation.UserID); err != nil {
+				if err == coredata.ErrResourceNotFound && invitation.ExpiresAt.Before(now) {
+					return NewInvitationExpiredError(payload.Data.InvitationID)
+				}
+
 				return fmt.Errorf("cannot load user: %w", err)
 			}
 
-			if profile.Source == coredata.ProfileSourceSCIM {
-				return NewUserManagedBySCIMError(profile.ID)
+			if invitation.ExpiresAt.Before(now) {
+				if profileVerifiedByProvisioner(profile.Source) {
+					activationNotRequired = true
+					return nil
+				}
+
+				return NewInvitationExpiredError(payload.Data.InvitationID)
 			}
 
-			if profile.State == coredata.ProfileStateInactive {
-				profile.State = coredata.ProfileStateActive
-				profile.UpdatedAt = now
+			if profileVerifiedByProvisioner(profile.Source) {
+				if err := expirePendingInvitations(ctx, tx, invitation); err != nil {
+					return err
+				}
+
+				activationNotRequired = true
+
+				return nil
+			}
+
+			if profile.State == coredata.ProfileStatePending {
+				profile.MarkActive(now)
 
 				if err := profile.Update(ctx, tx, scope); err != nil {
 					return fmt.Errorf("cannot update user: %w", err)
 				}
 			}
 
-			identity = &coredata.Identity{}
+			identity := &coredata.Identity{}
 			if err := identity.LoadByID(ctx, tx, profile.IdentityID); err != nil {
 				return fmt.Errorf("cannot load identity: %w", err)
 			}
@@ -214,27 +233,217 @@ func (s *AuthService) ActivateAccount(
 				return fmt.Errorf("cannot update invitation: %w", err)
 			}
 
-			// Expire other pending invitations for user
-			invitations := &coredata.Invitations{}
-
-			onlyPending := coredata.NewInvitationFilter([]coredata.InvitationStatus{coredata.InvitationStatusPending})
-			if err := invitations.ExpireByUserID(
-				ctx,
-				tx,
-				coredata.NewScopeFromObjectID(invitation.OrganizationID),
-				invitation.UserID,
-				onlyPending,
-			); err != nil {
-				return fmt.Errorf("cannot expire pending invitations: %w", err)
+			if err := expirePendingInvitations(ctx, tx, invitation); err != nil {
+				return err
 			}
 
 			return nil
 		},
 	); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	return identity, profile, nil
+	if activationNotRequired {
+		return nil, NewActivationNotRequiredError(profile.ID, profile.Source)
+	}
+
+	return profile, nil
+}
+
+func (s *AuthService) LoadPendingInvitationForIdentity(
+	ctx context.Context,
+	identityID gid.GID,
+	organizationID gid.GID,
+) (*coredata.Invitation, error) {
+	var invitation *coredata.Invitation
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			loaded, err := pendingInvitationForIdentity(ctx, conn, identityID, organizationID)
+			if err != nil {
+				return err
+			}
+
+			invitation = loaded
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return invitation, nil
+}
+
+func (s *AuthService) AcceptInvitation(
+	ctx context.Context,
+	identityID gid.GID,
+	invitationID gid.GID,
+) (*coredata.MembershipProfile, error) {
+	var (
+		scope                 = coredata.NewScopeFromObjectID(invitationID)
+		invitation            = &coredata.Invitation{}
+		profile               *coredata.MembershipProfile
+		now                   = time.Now()
+		activationNotRequired bool
+	)
+
+	err := s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, tx pg.Tx) error {
+			err := invitation.LoadByID(ctx, tx, scope, invitationID)
+			if err != nil {
+				if err == coredata.ErrResourceNotFound {
+					return NewInvitationNotFoundError(invitationID)
+				}
+
+				return fmt.Errorf("cannot load invitation: %w", err)
+			}
+
+			if invitation.AcceptedAt != nil {
+				return NewInvitationAlreadyAcceptedError(invitation.ID)
+			}
+
+			profile = &coredata.MembershipProfile{}
+			if err := profile.LoadByID(ctx, tx, scope, invitation.UserID); err != nil {
+				if err == coredata.ErrResourceNotFound && invitation.ExpiresAt.Before(now) {
+					return NewInvitationExpiredError(invitation.ID)
+				}
+
+				return fmt.Errorf("cannot load profile: %w", err)
+			}
+
+			if profile.IdentityID != identityID || profile.OrganizationID != invitation.OrganizationID {
+				return fmt.Errorf("invitation %q does not belong to identity %q", invitation.ID, identityID)
+			}
+
+			if invitation.ExpiresAt.Before(now) {
+				if profileVerifiedByProvisioner(profile.Source) {
+					activationNotRequired = true
+					return nil
+				}
+
+				return NewInvitationExpiredError(invitation.ID)
+			}
+
+			if profileVerifiedByProvisioner(profile.Source) {
+				if err := expirePendingInvitations(ctx, tx, invitation); err != nil {
+					return err
+				}
+
+				activationNotRequired = true
+
+				return nil
+			}
+
+			if profile.State == coredata.ProfileStatePending {
+				profile.MarkActive(now)
+
+				if err := profile.Update(ctx, tx, scope); err != nil {
+					return fmt.Errorf("cannot update profile: %w", err)
+				}
+			}
+
+			invitation.AcceptedAt = &now
+			if err := invitation.Update(ctx, tx, scope); err != nil {
+				if err == coredata.ErrResourceNotFound {
+					return NewInvitationNotFoundError(invitation.ID)
+				}
+
+				return fmt.Errorf("cannot update invitation: %w", err)
+			}
+
+			if err := expirePendingInvitations(ctx, tx, invitation); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if activationNotRequired {
+		return nil, NewActivationNotRequiredError(profile.ID, profile.Source)
+	}
+
+	return profile, nil
+}
+
+func pendingInvitationForIdentity(
+	ctx context.Context,
+	conn pg.Querier,
+	identityID gid.GID,
+	organizationID gid.GID,
+) (*coredata.Invitation, error) {
+	scope := coredata.NewScopeFromObjectID(organizationID)
+	profile := &coredata.MembershipProfile{}
+
+	if err := profile.LoadByIdentityIDAndOrganizationID(ctx, conn, scope, identityID, organizationID); err != nil {
+		if err == coredata.ErrResourceNotFound {
+			return nil, NewPendingInvitationNotFoundError()
+		}
+
+		return nil, fmt.Errorf("cannot load profile: %w", err)
+	}
+
+	invitations := coredata.Invitations{}
+	cursor := page.NewCursor(
+		20,
+		nil,
+		page.Head,
+		page.OrderBy[coredata.InvitationOrderField]{
+			Field:     coredata.InvitationOrderFieldCreatedAt,
+			Direction: page.OrderDirectionDesc,
+		},
+	)
+	onlyPending := coredata.NewInvitationFilter([]coredata.InvitationStatus{coredata.InvitationStatusPending})
+
+	if err := invitations.LoadByUserID(ctx, conn, scope, profile.ID, cursor, onlyPending); err != nil {
+		return nil, fmt.Errorf("cannot load invitations: %w", err)
+	}
+
+	now := time.Now()
+	for _, invitation := range invitations {
+		if invitation.AcceptedAt == nil && invitation.ExpiresAt.After(now) {
+			return invitation, nil
+		}
+	}
+
+	return nil, NewPendingInvitationNotFoundError()
+}
+
+func expirePendingInvitations(
+	ctx context.Context,
+	conn pg.Querier,
+	invitation *coredata.Invitation,
+) error {
+	invitations := &coredata.Invitations{}
+	onlyPending := coredata.NewInvitationFilter([]coredata.InvitationStatus{coredata.InvitationStatusPending})
+
+	if err := invitations.ExpireByUserID(
+		ctx,
+		conn,
+		coredata.NewScopeFromObjectID(invitation.OrganizationID),
+		invitation.UserID,
+		onlyPending,
+	); err != nil {
+		return fmt.Errorf("cannot expire pending invitations: %w", err)
+	}
+
+	return nil
+}
+
+func profileVerifiedByProvisioner(source coredata.ProfileSource) bool {
+	switch source {
+	case coredata.ProfileSourceSAML, coredata.ProfileSourceSCIM:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s AuthService) GetResetPasswordToken(ctx context.Context, email mail.Addr) (string, error) {
@@ -283,8 +492,9 @@ func (s AuthService) ResetPassword(
 				return fmt.Errorf("cannot load identity: %w", err)
 			}
 
+			now := time.Now()
 			identity.HashedPassword = hashedPassword
-			identity.UpdatedAt = time.Now()
+			identity.UpdatedAt = now
 
 			err = identity.Update(ctx, tx)
 			if err != nil {
@@ -298,6 +508,27 @@ func (s AuthService) ResetPassword(
 			sessions := coredata.Sessions{}
 			if _, err := sessions.ExpireAllForIdentity(ctx, tx, identity.ID); err != nil {
 				return fmt.Errorf("cannot expire sessions: %w", err)
+			}
+
+			// Account recovery revokes every bearer credential for this identity.
+			refreshToken := coredata.OAuth2RefreshToken{}
+			if _, err := refreshToken.RevokeByIdentityID(ctx, tx, identity.ID, now); err != nil {
+				return fmt.Errorf("cannot revoke oauth2 refresh tokens: %w", err)
+			}
+
+			accessToken := coredata.OAuth2AccessToken{}
+			if _, err := accessToken.DeleteByIdentityID(ctx, tx, identity.ID); err != nil {
+				return fmt.Errorf("cannot delete oauth2 access tokens: %w", err)
+			}
+
+			authorizationCode := coredata.OAuth2AuthorizationCode{}
+			if _, err := authorizationCode.DeleteByIdentityID(ctx, tx, identity.ID); err != nil {
+				return fmt.Errorf("cannot delete oauth2 authorization codes: %w", err)
+			}
+
+			deviceCode := coredata.OAuth2DeviceCode{}
+			if _, err := deviceCode.DeleteByIdentityID(ctx, tx, identity.ID); err != nil {
+				return fmt.Errorf("cannot delete oauth2 device codes: %w", err)
 			}
 
 			return nil
@@ -359,51 +590,47 @@ func (s AuthService) SendPasswordResetInstructionByEmail(
 func (s AuthService) CreateIdentityWithPassword(
 	ctx context.Context,
 	req *CreateIdentityWithPasswordRequest,
-) (*coredata.Identity, *coredata.Session, error) {
+) (*coredata.Identity, error) {
 	if s.disableSignup { // TODO Rename this one to disableSignup
-		return nil, nil, NewErrSignupDisabled()
+		return nil, NewErrSignupDisabled()
 	}
 
 	if err := req.Validate(); err != nil {
-		return nil, nil, fmt.Errorf("invalid request: %w", err)
+		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 
 	hashedPassword, err := s.hp.HashPassword([]byte(req.Password))
 	if err != nil {
-		return nil, nil, fmt.Errorf("cannot hash password: %w", err)
+		return nil, fmt.Errorf("cannot hash password: %w", err)
 	}
 
-	var (
-		now = time.Now()
+	now := time.Now()
 
-		identity = &coredata.Identity{
-			ID:                   gid.New(gid.NilTenant, coredata.IdentityEntityType),
-			EmailAddress:         req.Email,
-			FullName:             req.FullName,
-			HashedPassword:       hashedPassword,
-			EmailAddressVerified: false,
-			CreatedAt:            now,
-			UpdatedAt:            now,
-		}
-
-		session = coredata.NewRootSession(identity.ID, coredata.AuthMethodPassword, 24*time.Hour*7)
-	)
+	identity := &coredata.Identity{
+		ID:                   gid.New(gid.NilTenant, coredata.IdentityEntityType),
+		EmailAddress:         req.Email,
+		FullName:             req.FullName,
+		HashedPassword:       hashedPassword,
+		EmailAddressVerified: false,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
 
 	confirmationToken, err := statelesstoken.NewToken(
 		s.tokenSecret,
 		TokenTypeEmailConfirmation,
-		24*time.Hour,
+		s.emailConfirmationTokenValidity,
 		EmailConfirmationData{IdentityID: identity.ID, Email: identity.EmailAddress},
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("cannot generate confirmation token: %w", err)
+		return nil, fmt.Errorf("cannot generate confirmation token: %w", err)
 	}
 
 	emailPresenter := emails.NewPresenter(s.baseURL, req.FullName)
 
 	subject, textBody, htmlBody, err := emailPresenter.RenderConfirmEmail(ctx, "/auth/verify-email", confirmationToken)
 	if err != nil {
-		return nil, nil, fmt.Errorf("cannot render confirmation email: %w", err)
+		return nil, fmt.Errorf("cannot render confirmation email: %w", err)
 	}
 
 	confirmationEmail := coredata.NewEmail(
@@ -431,15 +658,14 @@ func (s AuthService) CreateIdentityWithPassword(
 				return fmt.Errorf("cannot insert email: %w", err)
 			}
 
-			if err := session.Insert(ctx, tx); err != nil {
-				return fmt.Errorf("cannot insert session: %w", err)
-			}
-
 			return nil
 		},
 	)
+	if err != nil {
+		return nil, err
+	}
 
-	return identity, session, err
+	return identity, nil
 }
 
 func (s AuthService) OpenSessionWithSAML(ctx context.Context, identityID gid.GID) (*coredata.Session, error) {
@@ -466,12 +692,22 @@ func (s AuthService) OpenSessionWithSAML(ctx context.Context, identityID gid.GID
 }
 
 func (s AuthService) OpenSessionWithOIDC(ctx context.Context, identityID gid.GID, authMethod coredata.AuthMethod) (*coredata.Session, error) {
+	return s.OpenRootSession(ctx, identityID, authMethod, coredata.SessionData{})
+}
+
+func (s AuthService) OpenRootSession(
+	ctx context.Context,
+	identityID gid.GID,
+	authMethod coredata.AuthMethod,
+	data coredata.SessionData,
+) (*coredata.Session, error) {
 	session := &coredata.Session{}
 
 	err := s.pg.WithTx(
 		ctx,
 		func(ctx context.Context, conn pg.Tx) (err error) {
 			session = coredata.NewRootSession(identityID, authMethod, s.sessionDuration)
+			session.Data = data
 
 			err = session.Insert(ctx, conn)
 			if err != nil {
@@ -560,81 +796,36 @@ func (s AuthService) OpenSessionWithPassword(ctx context.Context, identityID gid
 	return session, nil
 }
 
-// hasActiveProfile reports whether the identity belongs to at least one
-// organization with an active membership profile. Invitations create the
-// profile as INACTIVE and flip it to ACTIVE on acceptance, and deactivating a
-// user flips it back, so this is the test for "accepted and still allowed in".
-func hasActiveProfile(ctx context.Context, conn pg.Querier, identityID gid.GID) (bool, error) {
-	profiles := &coredata.MembershipProfiles{}
-
-	count, err := profiles.CountByIdentityID(
-		ctx,
-		conn,
-		identityID,
-		coredata.NewMembershipProfileFilter(nil).
-			WithMembership().
-			WithState(coredata.ProfileStateActive),
-	)
-	if err != nil {
-		return false, fmt.Errorf("cannot count active membership profiles: %w", err)
-	}
-
-	return count > 0, nil
-}
-
 func (s AuthService) SendMagicLink(ctx context.Context, req *SendMagicLinkRequest) error {
 	tokenString, err := statelesstoken.NewToken(
 		s.tokenSecret,
 		TokenTypeMagicLink,
 		s.magicLinkTokenValidity,
 		MagicLinkData{
-			Email:                req.Email,
-			Continue:             req.Continue,
-			RequireActiveProfile: req.RequireActiveProfile,
+			Email:    req.Email,
+			Continue: req.Continue,
 		},
 	)
 	if err != nil {
 		return fmt.Errorf("cannot generate magic link token: %w", err)
 	}
 
+	senderName := magicLinkDefaultSenderName
+
+	if req.OAuth2ClientIDRaw != nil && *req.OAuth2ClientIDRaw != "" {
+		branding, err := s.OAuth2ServerService.ClientBranding(ctx, *req.OAuth2ClientIDRaw)
+		if err != nil {
+			return fmt.Errorf("cannot load oauth2 client branding: %w", err)
+		}
+
+		if branding != nil {
+			senderName = branding.Name
+		}
+	}
+
 	return s.pg.WithTx(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
-			fullName := req.Email.Username()
-			identity := &coredata.Identity{}
-			identityFound := true
-
-			if err := identity.LoadByEmail(ctx, tx, req.Email); err == nil {
-				if identity.FullName != "" {
-					fullName = identity.FullName
-				}
-			} else {
-				if !errors.Is(err, coredata.ErrResourceNotFound) {
-					return fmt.Errorf("cannot load identity: %w", err)
-				}
-
-				identityFound = false
-			}
-
-			// Callers that require an active profile get no email and no token row
-			// for unknown, pending, or deactivated addresses. Returning nil rather
-			// than an error keeps the caller's response identical either way, so it
-			// cannot be used to enumerate accounts.
-			if req.RequireActiveProfile {
-				if !identityFound {
-					return nil
-				}
-
-				active, err := hasActiveProfile(ctx, tx, identity.ID)
-				if err != nil {
-					return err
-				}
-
-				if !active {
-					return nil
-				}
-			}
-
 			hashedToken := HashToken(tokenString)
 
 			token := &coredata.Token{
@@ -646,27 +837,23 @@ func (s AuthService) SendMagicLink(ctx context.Context, req *SendMagicLinkReques
 				return fmt.Errorf("cannot insert token: %w", err)
 			}
 
-			organizationName := ""
+			fullName := req.Email.Username()
+			identity := &coredata.Identity{}
 
-			if req.OrganizationID != nil {
-				organization := &coredata.Organization{}
-
-				if err := organization.LoadByID(ctx, tx, coredata.NewNoScope(), *req.OrganizationID); err != nil {
-					return fmt.Errorf("cannot load organization: %w", err)
+			if err := identity.LoadByEmail(ctx, tx, req.Email); err == nil {
+				if identity.FullName != "" {
+					fullName = identity.FullName
 				}
-
-				organizationName = organization.Name
+			} else {
+				if !errors.Is(err, coredata.ErrResourceNotFound) {
+					return fmt.Errorf("cannot load identity: %w", err)
+				}
 			}
 
 			emailPresenterCfg := emails.DefaultPresenterConfig(s.baseURL)
 
-			if req.CompliancePageID != nil {
-				var err error
-
-				emailPresenterCfg, err = s.CompliancePageService.EmailPresenterConfig(ctx, *req.CompliancePageID)
-				if err != nil {
-					return fmt.Errorf("cannot get compliance page email presenter config: %w", err)
-				}
+			if req.MagicLinkBaseURL != nil {
+				emailPresenterCfg.BaseURL = *req.MagicLinkBaseURL
 			}
 
 			emailPresenter := emails.NewPresenterFromConfig(emailPresenterCfg, fullName)
@@ -676,17 +863,10 @@ func (s AuthService) SendMagicLink(ctx context.Context, req *SendMagicLinkReques
 				req.URLPath,
 				tokenString,
 				s.magicLinkTokenValidity,
-				organizationName,
+				senderName,
 			)
 			if err != nil {
 				return fmt.Errorf("cannot render magic link email: %w", err)
-			}
-
-			var emailOpts *coredata.EmailOptions
-			if req.CompliancePageID != nil {
-				emailOpts = &coredata.EmailOptions{
-					SenderName: new(organizationName),
-				}
 			}
 
 			magicLinkEmail := coredata.NewEmail(
@@ -695,7 +875,7 @@ func (s AuthService) SendMagicLink(ctx context.Context, req *SendMagicLinkReques
 				subject,
 				textBody,
 				htmlBody,
-				emailOpts,
+				nil,
 			)
 
 			if err := magicLinkEmail.Insert(ctx, tx); err != nil {
@@ -718,6 +898,15 @@ func (s AuthService) GetMagicLinkEmail(ctx context.Context, tokenString string) 
 	}
 
 	return payload.Data.Email, nil
+}
+
+func (s AuthService) MagicLinkContinueFromToken(tokenString string) (*string, error) {
+	payload, err := statelesstoken.ValidateTokenAllowExpired[MagicLinkData](s.tokenSecret, TokenTypeMagicLink, tokenString)
+	if err != nil {
+		return nil, err
+	}
+
+	return payload.Data.Continue, nil
 }
 
 func (s AuthService) OpenSessionWithMagicLink(ctx context.Context, tokenString string) (*coredata.Identity, *coredata.Session, *string, error) {
@@ -752,39 +941,27 @@ func (s AuthService) OpenSessionWithMagicLink(ctx context.Context, tokenString s
 
 			err := identity.LoadByEmail(ctx, tx, payload.Data.Email)
 			if err != nil {
-				if !errors.Is(err, coredata.ErrResourceNotFound) {
+				if errors.Is(err, coredata.ErrResourceNotFound) {
+					identity = &coredata.Identity{
+						ID:                   gid.New(gid.NilTenant, coredata.IdentityEntityType),
+						EmailAddress:         payload.Data.Email,
+						EmailAddressVerified: true,
+						CreatedAt:            now,
+						UpdatedAt:            now,
+					}
+
+					if err := identity.Insert(ctx, tx); err != nil {
+						return fmt.Errorf("cannot create identity: %w", err)
+					}
+				} else {
 					return fmt.Errorf("cannot load identity by email: %w", err)
 				}
+			} else if !identity.EmailAddressVerified {
+				identity.EmailAddressVerified = true
+				identity.UpdatedAt = now
 
-				// Tokens restricted to active profiles never provision an account:
-				// creating one here would let anyone holding a link sign themselves up.
-				if payload.Data.RequireActiveProfile {
-					return NewNoActiveAccountError()
-				}
-
-				identity = &coredata.Identity{
-					ID:                   gid.New(gid.NilTenant, coredata.IdentityEntityType),
-					EmailAddress:         payload.Data.Email,
-					EmailAddressVerified: true,
-					CreatedAt:            now,
-					UpdatedAt:            now,
-				}
-
-				if err := identity.Insert(ctx, tx); err != nil {
-					return fmt.Errorf("cannot create identity: %w", err)
-				}
-			}
-
-			// Re-checked at redemption, not just at send time, so a user deactivated
-			// while a valid link is still in their inbox cannot use it.
-			if payload.Data.RequireActiveProfile {
-				active, err := hasActiveProfile(ctx, tx, identity.ID)
-				if err != nil {
-					return err
-				}
-
-				if !active {
-					return NewNoActiveAccountError()
+				if err := identity.Update(ctx, tx); err != nil {
+					return fmt.Errorf("cannot update identity: %w", err)
 				}
 			}
 

@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -32,6 +38,7 @@ type OAuth2AuthorizationCode struct {
 	ClientID            gid.GID                    `db:"client_id"`
 	IdentityID          gid.GID                    `db:"identity_id"`
 	RedirectURI         uri.URI                    `db:"redirect_uri"`
+	Resources           []uri.URI                  `db:"resources"`
 	Scopes              OAuth2Scopes               `db:"scopes"`
 	CodeChallenge       *string                    `db:"code_challenge"`
 	CodeChallengeMethod *OAuth2CodeChallengeMethod `db:"code_challenge_method"`
@@ -51,6 +58,7 @@ INSERT INTO iam_oauth2_authorization_codes (
 	client_id,
 	identity_id,
 	redirect_uri,
+	resources,
 	scopes,
 	code_challenge,
 	code_challenge_method,
@@ -66,6 +74,7 @@ INSERT INTO iam_oauth2_authorization_codes (
 	@client_id,
 	@identity_id,
 	@redirect_uri,
+	@resources,
 	@scopes,
 	@code_challenge,
 	@code_challenge_method,
@@ -84,6 +93,7 @@ INSERT INTO iam_oauth2_authorization_codes (
 		"client_id":             c.ClientID,
 		"identity_id":           c.IdentityID,
 		"redirect_uri":          c.RedirectURI,
+		"resources":             c.Resources,
 		"scopes":                c.Scopes,
 		"code_challenge":        c.CodeChallenge,
 		"code_challenge_method": c.CodeChallengeMethod,
@@ -116,6 +126,7 @@ SELECT
 	client_id,
 	identity_id,
 	redirect_uri,
+	resources,
 	scopes,
 	code_challenge,
 	code_challenge_method,
@@ -200,6 +211,31 @@ WHERE
 	}
 
 	return nil
+}
+
+func (c *OAuth2AuthorizationCode) DeleteByIdentityID(
+	ctx context.Context,
+	conn pg.Tx,
+	identityID gid.GID,
+) (int64, error) {
+	q := `
+DELETE FROM iam_oauth2_authorization_codes
+WHERE
+	identity_id = @identity_id
+`
+
+	result, err := conn.Exec(
+		ctx,
+		q,
+		pgx.StrictNamedArgs{
+			"identity_id": identityID,
+		},
+	)
+	if err != nil {
+		return 0, fmt.Errorf("cannot delete oauth2_authorization_codes by identity: %w", err)
+	}
+
+	return result.RowsAffected(), nil
 }
 
 func (c *OAuth2AuthorizationCode) DeleteExpired(ctx context.Context, conn pg.Tx, now time.Time) (int64, error) {

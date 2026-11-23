@@ -1,19 +1,24 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   Dialog,
@@ -23,13 +28,14 @@ import {
   Input,
   Spinner,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
+import { useTranslation } from "react-i18next";
 import { graphql, useMutation } from "react-relay";
-import { z } from "zod";
 
 import type { EditBusinessAssociateAgreementDialogMutation } from "#/__generated__/core/EditBusinessAssociateAgreementDialogMutation.graphql";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
+import { z } from "#/lib/zod";
 
 const updateBusinessAssociateAgreementMutation = graphql`
   mutation EditBusinessAssociateAgreementDialogMutation(
@@ -41,8 +47,10 @@ const updateBusinessAssociateAgreementMutation = graphql`
         file {
           downloadUrl
         }
-        validFrom
-        validUntil
+        validity {
+          start
+          end
+        }
         createdAt
       }
     }
@@ -70,7 +78,7 @@ export function EditBusinessAssociateAgreementDialog({
   agreement,
   onSuccess,
 }: Props) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const ref = useDialogRef();
 
   const formatDateForForm = (datetime?: string | null) => {
@@ -89,7 +97,7 @@ export function EditBusinessAssociateAgreementDialog({
     },
   });
 
-  const { toast } = useToast();
+  const toast = useToast();
   const [updateAgreement, isUpdating]
     = useMutation<EditBusinessAssociateAgreementDialogMutation>(
       updateBusinessAssociateAgreementMutation,
@@ -105,38 +113,40 @@ export function EditBusinessAssociateAgreementDialog({
       variables: {
         input: {
           thirdPartyId,
-          validFrom: formatDatetime(data.validFrom),
-          validUntil: formatDatetime(data.validUntil),
+          validity: {
+            start: formatDatetime(data.validFrom),
+            end: formatDatetime(data.validUntil),
+          },
         },
       },
       onCompleted(_response, errors) {
         if (errors) {
-          toast({
-            title: __("Error"),
+          toast.add({
+            title: t("editBusinessAssociateAgreementDialog.messages.error"),
             description: formatError(
-              __("Failed to update Business Associate Agreement"),
+              t("editBusinessAssociateAgreementDialog.errors.update"),
               errors,
             ),
-            variant: "error",
+            type: "error",
           });
           return;
         }
-        toast({
-          title: __("Success"),
-          description: __("Business Associate Agreement updated successfully"),
-          variant: "success",
+        toast.add({
+          title: t("editBusinessAssociateAgreementDialog.messages.success"),
+          description: t("editBusinessAssociateAgreementDialog.messages.updated"),
+          type: "success",
         });
         onSuccess?.();
         ref.current?.close();
       },
       onError(error) {
-        toast({
-          title: __("Error"),
+        toast.add({
+          title: t("editBusinessAssociateAgreementDialog.messages.error"),
           description: formatError(
-            __("Failed to update Business Associate Agreement"),
+            t("editBusinessAssociateAgreementDialog.errors.update"),
             error,
           ),
-          variant: "error",
+          type: "error",
         });
       },
     });
@@ -148,7 +158,7 @@ export function EditBusinessAssociateAgreementDialog({
 
   return (
     <Dialog
-      title={__("Edit Business Associate Agreement")}
+      title={t("editBusinessAssociateAgreementDialog.title")}
       ref={ref}
       trigger={children}
       className="max-w-lg"
@@ -157,10 +167,10 @@ export function EditBusinessAssociateAgreementDialog({
       <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
         <DialogContent padded className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
-            <Field label={__("Valid from")}>
+            <Field label={t("editBusinessAssociateAgreementDialog.fields.validFrom")}>
               <Input {...register("validFrom")} type="date" />
             </Field>
-            <Field label={__("Valid until")}>
+            <Field label={t("editBusinessAssociateAgreementDialog.fields.validUntil")}>
               <Input {...register("validUntil")} type="date" />
             </Field>
           </div>
@@ -172,7 +182,7 @@ export function EditBusinessAssociateAgreementDialog({
             disabled={isUpdating}
             icon={isUpdating ? Spinner : undefined}
           >
-            {__("Update")}
+            {t("editBusinessAssociateAgreementDialog.actions.update")}
           </Button>
         </DialogFooter>
       </form>

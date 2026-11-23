@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
@@ -20,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"text/template"
 	"time"
@@ -29,10 +36,57 @@ import (
 	"go.probo.inc/probo/pkg/docgen"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/page"
+	"go.probo.inc/probo/pkg/prosemirror"
+	"go.probo.inc/probo/pkg/richtext"
+	"go.probo.inc/probo/pkg/riskmanagement"
 )
 
 type GeneratedDocumentService struct {
 	svc *Service
+}
+
+// omitEmptyText drops text nodes whose text is empty. Generated templates emit
+// one for each blank field, and a text node must carry text.
+func omitEmptyText(raw string) (string, error) {
+	node, err := prosemirror.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("cannot parse generated document: %w", err)
+	}
+
+	if !dropEmptyText(&node) {
+		return raw, nil
+	}
+
+	out, err := json.Marshal(node)
+	if err != nil {
+		return "", fmt.Errorf("cannot marshal generated document: %w", err)
+	}
+
+	return string(out), nil
+}
+
+func dropEmptyText(n *prosemirror.Node) bool {
+	changed := false
+	kept := make([]prosemirror.Node, 0, len(n.Content))
+
+	for i := range n.Content {
+		child := n.Content[i]
+		if child.Type == prosemirror.NodeText && child.Text == "" {
+			changed = true
+
+			continue
+		}
+
+		if dropEmptyText(&child) {
+			changed = true
+		}
+
+		kept = append(kept, child)
+	}
+
+	n.Content = kept
+
+	return changed
 }
 
 func (s *GeneratedDocumentService) PublishStatementOfApplicability(
@@ -92,13 +146,12 @@ func (s *GeneratedDocumentService) PublishStatementOfApplicability(
 				documentID := gid.New(scope.GetTenantID(), coredata.DocumentEntityType)
 
 				document = &coredata.Document{
-					ID:                    documentID,
-					OrganizationID:        soa.OrganizationID,
-					WriteMode:             coredata.DocumentWriteModeGenerated,
-					TrustCenterVisibility: coredata.TrustCenterVisibilityNone,
-					Status:                coredata.DocumentStatusActive,
-					CreatedAt:             now,
-					UpdatedAt:             now,
+					ID:             documentID,
+					OrganizationID: soa.OrganizationID,
+					WriteMode:      coredata.DocumentWriteModeGenerated,
+					Status:         coredata.DocumentStatusActive,
+					CreatedAt:      now,
+					UpdatedAt:      now,
 				}
 
 				if err := document.Insert(ctx, tx, scope); err != nil {
@@ -129,7 +182,17 @@ func (s *GeneratedDocumentService) PublishStatementOfApplicability(
 				UpdatedAt:      now,
 			}
 
-			return s.publishOrRequestApproval(ctx, scope, tx, document, documentVersion, soa.OrganizationID, approverIDs, minor, now)
+			return s.publishOrRequestApproval(
+				ctx,
+				scope,
+				tx,
+				document,
+				documentVersion,
+				soa.OrganizationID,
+				approverIDs,
+				minor,
+				now,
+			)
 		},
 	)
 	if err != nil {
@@ -183,7 +246,7 @@ func (s *GeneratedDocumentService) buildStatementOfApplicabilityDocumentData(
 	}
 
 	var controls coredata.Controls
-	if err := controls.LoadByIDs(ctx, conn, scope, controlIDs); err != nil {
+	if err := controls.LoadByIDs(ctx, conn, scope, controlIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 		return docgen.StatementOfApplicabilityData{}, fmt.Errorf("cannot load controls: %w", err)
 	}
 
@@ -201,7 +264,7 @@ func (s *GeneratedDocumentService) buildStatementOfApplicabilityDocumentData(
 	}
 
 	var frameworks coredata.Frameworks
-	if err := frameworks.LoadByIDs(ctx, conn, scope, frameworkIDs); err != nil {
+	if err := frameworks.LoadByIDs(ctx, conn, scope, frameworkIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 		return docgen.StatementOfApplicabilityData{}, fmt.Errorf("cannot load frameworks: %w", err)
 	}
 
@@ -365,13 +428,12 @@ func (s *GeneratedDocumentService) PublishDataList(
 				documentID := gid.New(scope.GetTenantID(), coredata.DocumentEntityType)
 
 				document = &coredata.Document{
-					ID:                    documentID,
-					OrganizationID:        organizationID,
-					WriteMode:             coredata.DocumentWriteModeGenerated,
-					TrustCenterVisibility: coredata.TrustCenterVisibilityNone,
-					Status:                coredata.DocumentStatusActive,
-					CreatedAt:             now,
-					UpdatedAt:             now,
+					ID:             documentID,
+					OrganizationID: organizationID,
+					WriteMode:      coredata.DocumentWriteModeGenerated,
+					Status:         coredata.DocumentStatusActive,
+					CreatedAt:      now,
+					UpdatedAt:      now,
 				}
 
 				if err := document.Insert(ctx, tx, scope); err != nil {
@@ -399,7 +461,17 @@ func (s *GeneratedDocumentService) PublishDataList(
 				UpdatedAt:      now,
 			}
 
-			return s.publishOrRequestApproval(ctx, scope, tx, document, documentVersion, organizationID, approverIDs, minor, now)
+			return s.publishOrRequestApproval(
+				ctx,
+				scope,
+				tx,
+				document,
+				documentVersion,
+				organizationID,
+				approverIDs,
+				minor,
+				now,
+			)
 		},
 	)
 	if err != nil {
@@ -475,7 +547,7 @@ func (s *GeneratedDocumentService) buildDataListDocumentData(
 	}
 
 	var profiles coredata.MembershipProfiles
-	if err := profiles.LoadByIDs(ctx, conn, scope, ownerIDs); err != nil {
+	if err := profiles.LoadByIDs(ctx, conn, scope, ownerIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 		return docgen.DataListData{}, fmt.Errorf("cannot load profiles: %w", err)
 	}
 
@@ -573,7 +645,7 @@ func BuildDataListDocument(data docgen.DataListData) (string, error) {
 		return "", fmt.Errorf("cannot execute data list template: %w", err)
 	}
 
-	return buf.String(), nil
+	return omitEmptyText(buf.String())
 }
 
 func (s *GeneratedDocumentService) PublishAssetList(
@@ -637,13 +709,12 @@ func (s *GeneratedDocumentService) PublishAssetList(
 				documentID := gid.New(scope.GetTenantID(), coredata.DocumentEntityType)
 
 				document = &coredata.Document{
-					ID:                    documentID,
-					OrganizationID:        organizationID,
-					WriteMode:             coredata.DocumentWriteModeGenerated,
-					TrustCenterVisibility: coredata.TrustCenterVisibilityNone,
-					Status:                coredata.DocumentStatusActive,
-					CreatedAt:             now,
-					UpdatedAt:             now,
+					ID:             documentID,
+					OrganizationID: organizationID,
+					WriteMode:      coredata.DocumentWriteModeGenerated,
+					Status:         coredata.DocumentStatusActive,
+					CreatedAt:      now,
+					UpdatedAt:      now,
 				}
 
 				if err := document.Insert(ctx, tx, scope); err != nil {
@@ -671,7 +742,17 @@ func (s *GeneratedDocumentService) PublishAssetList(
 				UpdatedAt:      now,
 			}
 
-			return s.publishOrRequestApproval(ctx, scope, tx, document, documentVersion, organizationID, approverIDs, minor, now)
+			return s.publishOrRequestApproval(
+				ctx,
+				scope,
+				tx,
+				document,
+				documentVersion,
+				organizationID,
+				approverIDs,
+				minor,
+				now,
+			)
 		},
 	)
 	if err != nil {
@@ -747,7 +828,7 @@ func (s *GeneratedDocumentService) buildAssetListDocumentData(
 	}
 
 	var profiles coredata.MembershipProfiles
-	if err := profiles.LoadByIDs(ctx, conn, scope, ownerIDs); err != nil {
+	if err := profiles.LoadByIDs(ctx, conn, scope, ownerIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 		return docgen.AssetListData{}, fmt.Errorf("cannot load profiles: %w", err)
 	}
 
@@ -844,7 +925,7 @@ func BuildAssetListDocument(data docgen.AssetListData) (string, error) {
 		return "", fmt.Errorf("cannot execute asset list template: %w", err)
 	}
 
-	return buf.String(), nil
+	return omitEmptyText(buf.String())
 }
 
 var soaTemplate = template.Must(
@@ -868,7 +949,7 @@ func BuildStatementOfApplicabilityDocument(data docgen.StatementOfApplicabilityD
 		return "", fmt.Errorf("cannot execute soa template: %w", err)
 	}
 
-	return buf.String(), nil
+	return omitEmptyText(buf.String())
 }
 
 func (s *GeneratedDocumentService) PublishFindingList(
@@ -932,13 +1013,12 @@ func (s *GeneratedDocumentService) PublishFindingList(
 				documentID := gid.New(scope.GetTenantID(), coredata.DocumentEntityType)
 
 				document = &coredata.Document{
-					ID:                    documentID,
-					OrganizationID:        organizationID,
-					WriteMode:             coredata.DocumentWriteModeGenerated,
-					TrustCenterVisibility: coredata.TrustCenterVisibilityNone,
-					Status:                coredata.DocumentStatusActive,
-					CreatedAt:             now,
-					UpdatedAt:             now,
+					ID:             documentID,
+					OrganizationID: organizationID,
+					WriteMode:      coredata.DocumentWriteModeGenerated,
+					Status:         coredata.DocumentStatusActive,
+					CreatedAt:      now,
+					UpdatedAt:      now,
 				}
 
 				if err := document.Insert(ctx, tx, scope); err != nil {
@@ -966,7 +1046,17 @@ func (s *GeneratedDocumentService) PublishFindingList(
 				UpdatedAt:      now,
 			}
 
-			return s.publishOrRequestApproval(ctx, scope, tx, document, documentVersion, organizationID, approverIDs, minor, now)
+			return s.publishOrRequestApproval(
+				ctx,
+				scope,
+				tx,
+				document,
+				documentVersion,
+				organizationID,
+				approverIDs,
+				minor,
+				now,
+			)
 		},
 	)
 	if err != nil {
@@ -1011,7 +1101,7 @@ func (s *GeneratedDocumentService) buildFindingListDocumentData(
 		},
 		func(ctx context.Context, cursor *page.Cursor[coredata.FindingOrderField]) ([]*coredata.Finding, error) {
 			var batch coredata.Findings
-			if err := batch.LoadByOrganizationID(ctx, conn, scope, organization.ID, cursor, coredata.NewFindingFilter(nil, nil, nil, nil)); err != nil {
+			if err := batch.LoadByOrganizationID(ctx, conn, scope, organization.ID, cursor, coredata.NewFindingFilter(nil, nil, nil, nil, nil, nil)); err != nil {
 				return nil, fmt.Errorf("cannot load findings: %w", err)
 			}
 
@@ -1047,7 +1137,7 @@ func (s *GeneratedDocumentService) buildFindingListDocumentData(
 
 	if len(ownerIDs) > 0 {
 		var profiles coredata.MembershipProfiles
-		if err := profiles.LoadByIDs(ctx, conn, scope, ownerIDs); err != nil {
+		if err := profiles.LoadByIDs(ctx, conn, scope, ownerIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 			return docgen.FindingListData{}, fmt.Errorf("cannot load profiles: %w", err)
 		}
 
@@ -1103,6 +1193,7 @@ func (s *GeneratedDocumentService) buildFindingListDocumentData(
 
 		rows = append(rows, docgen.FindingListRow{
 			ReferenceID:        f.ReferenceID,
+			Title:              f.Title,
 			Kind:               formatFindingKind(f.Kind),
 			Description:        description,
 			Source:             source,
@@ -1173,6 +1264,51 @@ func formatFindingPriority(p coredata.FindingPriority) string {
 	}
 }
 
+func formatAiSystemStatus(status coredata.AiSystemStatus) string {
+	switch status {
+	case coredata.AiSystemStatusActive:
+		return "Active"
+	case coredata.AiSystemStatusInDevelopment:
+		return "In development"
+	case coredata.AiSystemStatusDecommissioned:
+		return "Decommissioned"
+	default:
+		return stringOrNotSpecified(string(status))
+	}
+}
+
+func formatAiSystemRiskClassification(
+	classification coredata.AiSystemRiskClassification,
+) string {
+	switch classification {
+	case coredata.AiSystemRiskClassificationHighRisk:
+		return "High-risk"
+	case coredata.AiSystemRiskClassificationLimited:
+		return "Limited"
+	case coredata.AiSystemRiskClassificationMinimal:
+		return "Minimal"
+	case coredata.AiSystemRiskClassificationGPAI:
+		return "GPAI"
+	default:
+		return stringOrNotSpecified(string(classification))
+	}
+}
+
+func formatAiSystemCompanyRole(role coredata.AiSystemCompanyRole) string {
+	switch role {
+	case coredata.AiSystemCompanyRoleProvider:
+		return "Provider"
+	case coredata.AiSystemCompanyRoleDeployer:
+		return "Deployer"
+	case coredata.AiSystemCompanyRoleUser:
+		return "User"
+	case coredata.AiSystemCompanyRoleDeveloper:
+		return "Developer"
+	default:
+		return stringOrNotSpecified(string(role))
+	}
+}
+
 var findingListTemplate = template.Must(
 	template.New("finding_list.json.tmpl").
 		Funcs(template.FuncMap{
@@ -1194,7 +1330,730 @@ func BuildFindingListDocument(data docgen.FindingListData) (string, error) {
 		return "", fmt.Errorf("cannot execute finding list template: %w", err)
 	}
 
-	return buf.String(), nil
+	return omitEmptyText(buf.String())
+}
+
+func (s *GeneratedDocumentService) PublishBusinessFunctionList(
+	ctx context.Context,
+	scope coredata.Scoper,
+	organizationID gid.GID,
+	approverIDs []gid.GID,
+	minor bool,
+) (*coredata.Document, *coredata.DocumentVersion, error) {
+	var (
+		document        *coredata.Document
+		documentVersion *coredata.DocumentVersion
+	)
+
+	err := s.svc.pg.WithTx(
+		ctx,
+		func(ctx context.Context, tx pg.Tx) error {
+			organization := &coredata.Organization{}
+			if err := organization.LoadByID(ctx, tx, scope, organizationID); err != nil {
+				return fmt.Errorf("cannot load organization: %w", err)
+			}
+
+			documentData, err := s.buildBusinessFunctionListDocumentData(ctx, scope, tx, organization)
+			if err != nil {
+				return fmt.Errorf("cannot build document data: %w", err)
+			}
+
+			prosemirrorJSON, err := BuildBusinessFunctionListDocument(documentData)
+			if err != nil {
+				return fmt.Errorf("cannot build prosemirror document: %w", err)
+			}
+
+			now := time.Now()
+
+			businessFunction := coredata.BusinessFunction{}
+
+			businessFunctionDocumentID, err := businessFunction.GetGeneratedDocumentID(ctx, tx, organizationID)
+			if err != nil {
+				return fmt.Errorf("cannot query generated documents: %w", err)
+			}
+
+			var existingDoc *coredata.Document
+
+			if businessFunctionDocumentID != nil {
+				doc := &coredata.Document{}
+
+				err = doc.LoadByID(ctx, tx, scope, *businessFunctionDocumentID)
+				if err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
+					return fmt.Errorf("cannot load business function list document: %w", err)
+				}
+
+				if err == nil && doc.ArchivedAt == nil {
+					existingDoc = doc
+				} else {
+					if err := businessFunction.ClearGeneratedDocumentID(ctx, tx, []gid.GID{*businessFunctionDocumentID}); err != nil {
+						return fmt.Errorf("cannot clear document reference: %w", err)
+					}
+				}
+			}
+
+			if existingDoc == nil {
+				documentID := gid.New(scope.GetTenantID(), coredata.DocumentEntityType)
+
+				document = &coredata.Document{
+					ID:             documentID,
+					OrganizationID: organizationID,
+					WriteMode:      coredata.DocumentWriteModeGenerated,
+					Status:         coredata.DocumentStatusActive,
+					CreatedAt:      now,
+					UpdatedAt:      now,
+				}
+
+				if err := document.Insert(ctx, tx, scope); err != nil {
+					return fmt.Errorf("cannot insert document: %w", err)
+				}
+
+				if err := businessFunction.UpsertGeneratedDocumentID(ctx, tx, organizationID, scope.GetTenantID(), documentID); err != nil {
+					return fmt.Errorf("cannot upsert generated documents: %w", err)
+				}
+			} else {
+				document = existingDoc
+			}
+
+			documentVersionID := gid.New(scope.GetTenantID(), coredata.DocumentVersionEntityType)
+			documentVersion = &coredata.DocumentVersion{
+				ID:             documentVersionID,
+				OrganizationID: organizationID,
+				DocumentID:     document.ID,
+				Title:          "Business Functions",
+				Content:        prosemirrorJSON,
+				Classification: coredata.DocumentClassificationConfidential,
+				DocumentType:   coredata.DocumentTypeRegister,
+				Orientation:    coredata.DocumentVersionOrientationLandscape,
+				CreatedAt:      now,
+				UpdatedAt:      now,
+			}
+
+			return s.publishOrRequestApproval(
+				ctx,
+				scope,
+				tx,
+				document,
+				documentVersion,
+				organizationID,
+				approverIDs,
+				minor,
+				now,
+			)
+		},
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return document, documentVersion, nil
+}
+
+func (s *GeneratedDocumentService) GetBusinessFunctionsDocumentID(
+	ctx context.Context,
+	scope coredata.Scoper,
+	organizationID gid.GID,
+) (*gid.GID, error) {
+	var businessFunctionDocumentID *gid.GID
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			businessFunction := coredata.BusinessFunction{}
+
+			var err error
+
+			businessFunctionDocumentID, err = businessFunction.GetGeneratedDocumentID(ctx, conn, organizationID)
+
+			return err
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get business function list document ID: %w", err)
+	}
+
+	return businessFunctionDocumentID, nil
+}
+
+func (s *GeneratedDocumentService) buildBusinessFunctionListDocumentData(
+	ctx context.Context,
+	scope coredata.Scoper,
+	conn pg.Querier,
+	organization *coredata.Organization,
+) (docgen.BusinessFunctionListData, error) {
+	var businessFunctions []*coredata.BusinessFunction
+
+	err := page.WalkAll(
+		ctx,
+		page.OrderBy[coredata.BusinessFunctionOrderField]{
+			Field:     coredata.BusinessFunctionOrderFieldReferenceID,
+			Direction: page.OrderDirectionAsc,
+		},
+		func(ctx context.Context, cursor *page.Cursor[coredata.BusinessFunctionOrderField]) ([]*coredata.BusinessFunction, error) {
+			var batch coredata.BusinessFunctions
+			if err := batch.LoadByOrganizationID(ctx, conn, scope, organization.ID, cursor, coredata.NewBusinessFunctionFilter(nil)); err != nil {
+				return nil, fmt.Errorf("cannot load business functions: %w", err)
+			}
+
+			return batch, nil
+		},
+		func(rows []*coredata.BusinessFunction) error {
+			businessFunctions = append(businessFunctions, rows...)
+			return nil
+		},
+	)
+	if err != nil {
+		return docgen.BusinessFunctionListData{}, err
+	}
+
+	if len(businessFunctions) == 0 {
+		return docgen.BusinessFunctionListData{
+			Title:                  "Business Functions",
+			OrganizationName:       organization.Name,
+			CreatedAt:              time.Now(),
+			TotalBusinessFunctions: 0,
+		}, nil
+	}
+
+	ownerIDs := make([]gid.GID, 0, len(businessFunctions))
+	ownerIDSet := make(map[gid.GID]struct{})
+	businessFunctionIDs := make([]gid.GID, 0, len(businessFunctions))
+
+	for _, bf := range businessFunctions {
+		businessFunctionIDs = append(businessFunctionIDs, bf.ID)
+
+		if bf.OwnerID != nil {
+			if _, ok := ownerIDSet[*bf.OwnerID]; !ok {
+				ownerIDs = append(ownerIDs, *bf.OwnerID)
+				ownerIDSet[*bf.OwnerID] = struct{}{}
+			}
+		}
+	}
+
+	profileMap := make(map[gid.GID]*coredata.MembershipProfile)
+
+	if len(ownerIDs) > 0 {
+		var profiles coredata.MembershipProfiles
+		if err := profiles.LoadByIDs(ctx, conn, scope, ownerIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
+			return docgen.BusinessFunctionListData{}, fmt.Errorf("cannot load profiles: %w", err)
+		}
+
+		for _, p := range profiles {
+			profileMap[p.ID] = p
+		}
+	}
+
+	businessFunctionAssets := coredata.BusinessFunctionAssets{}
+
+	assetIDsByBusinessFunction, err := businessFunctionAssets.LoadAssetIDsByBusinessFunctionIDs(
+		ctx,
+		conn,
+		scope,
+		businessFunctionIDs,
+	)
+	if err != nil {
+		return docgen.BusinessFunctionListData{}, fmt.Errorf("cannot load business function assets: %w", err)
+	}
+
+	assetIDSet := make(map[gid.GID]struct{})
+
+	for _, assetIDs := range assetIDsByBusinessFunction {
+		for _, assetID := range assetIDs {
+			assetIDSet[assetID] = struct{}{}
+		}
+	}
+
+	assetNameByID := make(map[gid.GID]string)
+	if len(assetIDSet) > 0 {
+		assetIDs := make([]gid.GID, 0, len(assetIDSet))
+		for assetID := range assetIDSet {
+			assetIDs = append(assetIDs, assetID)
+		}
+
+		var assets coredata.Assets
+		if err := assets.LoadByIDs(ctx, conn, scope, assetIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
+			return docgen.BusinessFunctionListData{}, fmt.Errorf("cannot load assets: %w", err)
+		}
+
+		for _, asset := range assets {
+			assetNameByID[asset.ID] = asset.Name
+		}
+	}
+
+	businessFunctionThirdParties := coredata.BusinessFunctionThirdParties{}
+
+	thirdPartyIDsByBusinessFunction, err := businessFunctionThirdParties.LoadThirdPartyIDsByBusinessFunctionIDs(
+		ctx,
+		conn,
+		scope,
+		businessFunctionIDs,
+	)
+	if err != nil {
+		return docgen.BusinessFunctionListData{}, fmt.Errorf("cannot load business function third parties: %w", err)
+	}
+
+	thirdPartyIDSet := make(map[gid.GID]struct{})
+
+	for _, thirdPartyIDs := range thirdPartyIDsByBusinessFunction {
+		for _, thirdPartyID := range thirdPartyIDs {
+			thirdPartyIDSet[thirdPartyID] = struct{}{}
+		}
+	}
+
+	thirdPartyNameByID := make(map[gid.GID]string)
+	if len(thirdPartyIDSet) > 0 {
+		thirdPartyIDs := make([]gid.GID, 0, len(thirdPartyIDSet))
+		for thirdPartyID := range thirdPartyIDSet {
+			thirdPartyIDs = append(thirdPartyIDs, thirdPartyID)
+		}
+
+		var thirdParties coredata.ThirdParties
+		if err := thirdParties.LoadByIDs(ctx, conn, scope, thirdPartyIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
+			return docgen.BusinessFunctionListData{}, fmt.Errorf("cannot load third parties: %w", err)
+		}
+
+		for _, thirdParty := range thirdParties {
+			thirdPartyNameByID[thirdParty.ID] = thirdParty.Name
+		}
+	}
+
+	rows := make([]docgen.BusinessFunctionListRow, 0, len(businessFunctions))
+	for _, bf := range businessFunctions {
+		ownerName := "-"
+
+		if bf.OwnerID != nil {
+			if p, ok := profileMap[*bf.OwnerID]; ok && p.FullName != "" {
+				ownerName = p.FullName
+			}
+		}
+
+		impactTolerance := "-"
+		if bf.ImpactTolerance != nil && *bf.ImpactTolerance != "" {
+			impactTolerance = *bf.ImpactTolerance
+		}
+
+		notes := "-"
+		if bf.Notes != nil && *bf.Notes != "" {
+			notes = *bf.Notes
+		}
+
+		assetNames := make([]string, 0, len(assetIDsByBusinessFunction[bf.ID]))
+		for _, assetID := range assetIDsByBusinessFunction[bf.ID] {
+			if name, ok := assetNameByID[assetID]; ok && name != "" {
+				assetNames = append(assetNames, name)
+			}
+		}
+
+		slices.Sort(assetNames)
+
+		assetsStr := "-"
+		if len(assetNames) > 0 {
+			assetsStr = strings.Join(assetNames, ", ")
+		}
+
+		thirdPartyNames := make([]string, 0, len(thirdPartyIDsByBusinessFunction[bf.ID]))
+		for _, thirdPartyID := range thirdPartyIDsByBusinessFunction[bf.ID] {
+			if name, ok := thirdPartyNameByID[thirdPartyID]; ok && name != "" {
+				thirdPartyNames = append(thirdPartyNames, name)
+			}
+		}
+
+		slices.Sort(thirdPartyNames)
+
+		thirdPartiesStr := "-"
+		if len(thirdPartyNames) > 0 {
+			thirdPartiesStr = strings.Join(thirdPartyNames, ", ")
+		}
+
+		rows = append(
+			rows,
+			docgen.BusinessFunctionListRow{
+				ReferenceID:     sanitizeTrackerCell(bf.ReferenceID),
+				Name:            sanitizeTrackerCell(bf.Name),
+				Classification:  sanitizeTrackerCell(formatBusinessFunctionClassification(bf.Classification)),
+				MTD:             sanitizeTrackerCell(formatDurationMinutes(bf.MTDMinutes)),
+				RTO:             sanitizeTrackerCell(formatDurationMinutes(bf.RTOMinutes)),
+				RPO:             sanitizeTrackerCell(formatDurationMinutes(bf.RPOMinutes)),
+				ImpactTolerance: sanitizeTrackerCell(impactTolerance),
+				Notes:           sanitizeTrackerCell(notes),
+				Owner:           sanitizeTrackerCell(ownerName),
+				Assets:          sanitizeTrackerCell(assetsStr),
+				ThirdParties:    sanitizeTrackerCell(thirdPartiesStr),
+			},
+		)
+	}
+
+	return docgen.BusinessFunctionListData{
+		Title:                  "Business Functions",
+		OrganizationName:       organization.Name,
+		CreatedAt:              time.Now(),
+		TotalBusinessFunctions: len(businessFunctions),
+		Rows:                   rows,
+	}, nil
+}
+
+func formatBusinessFunctionClassification(classification coredata.BusinessFunctionClassification) string {
+	switch classification {
+	case coredata.BusinessFunctionClassificationCritical:
+		return "Critical"
+	case coredata.BusinessFunctionClassificationImportant:
+		return "Important"
+	case coredata.BusinessFunctionClassificationSecondary:
+		return "Secondary"
+	case coredata.BusinessFunctionClassificationStandard:
+		return "Standard"
+	default:
+		return string(classification)
+	}
+}
+
+func formatDurationMinutes(minutes int) string {
+	if minutes <= 0 {
+		return "0m"
+	}
+
+	if minutes%1440 == 0 {
+		return fmt.Sprintf("%dd", minutes/1440)
+	}
+
+	if minutes%60 == 0 {
+		return fmt.Sprintf("%dh", minutes/60)
+	}
+
+	return fmt.Sprintf("%dm", minutes)
+}
+
+var businessFunctionListTemplate = template.Must(
+	template.New("business_function_list.md.tmpl").
+		ParseFS(Templates, "templates/business_function_list.md.tmpl"),
+)
+
+func BuildBusinessFunctionListDocument(data docgen.BusinessFunctionListData) (string, error) {
+	var buf bytes.Buffer
+	if err := businessFunctionListTemplate.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("cannot execute business function list template: %w", err)
+	}
+
+	node, err := richtext.ParseMarkdown(buf.String())
+	if err != nil {
+		return "", fmt.Errorf("cannot convert business function list markdown: %w", err)
+	}
+
+	out, err := json.Marshal(node)
+	if err != nil {
+		return "", fmt.Errorf("cannot marshal business function list prosemirror node: %w", err)
+	}
+
+	return string(out), nil
+}
+
+func (s *GeneratedDocumentService) PublishAiSystemList(
+	ctx context.Context,
+	scope coredata.Scoper,
+	organizationID gid.GID,
+	approverIDs []gid.GID,
+	minor bool,
+) (*coredata.Document, *coredata.DocumentVersion, error) {
+	var (
+		document        *coredata.Document
+		documentVersion *coredata.DocumentVersion
+	)
+
+	err := s.svc.pg.WithTx(
+		ctx,
+		func(ctx context.Context, tx pg.Tx) error {
+			organization := &coredata.Organization{}
+			if err := organization.LoadByID(ctx, tx, scope, organizationID); err != nil {
+				return fmt.Errorf("cannot load organization: %w", err)
+			}
+
+			documentData, err := s.buildAiSystemListDocumentData(ctx, scope, tx, organization)
+			if err != nil {
+				return fmt.Errorf("cannot build document data: %w", err)
+			}
+
+			prosemirrorJSON, err := BuildAiSystemListDocument(documentData)
+			if err != nil {
+				return fmt.Errorf("cannot build prosemirror document: %w", err)
+			}
+
+			now := time.Now()
+
+			aiSystem := coredata.AiSystem{}
+
+			aiSystemDocumentID, err := aiSystem.GetGeneratedDocumentID(ctx, tx, organizationID)
+			if err != nil {
+				return fmt.Errorf("cannot query generated documents: %w", err)
+			}
+
+			var existingDoc *coredata.Document
+
+			if aiSystemDocumentID != nil {
+				doc := &coredata.Document{}
+
+				err = doc.LoadByID(ctx, tx, scope, *aiSystemDocumentID)
+				if err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
+					return fmt.Errorf("cannot load ai system list document: %w", err)
+				}
+
+				if err == nil && doc.ArchivedAt == nil {
+					existingDoc = doc
+				} else {
+					if err := aiSystem.ClearGeneratedDocumentID(ctx, tx, []gid.GID{*aiSystemDocumentID}); err != nil {
+						return fmt.Errorf("cannot clear document reference: %w", err)
+					}
+				}
+			}
+
+			if existingDoc == nil {
+				documentID := gid.New(scope.GetTenantID(), coredata.DocumentEntityType)
+
+				document = &coredata.Document{
+					ID:             documentID,
+					OrganizationID: organizationID,
+					WriteMode:      coredata.DocumentWriteModeGenerated,
+					Status:         coredata.DocumentStatusActive,
+					CreatedAt:      now,
+					UpdatedAt:      now,
+				}
+
+				if err := document.Insert(ctx, tx, scope); err != nil {
+					return fmt.Errorf("cannot insert document: %w", err)
+				}
+
+				if err := aiSystem.UpsertGeneratedDocumentID(ctx, tx, organizationID, scope.GetTenantID(), documentID); err != nil {
+					return fmt.Errorf("cannot upsert generated documents: %w", err)
+				}
+			} else {
+				document = existingDoc
+			}
+
+			documentVersionID := gid.New(scope.GetTenantID(), coredata.DocumentVersionEntityType)
+			documentVersion = &coredata.DocumentVersion{
+				ID:             documentVersionID,
+				OrganizationID: organizationID,
+				DocumentID:     document.ID,
+				Title:          "AI Systems",
+				Content:        prosemirrorJSON,
+				Classification: coredata.DocumentClassificationConfidential,
+				DocumentType:   coredata.DocumentTypeRegister,
+				Orientation:    coredata.DocumentVersionOrientationPortrait,
+				CreatedAt:      now,
+				UpdatedAt:      now,
+			}
+
+			return s.publishOrRequestApproval(
+				ctx,
+				scope,
+				tx,
+				document,
+				documentVersion,
+				organizationID,
+				approverIDs,
+				minor,
+				now,
+			)
+		},
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return document, documentVersion, nil
+}
+
+func (s *GeneratedDocumentService) GetAiSystemsDocumentID(
+	ctx context.Context,
+	scope coredata.Scoper,
+	organizationID gid.GID,
+) (*gid.GID, error) {
+	var aiSystemDocumentID *gid.GID
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			aiSystem := coredata.AiSystem{}
+
+			var err error
+
+			aiSystemDocumentID, err = aiSystem.GetGeneratedDocumentID(ctx, conn, organizationID)
+
+			return err
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get ai system list document ID: %w", err)
+	}
+
+	return aiSystemDocumentID, nil
+}
+
+func (s *GeneratedDocumentService) buildAiSystemListDocumentData(
+	ctx context.Context,
+	scope coredata.Scoper,
+	conn pg.Querier,
+	organization *coredata.Organization,
+) (docgen.AiSystemListData, error) {
+	var aiSystems []*coredata.AiSystem
+
+	err := page.WalkAll(
+		ctx,
+		page.OrderBy[coredata.AiSystemOrderField]{
+			Field:     coredata.AiSystemOrderFieldName,
+			Direction: page.OrderDirectionAsc,
+		},
+		func(ctx context.Context, cursor *page.Cursor[coredata.AiSystemOrderField]) ([]*coredata.AiSystem, error) {
+			var batch coredata.AiSystems
+			if err := batch.LoadByOrganizationID(ctx, conn, scope, organization.ID, cursor, coredata.NewAiSystemFilter(nil, nil)); err != nil {
+				return nil, fmt.Errorf("cannot load ai systems: %w", err)
+			}
+
+			return batch, nil
+		},
+		func(rows []*coredata.AiSystem) error {
+			aiSystems = append(aiSystems, rows...)
+			return nil
+		},
+	)
+	if err != nil {
+		return docgen.AiSystemListData{}, err
+	}
+
+	if len(aiSystems) == 0 {
+		return docgen.AiSystemListData{
+			Title:            "AI Systems",
+			OrganizationName: organization.Name,
+			CreatedAt:        time.Now(),
+			TotalAiSystems:   0,
+		}, nil
+	}
+
+	ownerIDs := make([]gid.GID, 0, len(aiSystems))
+	ownerIDSet := make(map[gid.GID]struct{})
+
+	for _, system := range aiSystems {
+		if system.OwnerID != nil {
+			if _, ok := ownerIDSet[*system.OwnerID]; !ok {
+				ownerIDs = append(ownerIDs, *system.OwnerID)
+				ownerIDSet[*system.OwnerID] = struct{}{}
+			}
+		}
+	}
+
+	profileMap := make(map[gid.GID]*coredata.MembershipProfile)
+
+	if len(ownerIDs) > 0 {
+		var profiles coredata.MembershipProfiles
+		if err := profiles.LoadByIDs(ctx, conn, scope, ownerIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
+			return docgen.AiSystemListData{}, fmt.Errorf("cannot load profiles: %w", err)
+		}
+
+		for _, p := range profiles {
+			profileMap[p.ID] = p
+		}
+	}
+
+	rows := make([]docgen.AiSystemListRow, 0, len(aiSystems))
+	for _, system := range aiSystems {
+		ownerName := "-"
+
+		if system.OwnerID != nil {
+			if p, ok := profileMap[*system.OwnerID]; ok && p.FullName != "" {
+				ownerName = p.FullName
+			}
+		}
+
+		companyRoles := "-"
+
+		if len(system.CompanyRoles) > 0 {
+			parts := make([]string, len(system.CompanyRoles))
+			for i, role := range system.CompanyRoles {
+				parts[i] = formatAiSystemCompanyRole(role)
+			}
+
+			companyRoles = strings.Join(parts, ", ")
+		}
+
+		riskClassification := "-"
+		if system.RiskClassification != nil {
+			riskClassification = formatAiSystemRiskClassification(*system.RiskClassification)
+		}
+
+		rows = append(
+			rows,
+			docgen.AiSystemListRow{
+				Name:                    sanitizeTrackerCell(system.Name),
+				Version:                 sanitizeTrackerCell(optionalStringOrDash(system.Version)),
+				CompanyRoles:            sanitizeTrackerCell(companyRoles),
+				Status:                  sanitizeTrackerCell(formatAiSystemStatus(system.Status)),
+				Owner:                   sanitizeTrackerCell(ownerName),
+				Source:                  sanitizeTrackerCell(optionalStringOrDash(system.Source)),
+				Purpose:                 sanitizeTrackerCell(optionalStringOrDash(system.Purpose)),
+				IntendedUseCases:        sanitizeTrackerCell(optionalStringOrDash(system.IntendedUseCases)),
+				AutonomyLevel:           sanitizeTrackerCell(optionalStringOrDash(system.AutonomyLevel)),
+				HumanOversightMechanism: sanitizeTrackerCell(optionalStringOrDash(system.HumanOversightMechanism)),
+				RiskClassification:      sanitizeTrackerCell(riskClassification),
+				KeyStakeholders:         sanitizeTrackerCell(optionalStringOrDash(system.KeyStakeholders)),
+				DataSourcesAndType:      sanitizeTrackerCell(optionalStringOrDash(system.DataSourcesAndType)),
+				DeploymentDate:          sanitizeTrackerCell(optionalDateOrDash(system.DeploymentDate)),
+				LastReviewDate:          sanitizeTrackerCell(optionalDateOrDash(system.LastReviewDate)),
+				NextReviewDate:          sanitizeTrackerCell(optionalDateOrDash(system.NextReviewDate)),
+				Notes:                   sanitizeTrackerCell(optionalStringOrDash(system.Notes)),
+			},
+		)
+	}
+
+	return docgen.AiSystemListData{
+		Title:            "AI Systems",
+		OrganizationName: sanitizeTrackerCell(organization.Name),
+		CreatedAt:        time.Now(),
+		TotalAiSystems:   len(aiSystems),
+		Rows:             rows,
+	}, nil
+}
+
+var aiSystemListTemplate = template.Must(
+	template.New("ai_system_list.md.tmpl").
+		Funcs(template.FuncMap{
+			"add": func(a, b int) int {
+				return a + b
+			},
+		}).
+		ParseFS(Templates, "templates/ai_system_list.md.tmpl"),
+)
+
+func BuildAiSystemListDocument(data docgen.AiSystemListData) (string, error) {
+	var buf bytes.Buffer
+	if err := aiSystemListTemplate.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("cannot execute ai system list template: %w", err)
+	}
+
+	node, err := richtext.ParseMarkdown(buf.String())
+	if err != nil {
+		return "", fmt.Errorf("cannot convert ai system list markdown: %w", err)
+	}
+
+	out, err := json.Marshal(node)
+	if err != nil {
+		return "", fmt.Errorf("cannot marshal ai system list prosemirror node: %w", err)
+	}
+
+	return string(out), nil
+}
+
+func optionalStringOrDash(value *string) string {
+	if value != nil && *value != "" {
+		return *value
+	}
+
+	return "-"
+}
+
+func optionalDateOrDash(value *time.Time) string {
+	if value != nil {
+		return value.Format("2006-01-02")
+	}
+
+	return "-"
 }
 
 func (s *GeneratedDocumentService) PublishObligationList(
@@ -1258,13 +2117,12 @@ func (s *GeneratedDocumentService) PublishObligationList(
 				documentID := gid.New(scope.GetTenantID(), coredata.DocumentEntityType)
 
 				document = &coredata.Document{
-					ID:                    documentID,
-					OrganizationID:        organizationID,
-					WriteMode:             coredata.DocumentWriteModeGenerated,
-					TrustCenterVisibility: coredata.TrustCenterVisibilityNone,
-					Status:                coredata.DocumentStatusActive,
-					CreatedAt:             now,
-					UpdatedAt:             now,
+					ID:             documentID,
+					OrganizationID: organizationID,
+					WriteMode:      coredata.DocumentWriteModeGenerated,
+					Status:         coredata.DocumentStatusActive,
+					CreatedAt:      now,
+					UpdatedAt:      now,
 				}
 
 				if err := document.Insert(ctx, tx, scope); err != nil {
@@ -1292,7 +2150,17 @@ func (s *GeneratedDocumentService) PublishObligationList(
 				UpdatedAt:      now,
 			}
 
-			return s.publishOrRequestApproval(ctx, scope, tx, document, documentVersion, organizationID, approverIDs, minor, now)
+			return s.publishOrRequestApproval(
+				ctx,
+				scope,
+				tx,
+				document,
+				documentVersion,
+				organizationID,
+				approverIDs,
+				minor,
+				now,
+			)
 		},
 	)
 	if err != nil {
@@ -1375,7 +2243,7 @@ func (s *GeneratedDocumentService) buildObligationListDocumentData(
 
 	if len(ownerIDs) > 0 {
 		var profiles coredata.MembershipProfiles
-		if err := profiles.LoadByIDs(ctx, conn, scope, ownerIDs); err != nil {
+		if err := profiles.LoadByIDs(ctx, conn, scope, ownerIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 			return docgen.ObligationListData{}, fmt.Errorf("cannot load profiles: %w", err)
 		}
 
@@ -1488,7 +2356,7 @@ func BuildObligationListDocument(data docgen.ObligationListData) (string, error)
 		return "", fmt.Errorf("cannot execute obligation list template: %w", err)
 	}
 
-	return buf.String(), nil
+	return omitEmptyText(buf.String())
 }
 
 func (s *GeneratedDocumentService) PublishProcessingActivityList(
@@ -1552,13 +2420,12 @@ func (s *GeneratedDocumentService) PublishProcessingActivityList(
 				documentID := gid.New(scope.GetTenantID(), coredata.DocumentEntityType)
 
 				document = &coredata.Document{
-					ID:                    documentID,
-					OrganizationID:        organizationID,
-					WriteMode:             coredata.DocumentWriteModeGenerated,
-					TrustCenterVisibility: coredata.TrustCenterVisibilityNone,
-					Status:                coredata.DocumentStatusActive,
-					CreatedAt:             now,
-					UpdatedAt:             now,
+					ID:             documentID,
+					OrganizationID: organizationID,
+					WriteMode:      coredata.DocumentWriteModeGenerated,
+					Status:         coredata.DocumentStatusActive,
+					CreatedAt:      now,
+					UpdatedAt:      now,
 				}
 
 				if err := document.Insert(ctx, tx, scope); err != nil {
@@ -1586,7 +2453,17 @@ func (s *GeneratedDocumentService) PublishProcessingActivityList(
 				UpdatedAt:      now,
 			}
 
-			return s.publishOrRequestApproval(ctx, scope, tx, document, documentVersion, organizationID, approverIDs, minor, now)
+			return s.publishOrRequestApproval(
+				ctx,
+				scope,
+				tx,
+				document,
+				documentVersion,
+				organizationID,
+				approverIDs,
+				minor,
+				now,
+			)
 		},
 	)
 	if err != nil {
@@ -1674,7 +2551,7 @@ func (s *GeneratedDocumentService) buildProcessingActivityListDocumentData(
 
 	if len(dpoIDs) > 0 {
 		var profiles coredata.MembershipProfiles
-		if err := profiles.LoadByIDs(ctx, conn, scope, dpoIDs); err != nil {
+		if err := profiles.LoadByIDs(ctx, conn, scope, dpoIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 			return docgen.ProcessingActivityListData{}, fmt.Errorf("cannot load DPO profiles: %w", err)
 		}
 
@@ -1883,7 +2760,7 @@ func BuildProcessingActivityListDocument(data docgen.ProcessingActivityListData)
 		return "", fmt.Errorf("cannot execute processing activity list template: %w", err)
 	}
 
-	return buf.String(), nil
+	return omitEmptyText(buf.String())
 }
 
 func (s *GeneratedDocumentService) PublishDataProtectionImpactAssessmentList(
@@ -1947,13 +2824,12 @@ func (s *GeneratedDocumentService) PublishDataProtectionImpactAssessmentList(
 				documentID := gid.New(scope.GetTenantID(), coredata.DocumentEntityType)
 
 				document = &coredata.Document{
-					ID:                    documentID,
-					OrganizationID:        organizationID,
-					WriteMode:             coredata.DocumentWriteModeGenerated,
-					TrustCenterVisibility: coredata.TrustCenterVisibilityNone,
-					Status:                coredata.DocumentStatusActive,
-					CreatedAt:             now,
-					UpdatedAt:             now,
+					ID:             documentID,
+					OrganizationID: organizationID,
+					WriteMode:      coredata.DocumentWriteModeGenerated,
+					Status:         coredata.DocumentStatusActive,
+					CreatedAt:      now,
+					UpdatedAt:      now,
 				}
 
 				if err := document.Insert(ctx, tx, scope); err != nil {
@@ -1981,7 +2857,17 @@ func (s *GeneratedDocumentService) PublishDataProtectionImpactAssessmentList(
 				UpdatedAt:      now,
 			}
 
-			return s.publishOrRequestApproval(ctx, scope, tx, document, documentVersion, organizationID, approverIDs, minor, now)
+			return s.publishOrRequestApproval(
+				ctx,
+				scope,
+				tx,
+				document,
+				documentVersion,
+				organizationID,
+				approverIDs,
+				minor,
+				now,
+			)
 		},
 	)
 	if err != nil {
@@ -2057,7 +2943,7 @@ func (s *GeneratedDocumentService) buildDataProtectionImpactAssessmentListDocume
 	}
 
 	var processingActivities coredata.ProcessingActivities
-	if err := processingActivities.LoadByIDs(ctx, conn, scope, processingActivityIDs); err != nil {
+	if err := processingActivities.LoadByIDs(ctx, conn, scope, processingActivityIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 		return docgen.DataProtectionImpactAssessmentListData{}, fmt.Errorf("cannot load processing activities: %w", err)
 	}
 
@@ -2115,7 +3001,7 @@ func BuildDataProtectionImpactAssessmentListDocument(data docgen.DataProtectionI
 		return "", fmt.Errorf("cannot execute DPIA list template: %w", err)
 	}
 
-	return buf.String(), nil
+	return omitEmptyText(buf.String())
 }
 
 func (s *GeneratedDocumentService) PublishTransferImpactAssessmentList(
@@ -2179,13 +3065,12 @@ func (s *GeneratedDocumentService) PublishTransferImpactAssessmentList(
 				documentID := gid.New(scope.GetTenantID(), coredata.DocumentEntityType)
 
 				document = &coredata.Document{
-					ID:                    documentID,
-					OrganizationID:        organizationID,
-					WriteMode:             coredata.DocumentWriteModeGenerated,
-					TrustCenterVisibility: coredata.TrustCenterVisibilityNone,
-					Status:                coredata.DocumentStatusActive,
-					CreatedAt:             now,
-					UpdatedAt:             now,
+					ID:             documentID,
+					OrganizationID: organizationID,
+					WriteMode:      coredata.DocumentWriteModeGenerated,
+					Status:         coredata.DocumentStatusActive,
+					CreatedAt:      now,
+					UpdatedAt:      now,
 				}
 
 				if err := document.Insert(ctx, tx, scope); err != nil {
@@ -2213,7 +3098,17 @@ func (s *GeneratedDocumentService) PublishTransferImpactAssessmentList(
 				UpdatedAt:      now,
 			}
 
-			return s.publishOrRequestApproval(ctx, scope, tx, document, documentVersion, organizationID, approverIDs, minor, now)
+			return s.publishOrRequestApproval(
+				ctx,
+				scope,
+				tx,
+				document,
+				documentVersion,
+				organizationID,
+				approverIDs,
+				minor,
+				now,
+			)
 		},
 	)
 	if err != nil {
@@ -2289,7 +3184,7 @@ func (s *GeneratedDocumentService) buildTransferImpactAssessmentListDocumentData
 	}
 
 	var processingActivities coredata.ProcessingActivities
-	if err := processingActivities.LoadByIDs(ctx, conn, scope, processingActivityIDs); err != nil {
+	if err := processingActivities.LoadByIDs(ctx, conn, scope, processingActivityIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 		return docgen.TransferImpactAssessmentListData{}, fmt.Errorf("cannot load processing activities: %w", err)
 	}
 
@@ -2347,7 +3242,7 @@ func BuildTransferImpactAssessmentListDocument(data docgen.TransferImpactAssessm
 		return "", fmt.Errorf("cannot execute TIA list template: %w", err)
 	}
 
-	return buf.String(), nil
+	return omitEmptyText(buf.String())
 }
 
 func (s *GeneratedDocumentService) PublishThirdPartyList(
@@ -2427,13 +3322,12 @@ func (s *GeneratedDocumentService) PublishThirdPartyList(
 				documentID := gid.New(scope.GetTenantID(), coredata.DocumentEntityType)
 
 				document = &coredata.Document{
-					ID:                    documentID,
-					OrganizationID:        organizationID,
-					WriteMode:             coredata.DocumentWriteModeGenerated,
-					TrustCenterVisibility: coredata.TrustCenterVisibilityNone,
-					Status:                coredata.DocumentStatusActive,
-					CreatedAt:             now,
-					UpdatedAt:             now,
+					ID:             documentID,
+					OrganizationID: organizationID,
+					WriteMode:      coredata.DocumentWriteModeGenerated,
+					Status:         coredata.DocumentStatusActive,
+					CreatedAt:      now,
+					UpdatedAt:      now,
 				}
 
 				if err := document.Insert(ctx, tx, scope); err != nil {
@@ -2461,7 +3355,17 @@ func (s *GeneratedDocumentService) PublishThirdPartyList(
 				UpdatedAt:      now,
 			}
 
-			return s.publishOrRequestApproval(ctx, scope, tx, document, documentVersion, organizationID, approverIDs, minor, now)
+			return s.publishOrRequestApproval(
+				ctx,
+				scope,
+				tx,
+				document,
+				documentVersion,
+				organizationID,
+				approverIDs,
+				minor,
+				now,
+			)
 		},
 	)
 	if err != nil {
@@ -2508,7 +3412,7 @@ func (s *GeneratedDocumentService) buildThirdPartyListDocumentData(
 		},
 		func(ctx context.Context, cursor *page.Cursor[coredata.ThirdPartyOrderField]) ([]*coredata.ThirdParty, error) {
 			var batch coredata.ThirdParties
-			if err := batch.LoadByOrganizationID(ctx, conn, scope, organization.ID, cursor, coredata.NewThirdPartyFilter(nil, &firstLevel, nil)); err != nil {
+			if err := batch.LoadByOrganizationID(ctx, conn, scope, organization.ID, cursor, coredata.NewThirdPartyFilter(&firstLevel, nil, nil, nil)); err != nil {
 				return nil, fmt.Errorf("cannot load thirdParties: %w", err)
 			}
 
@@ -2528,41 +3432,39 @@ func (s *GeneratedDocumentService) buildThirdPartyListDocumentData(
 		}, nil
 	}
 
-	ownerIDSet := make(map[gid.GID]struct{})
-	ownerIDs := make([]gid.GID, 0)
+	thirdPartyIDs := make([]gid.GID, len(thirdParties))
+	for i, v := range thirdParties {
+		thirdPartyIDs[i] = v.ID
+	}
 
-	for _, v := range thirdParties {
-		if v.BusinessOwnerID != nil {
-			if _, ok := ownerIDSet[*v.BusinessOwnerID]; !ok {
-				ownerIDs = append(ownerIDs, *v.BusinessOwnerID)
-				ownerIDSet[*v.BusinessOwnerID] = struct{}{}
-			}
-		}
+	var allAdministrators coredata.ThirdPartyAdministrators
+	if err := allAdministrators.LoadByThirdPartyIDs(ctx, conn, scope, thirdPartyIDs); err != nil {
+		return docgen.ThirdPartyListData{}, fmt.Errorf("cannot load third party administrators: %w", err)
+	}
 
-		if v.SecurityOwnerID != nil {
-			if _, ok := ownerIDSet[*v.SecurityOwnerID]; !ok {
-				ownerIDs = append(ownerIDs, *v.SecurityOwnerID)
-				ownerIDSet[*v.SecurityOwnerID] = struct{}{}
-			}
+	administratorsByThirdParty := make(map[gid.GID][]gid.GID, len(thirdParties))
+	adminIDSet := make(map[gid.GID]struct{})
+	adminIDs := make([]gid.GID, 0)
+
+	for _, a := range allAdministrators {
+		administratorsByThirdParty[a.ThirdPartyID] = append(administratorsByThirdParty[a.ThirdPartyID], a.AdministratorProfileID)
+		if _, ok := adminIDSet[a.AdministratorProfileID]; !ok {
+			adminIDs = append(adminIDs, a.AdministratorProfileID)
+			adminIDSet[a.AdministratorProfileID] = struct{}{}
 		}
 	}
 
 	profileMap := make(map[gid.GID]*coredata.MembershipProfile)
 
-	if len(ownerIDs) > 0 {
+	if len(adminIDs) > 0 {
 		var profiles coredata.MembershipProfiles
-		if err := profiles.LoadByIDs(ctx, conn, scope, ownerIDs); err != nil {
-			return docgen.ThirdPartyListData{}, fmt.Errorf("cannot load owner profiles: %w", err)
+		if err := profiles.LoadByIDs(ctx, conn, scope, adminIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
+			return docgen.ThirdPartyListData{}, fmt.Errorf("cannot load administrator profiles: %w", err)
 		}
 
 		for _, p := range profiles {
 			profileMap[p.ID] = p
 		}
-	}
-
-	thirdPartyIDs := make([]gid.GID, len(thirdParties))
-	for i, v := range thirdParties {
-		thirdPartyIDs[i] = v.ID
 	}
 
 	var allServices coredata.ThirdPartyServices
@@ -2589,6 +3491,8 @@ func (s *GeneratedDocumentService) buildThirdPartyListDocumentData(
 	if err := allAssessments.LoadByThirdPartyIDs(ctx, conn, scope, thirdPartyIDs); err != nil {
 		return docgen.ThirdPartyListData{}, fmt.Errorf("cannot load thirdParty risk assessments: %w", err)
 	}
+
+	now := time.Now()
 
 	assessmentsByThirdParty := make(map[gid.GID]coredata.ThirdPartyRiskAssessments, len(thirdParties))
 	for _, ra := range allAssessments {
@@ -2645,8 +3549,7 @@ func (s *GeneratedDocumentService) buildThirdPartyListDocumentData(
 			TrustPageURL:                  derefStringOrNotSpecified(v.TrustPageURL),
 			Certifications:                joinOrNotSpecified(v.Certifications),
 			Countries:                     formatCountries(v.Countries),
-			BusinessOwner:                 lookupProfileName(profileMap, v.BusinessOwnerID),
-			SecurityOwner:                 lookupProfileName(profileMap, v.SecurityOwnerID),
+			Administrators:                lookupProfileNames(profileMap, administratorsByThirdParty[v.ID]),
 		}
 
 		for _, vs := range servicesByThirdParty[v.ID] {
@@ -2670,8 +3573,8 @@ func (s *GeneratedDocumentService) buildThirdPartyListDocumentData(
 			})
 		}
 
-		for _, ra := range assessmentsByThirdParty[v.ID] {
-			row.RiskAssessments = append(row.RiskAssessments, docgen.ThirdPartyListRiskAssessment{
+		if ra := latestActiveThirdPartyRiskAssessment(assessmentsByThirdParty[v.ID], now); ra != nil {
+			row.RiskAnalyses = append(row.RiskAnalyses, docgen.ThirdPartyListRiskAssessment{
 				AssessedAt:      ra.CreatedAt.Format("2006-01-02"),
 				ExpiresAt:       ra.ExpiresAt.Format("2006-01-02"),
 				DataSensitivity: formatDataSensitivity(ra.DataSensitivity),
@@ -2708,10 +3611,31 @@ func (s *GeneratedDocumentService) buildThirdPartyListDocumentData(
 	return docgen.ThirdPartyListData{
 		Title:             "ThirdParties",
 		OrganizationName:  organization.Name,
-		CreatedAt:         time.Now(),
+		CreatedAt:         now,
 		TotalThirdParties: len(thirdParties),
 		Rows:              rows,
 	}, nil
+}
+
+func latestActiveThirdPartyRiskAssessment(
+	assessments coredata.ThirdPartyRiskAssessments,
+	now time.Time,
+) *coredata.ThirdPartyRiskAssessment {
+	var latest *coredata.ThirdPartyRiskAssessment
+
+	for _, ra := range assessments {
+		if ra == nil || !ra.ExpiresAt.After(now) {
+			continue
+		}
+
+		if latest == nil ||
+			ra.CreatedAt.After(latest.CreatedAt) ||
+			(ra.CreatedAt.Equal(latest.CreatedAt) && bytes.Compare(ra.ID[:], latest.ID[:]) > 0) {
+			latest = ra
+		}
+	}
+
+	return latest
 }
 
 func stringOrNotSpecified(s string) string {
@@ -2761,6 +3685,25 @@ func lookupProfileName(profiles map[gid.GID]*coredata.MembershipProfile, id *gid
 	}
 
 	return "Not assigned"
+}
+
+func lookupProfileNames(profiles map[gid.GID]*coredata.MembershipProfile, ids []gid.GID) string {
+	if len(ids) == 0 {
+		return "Not assigned"
+	}
+
+	names := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if p, ok := profiles[id]; ok && p.FullName != "" {
+			names = append(names, p.FullName)
+		}
+	}
+
+	if len(names) == 0 {
+		return "Not assigned"
+	}
+
+	return strings.Join(names, ", ")
 }
 
 func formatDataSensitivity(s coredata.DataSensitivity) string {
@@ -2883,12 +3826,23 @@ var thirdPartyListTemplate = template.Must(
 )
 
 func BuildThirdPartyListDocument(data docgen.ThirdPartyListData) (string, error) {
+	for i := range data.Rows {
+		for j := range data.Rows[i].RiskAnalyses {
+			blocks, err := proseMirrorBlocksFromMarkdownNotes(data.Rows[i].RiskAnalyses[j].Notes)
+			if err != nil {
+				return "", fmt.Errorf("cannot convert risk assessment notes: %w", err)
+			}
+
+			data.Rows[i].RiskAnalyses[j].NotesBlocks = blocks
+		}
+	}
+
 	var buf bytes.Buffer
 	if err := thirdPartyListTemplate.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("cannot execute thirdParty list template: %w", err)
 	}
 
-	return buf.String(), nil
+	return omitEmptyText(buf.String())
 }
 
 var riskListTemplate = template.Must(
@@ -2914,7 +3868,7 @@ func BuildRiskListDocument(data docgen.RiskListData) (string, error) {
 		return "", fmt.Errorf("cannot execute risk list template: %w", err)
 	}
 
-	return buf.String(), nil
+	return omitEmptyText(buf.String())
 }
 
 func (s *GeneratedDocumentService) PublishRiskList(
@@ -2978,13 +3932,12 @@ func (s *GeneratedDocumentService) PublishRiskList(
 				documentID := gid.New(scope.GetTenantID(), coredata.DocumentEntityType)
 
 				document = &coredata.Document{
-					ID:                    documentID,
-					OrganizationID:        organizationID,
-					WriteMode:             coredata.DocumentWriteModeGenerated,
-					TrustCenterVisibility: coredata.TrustCenterVisibilityNone,
-					Status:                coredata.DocumentStatusActive,
-					CreatedAt:             now,
-					UpdatedAt:             now,
+					ID:             documentID,
+					OrganizationID: organizationID,
+					WriteMode:      coredata.DocumentWriteModeGenerated,
+					Status:         coredata.DocumentStatusActive,
+					CreatedAt:      now,
+					UpdatedAt:      now,
 				}
 
 				if err := document.Insert(ctx, tx, scope); err != nil {
@@ -3012,7 +3965,17 @@ func (s *GeneratedDocumentService) PublishRiskList(
 				UpdatedAt:      now,
 			}
 
-			return s.publishOrRequestApproval(ctx, scope, tx, document, documentVersion, organizationID, approverIDs, minor, now)
+			return s.publishOrRequestApproval(
+				ctx,
+				scope,
+				tx,
+				document,
+				documentVersion,
+				organizationID,
+				approverIDs,
+				minor,
+				now,
+			)
 		},
 	)
 	if err != nil {
@@ -3077,52 +4040,13 @@ func (s *GeneratedDocumentService) buildRiskListDocumentData(
 		}, nil
 	}
 
-	ownerIDs := make([]gid.GID, 0, len(risks))
-	ownerIDSet := make(map[gid.GID]struct{})
-
-	for _, r := range risks {
-		if r.OwnerID != nil {
-			if _, ok := ownerIDSet[*r.OwnerID]; !ok {
-				ownerIDs = append(ownerIDs, *r.OwnerID)
-				ownerIDSet[*r.OwnerID] = struct{}{}
-			}
-		}
-	}
-
-	profileMap := make(map[gid.GID]*coredata.MembershipProfile)
-
-	if len(ownerIDs) > 0 {
-		var profiles coredata.MembershipProfiles
-		if err := profiles.LoadByIDs(ctx, conn, scope, ownerIDs); err != nil {
-			return docgen.RiskListData{}, fmt.Errorf("cannot load profiles: %w", err)
-		}
-
-		for _, p := range profiles {
-			profileMap[p.ID] = p
-		}
-	}
-
 	rows := make([]docgen.RiskListRow, 0, len(risks))
 	for _, r := range risks {
 		rows = append(rows, docgen.RiskListRow{
-			Name:                    r.Name,
-			Description:             derefStringOrNotSpecified(r.Description),
-			Category:                stringOrNotSpecified(r.Category),
-			Treatment:               formatRiskTreatment(r.Treatment),
-			Owner:                   lookupProfileName(profileMap, r.OwnerID),
-			InherentLikelihood:      r.InherentLikelihood,
-			InherentLikelihoodLabel: riskLikelihoodLabel(r.InherentLikelihood),
-			InherentImpact:          r.InherentImpact,
-			InherentImpactLabel:     riskImpactLabel(r.InherentImpact),
-			InherentRiskScore:       r.InherentRiskScore,
-			InherentSeverity:        riskSeverityLabel(r.InherentRiskScore),
-			ResidualLikelihood:      r.ResidualLikelihood,
-			ResidualLikelihoodLabel: riskLikelihoodLabel(r.ResidualLikelihood),
-			ResidualImpact:          r.ResidualImpact,
-			ResidualImpactLabel:     riskImpactLabel(r.ResidualImpact),
-			ResidualRiskScore:       r.ResidualRiskScore,
-			ResidualSeverity:        riskSeverityLabel(r.ResidualRiskScore),
-			Note:                    stringOrNotSpecified(r.Note),
+			Name:        r.Name,
+			Description: derefStringOrNotSpecified(r.Description),
+			Category:    stringOrNotSpecified(r.Category),
+			Note:        stringOrNotSpecified(r.Note),
 		})
 	}
 
@@ -3133,6 +4057,14 @@ func (s *GeneratedDocumentService) buildRiskListDocumentData(
 		TotalRisks:       len(risks),
 		Rows:             rows,
 	}, nil
+}
+
+func formatScoreCell(value *int, label string) string {
+	if value == nil {
+		return label
+	}
+
+	return fmt.Sprintf("%d — %s", *value, label)
 }
 
 func riskLikelihoodLabel(v int) string {
@@ -3169,19 +4101,135 @@ func riskImpactLabel(v int) string {
 	}
 }
 
-func riskSeverityLabel(score int) string {
-	switch {
-	case score >= 15:
+func riskScoreLevelLabel(score int, levels coredata.ScoreLevels) string {
+	level := levels.LevelFor(score)
+	if level == "" {
+		return ""
+	}
+
+	return scoreLevelName(level)
+}
+
+func formatScoreBands(levels coredata.ScoreLevels, maxScore int) string {
+	if maxScore < 1 {
+		maxScore = 1
+	}
+
+	parts := make([]string, 0, len(levels))
+	for i, level := range levels {
+		upper := maxScore
+		if i+1 < len(levels) {
+			upper = levels[i+1].MinScore - 1
+		}
+
+		parts = append(parts, fmt.Sprintf("%s (%s)", scoreLevelName(level.Level), formatScoreBand(level.MinScore, upper)))
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+func formatScoreBand(minScore, maxScore int) string {
+	return fmt.Sprintf("%d-%d", minScore, maxScore)
+}
+
+func scoreLevelName(level coredata.RiskScoreLevel) string {
+	switch level {
+	case coredata.RiskScoreLevelCritical:
 		return "Critical"
-	case score >= 5:
+	case coredata.RiskScoreLevelHigh:
 		return "High"
+	case coredata.RiskScoreLevelMedium:
+		return "Medium"
 	default:
 		return "Low"
 	}
 }
 
-func formatRiskTreatment(t coredata.RiskTreatment) string {
-	switch t {
+func buildRiskAnalysisMatrix(
+	rows, cols int,
+	cells []*coredata.RiskAnalysisMatrixCell,
+) docgen.RiskAnalysisMatrix {
+	if rows < 1 {
+		rows = 5
+	}
+
+	if cols < 1 {
+		cols = 5
+	}
+
+	countsByType := map[coredata.TreatmentPlanScoreType]map[[2]int]int{
+		coredata.TreatmentPlanScoreTypeInherent: {},
+		coredata.TreatmentPlanScoreTypeNet:      {},
+		coredata.TreatmentPlanScoreTypeResidual: {},
+	}
+
+	for _, cell := range cells {
+		counts, ok := countsByType[cell.Type]
+		if !ok {
+			continue
+		}
+
+		if cell.Likelihood < 1 || cell.Likelihood > rows || cell.Impact < 1 || cell.Impact > cols {
+			continue
+		}
+
+		counts[[2]int{cell.Likelihood, cell.Impact}] = cell.Count
+	}
+
+	return docgen.RiskAnalysisMatrix{
+		Size: fmt.Sprintf("%d×%d", rows, cols),
+		Charts: []docgen.RiskAnalysisMatrixChart{
+			riskAnalysisMatrixChart("Initial", rows, cols, countsByType[coredata.TreatmentPlanScoreTypeInherent]),
+			riskAnalysisMatrixChart("Net", rows, cols, countsByType[coredata.TreatmentPlanScoreTypeNet]),
+			riskAnalysisMatrixChart("Residual", rows, cols, countsByType[coredata.TreatmentPlanScoreTypeResidual]),
+		},
+	}
+}
+
+func riskAnalysisMatrixChart(
+	title string,
+	likelihoodMax, impactMax int,
+	counts map[[2]int]int,
+) docgen.RiskAnalysisMatrixChart {
+	var b strings.Builder
+	b.WriteString("<table><tr><th></th>")
+
+	for likelihood := 1; likelihood <= likelihoodMax; likelihood++ {
+		fmt.Fprintf(&b, "<th>%d</th>", likelihood)
+	}
+
+	b.WriteString("</tr>")
+
+	for impact := impactMax; impact >= 1; impact-- {
+		fmt.Fprintf(&b, "<tr><th>%d</th>", impact)
+
+		for likelihood := 1; likelihood <= likelihoodMax; likelihood++ {
+			n := counts[[2]int{likelihood, impact}]
+			if n == 0 {
+				b.WriteString("<td></td>")
+				continue
+			}
+
+			fmt.Fprintf(&b, "<td>%d</td>", n)
+		}
+
+		b.WriteString("</tr>")
+	}
+
+	b.WriteString("</table>\n")
+
+	return docgen.RiskAnalysisMatrixChart{
+		Title: title,
+		HTML:  b.String(),
+	}
+}
+
+func formatRiskTreatment(t *coredata.RiskTreatment) string {
+	if t == nil {
+		return "Not specified"
+	}
+
+	switch *t {
 	case coredata.RiskTreatmentMitigated:
 		return "Mitigated"
 	case coredata.RiskTreatmentAccepted:
@@ -3191,7 +4239,716 @@ func formatRiskTreatment(t coredata.RiskTreatment) string {
 	case coredata.RiskTreatmentTransferred:
 		return "Transferred"
 	default:
-		return stringOrNotSpecified(string(t))
+		return stringOrNotSpecified(string(*t))
+	}
+}
+
+func formatRiskTreatmentValue(t coredata.RiskTreatment) string {
+	return formatRiskTreatment(&t)
+}
+
+func formatRiskAnalysisPeriod(start, end *time.Time) string {
+	if start == nil && end == nil {
+		return "Not specified"
+	}
+
+	return formatTimeOrNotSpecified(start) + " – " + formatTimeOrNotSpecified(end)
+}
+
+var riskAnalysisTemplate = template.Must(
+	template.New("risk_analysis.md.tmpl").
+		Funcs(template.FuncMap{
+			"add": func(a, b int) int {
+				return a + b
+			},
+		}).
+		ParseFS(Templates, "templates/risk_analysis.md.tmpl"),
+)
+
+func BuildRiskAnalysisDocument(data docgen.RiskAnalysisData) (string, error) {
+	var buf bytes.Buffer
+	if err := riskAnalysisTemplate.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("cannot execute risk analysis template: %w", err)
+	}
+
+	node, err := richtext.ParseMarkdown(buf.String())
+	if err != nil {
+		return "", fmt.Errorf("cannot convert risk analysis markdown: %w", err)
+	}
+
+	out, err := json.Marshal(node)
+	if err != nil {
+		return "", fmt.Errorf("cannot marshal risk analysis prosemirror node: %w", err)
+	}
+
+	return string(out), nil
+}
+
+func (s *GeneratedDocumentService) PublishRiskAnalysis(
+	ctx context.Context, scope coredata.Scoper,
+	riskAnalysisID gid.GID,
+	approverIDs []gid.GID,
+	minor bool,
+) (*coredata.Document, *coredata.DocumentVersion, error) {
+	var (
+		document        *coredata.Document
+		documentVersion *coredata.DocumentVersion
+	)
+
+	err := s.svc.pg.WithTx(
+		ctx,
+		func(ctx context.Context, tx pg.Tx) error {
+			riskAnalysis := &coredata.RiskAnalysis{}
+			if err := riskAnalysis.LoadByID(ctx, tx, scope, riskAnalysisID); err != nil {
+				return fmt.Errorf("cannot load risk analysis: %w", err)
+			}
+
+			documentData, err := s.buildRiskAnalysisDocumentData(ctx, scope, tx, riskAnalysis)
+			if err != nil {
+				return fmt.Errorf("cannot build document data: %w", err)
+			}
+
+			prosemirrorJSON, err := BuildRiskAnalysisDocument(documentData)
+			if err != nil {
+				return fmt.Errorf("cannot build prosemirror document: %w", err)
+			}
+
+			now := time.Now()
+
+			var existingDoc *coredata.Document
+
+			if riskAnalysis.DocumentID != nil {
+				doc := &coredata.Document{}
+
+				err = doc.LoadByID(ctx, tx, scope, *riskAnalysis.DocumentID)
+				if err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
+					return fmt.Errorf("cannot load risk analysis document: %w", err)
+				}
+
+				if err == nil && doc.ArchivedAt == nil {
+					existingDoc = doc
+				} else {
+					riskAnalysis.DocumentID = nil
+
+					riskAnalysis.UpdatedAt = now
+					if err := riskAnalysis.Update(ctx, tx, scope); err != nil {
+						return fmt.Errorf("cannot clear document reference: %w", err)
+					}
+				}
+			}
+
+			if existingDoc == nil {
+				documentID := gid.New(scope.GetTenantID(), coredata.DocumentEntityType)
+
+				document = &coredata.Document{
+					ID:             documentID,
+					OrganizationID: riskAnalysis.OrganizationID,
+					WriteMode:      coredata.DocumentWriteModeGenerated,
+					Status:         coredata.DocumentStatusActive,
+					CreatedAt:      now,
+					UpdatedAt:      now,
+				}
+
+				if err := document.Insert(ctx, tx, scope); err != nil {
+					return fmt.Errorf("cannot insert document: %w", err)
+				}
+
+				riskAnalysis.DocumentID = &documentID
+
+				riskAnalysis.UpdatedAt = now
+				if err := riskAnalysis.Update(ctx, tx, scope); err != nil {
+					return fmt.Errorf("cannot update document reference: %w", err)
+				}
+			} else {
+				document = existingDoc
+			}
+
+			documentVersionID := gid.New(scope.GetTenantID(), coredata.DocumentVersionEntityType)
+			documentVersion = &coredata.DocumentVersion{
+				ID:             documentVersionID,
+				OrganizationID: riskAnalysis.OrganizationID,
+				DocumentID:     document.ID,
+				Title:          riskAnalysis.Name,
+				Content:        prosemirrorJSON,
+				Classification: coredata.DocumentClassificationConfidential,
+				DocumentType:   coredata.DocumentTypeRegister,
+				Orientation:    coredata.DocumentVersionOrientationPortrait,
+				CreatedAt:      now,
+				UpdatedAt:      now,
+			}
+
+			return s.publishOrRequestApproval(
+				ctx,
+				scope,
+				tx,
+				document,
+				documentVersion,
+				riskAnalysis.OrganizationID,
+				approverIDs,
+				minor,
+				now,
+			)
+		},
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return document, documentVersion, nil
+}
+
+func (s *GeneratedDocumentService) buildRiskAnalysisDocumentData(
+	ctx context.Context, scope coredata.Scoper,
+	conn pg.Querier,
+	riskAnalysis *coredata.RiskAnalysis,
+) (docgen.RiskAnalysisData, error) {
+	organization := &coredata.Organization{}
+	if err := organization.LoadByID(ctx, conn, scope, riskAnalysis.OrganizationID); err != nil {
+		return docgen.RiskAnalysisData{}, fmt.Errorf("cannot load organization: %w", err)
+	}
+
+	treatmentPlans, err := page.LoadAll(
+		ctx,
+		page.OrderBy[coredata.TreatmentPlanOrderField]{
+			Field:     coredata.TreatmentPlanOrderFieldCategory,
+			Direction: page.OrderDirectionAsc,
+		},
+		func(ctx context.Context, cursor *page.Cursor[coredata.TreatmentPlanOrderField]) ([]*coredata.TreatmentPlan, error) {
+			var batch coredata.TreatmentPlans
+			if err := batch.LoadByRiskAnalysisID(ctx, conn, scope, riskAnalysis.ID, cursor, coredata.NewTreatmentPlanFilter(nil, nil, nil)); err != nil {
+				return nil, fmt.Errorf("cannot load treatment plans: %w", err)
+			}
+
+			return batch, nil
+		},
+	)
+	if err != nil {
+		return docgen.RiskAnalysisData{}, err
+	}
+
+	diagrams, err := s.buildRiskAnalysisDiagrams(ctx, scope, conn, riskAnalysis.ID)
+	if err != nil {
+		return docgen.RiskAnalysisData{}, err
+	}
+
+	description, err := riskAnalysisDescriptionMarkdown(riskAnalysis.Description)
+	if err != nil {
+		return docgen.RiskAnalysisData{}, err
+	}
+
+	var treatmentPlansForMatrix coredata.TreatmentPlans
+
+	matrixCells, err := treatmentPlansForMatrix.CountMatrixCellsByRiskAnalysisID(
+		ctx,
+		conn,
+		scope,
+		riskAnalysis.ID,
+	)
+	if err != nil {
+		return docgen.RiskAnalysisData{}, fmt.Errorf("cannot load risk analysis matrix cells: %w", err)
+	}
+
+	matrix := buildRiskAnalysisMatrix(riskAnalysis.MatrixRows, riskAnalysis.MatrixCols, matrixCells)
+	maxScore := riskAnalysis.MatrixRows * riskAnalysis.MatrixCols
+	scoreBands := formatScoreBands(riskAnalysis.ScoreLevels, maxScore)
+
+	if len(treatmentPlans) == 0 {
+		return docgen.RiskAnalysisData{
+			Title:            sanitizeTrackerCell(riskAnalysis.Name),
+			OrganizationName: sanitizeTrackerCell(organization.Name),
+			CreatedAt:        riskAnalysis.CreatedAt,
+			Period:           sanitizeTrackerCell(formatRiskAnalysisPeriod(riskAnalysis.PeriodStart, riskAnalysis.PeriodEnd)),
+			Description:      description,
+			Matrix:           matrix,
+			MaxScore:         maxScore,
+			ScoreBands:       scoreBands,
+			TotalPlans:       0,
+			Diagrams:         diagrams,
+		}, nil
+	}
+
+	riskIDs := make([]gid.GID, 0, len(treatmentPlans))
+	riskIDSet := make(map[gid.GID]struct{}, len(treatmentPlans))
+	ownerIDs := make([]gid.GID, 0, len(treatmentPlans))
+	ownerIDSet := make(map[gid.GID]struct{}, len(treatmentPlans))
+	planIDs := make([]gid.GID, 0, len(treatmentPlans))
+
+	for _, tp := range treatmentPlans {
+		planIDs = append(planIDs, tp.ID)
+
+		if _, ok := riskIDSet[tp.RiskID]; !ok {
+			riskIDs = append(riskIDs, tp.RiskID)
+			riskIDSet[tp.RiskID] = struct{}{}
+		}
+
+		if _, ok := ownerIDSet[tp.OwnerID]; !ok {
+			ownerIDs = append(ownerIDs, tp.OwnerID)
+			ownerIDSet[tp.OwnerID] = struct{}{}
+		}
+	}
+
+	riskMap := make(map[gid.GID]*coredata.Risk, len(riskIDs))
+
+	if len(riskIDs) > 0 {
+		var risks coredata.Risks
+		if err := risks.LoadByIDs(ctx, conn, scope, riskIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
+			return docgen.RiskAnalysisData{}, fmt.Errorf("cannot load risks: %w", err)
+		}
+
+		for _, r := range risks {
+			riskMap[r.ID] = r
+		}
+	}
+
+	profileMap := make(map[gid.GID]*coredata.MembershipProfile)
+
+	if len(ownerIDs) > 0 {
+		var profiles coredata.MembershipProfiles
+		if err := profiles.LoadByIDs(ctx, conn, scope, ownerIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
+			return docgen.RiskAnalysisData{}, fmt.Errorf("cannot load profiles: %w", err)
+		}
+
+		for _, p := range profiles {
+			profileMap[p.ID] = p
+		}
+	}
+
+	internalControlsByPlan, err := s.loadRiskAnalysisInternalControlsByPlan(ctx, scope, conn, planIDs)
+	if err != nil {
+		return docgen.RiskAnalysisData{}, err
+	}
+
+	rows := make([]docgen.RiskAnalysisRow, 0, len(treatmentPlans))
+	for _, tp := range treatmentPlans {
+		name := "Not specified"
+		description := "Not specified"
+		referenceID := ""
+
+		if risk, ok := riskMap[tp.RiskID]; ok {
+			name = risk.Name
+			description = derefStringOrNotSpecified(risk.Description)
+			referenceID = risk.ReferenceID
+		}
+
+		ownerID := tp.OwnerID
+		inherentLikelihood := tp.InherentLikelihood
+		inherentImpact := tp.InherentImpact
+		inherentRiskScore := tp.InherentRiskScore
+		residualLikelihood := tp.ResidualLikelihood
+		residualImpact := tp.ResidualImpact
+		residualRiskScore := tp.ResidualRiskScore
+
+		rows = append(rows, docgen.RiskAnalysisRow{
+			ReferenceID:        sanitizeTrackerCell(referenceID),
+			Name:               sanitizeTrackerCell(name),
+			Description:        sanitizeTrackerCell(description),
+			Category:           sanitizeTrackerCell(stringOrNotSpecified(tp.Category)),
+			Treatment:          sanitizeTrackerCell(formatRiskTreatmentValue(tp.Treatment)),
+			Owner:              sanitizeTrackerCell(lookupProfileName(profileMap, &ownerID)),
+			InherentLikelihood: sanitizeTrackerCell(formatScoreCell(&inherentLikelihood, riskLikelihoodLabel(inherentLikelihood))),
+			InherentImpact:     sanitizeTrackerCell(formatScoreCell(&inherentImpact, riskImpactLabel(inherentImpact))),
+			InherentRiskScore:  sanitizeTrackerCell(formatScoreCell(&inherentRiskScore, riskScoreLevelLabel(inherentRiskScore, riskAnalysis.ScoreLevels))),
+			ResidualLikelihood: sanitizeTrackerCell(formatScoreCell(&residualLikelihood, riskLikelihoodLabel(residualLikelihood))),
+			ResidualImpact:     sanitizeTrackerCell(formatScoreCell(&residualImpact, riskImpactLabel(residualImpact))),
+			ResidualRiskScore:  sanitizeTrackerCell(formatScoreCell(&residualRiskScore, riskScoreLevelLabel(residualRiskScore, riskAnalysis.ScoreLevels))),
+			InternalControls:   internalControlsByPlan[tp.ID],
+		})
+	}
+
+	return docgen.RiskAnalysisData{
+		Title:            sanitizeTrackerCell(riskAnalysis.Name),
+		OrganizationName: sanitizeTrackerCell(organization.Name),
+		CreatedAt:        riskAnalysis.CreatedAt,
+		Period:           sanitizeTrackerCell(formatRiskAnalysisPeriod(riskAnalysis.PeriodStart, riskAnalysis.PeriodEnd)),
+		Description:      description,
+		Matrix:           matrix,
+		MaxScore:         maxScore,
+		ScoreBands:       scoreBands,
+		TotalPlans:       len(treatmentPlans),
+		Rows:             rows,
+		Diagrams:         diagrams,
+	}, nil
+}
+
+func riskAnalysisDescriptionMarkdown(raw *string) (string, error) {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return "", nil
+	}
+
+	var node prosemirror.Node
+	if err := json.Unmarshal([]byte(*raw), &node); err != nil {
+		return "", fmt.Errorf("cannot parse risk analysis description: %w", err)
+	}
+
+	markdown, err := richtext.DocumentMarkdown.Render(node)
+	if err != nil {
+		return "", fmt.Errorf("cannot render risk analysis description: %w", err)
+	}
+
+	return strings.TrimSpace(markdown), nil
+}
+
+func (s *GeneratedDocumentService) loadRiskAnalysisInternalControlsByPlan(
+	ctx context.Context,
+	scope coredata.Scoper,
+	conn pg.Querier,
+	planIDs []gid.GID,
+) (map[gid.GID][]docgen.RiskAnalysisInternalControl, error) {
+	var mappings coredata.TreatmentPlanInternalControls
+	if err := mappings.LoadByTreatmentPlanIDs(ctx, conn, scope, planIDs); err != nil {
+		return nil, fmt.Errorf("cannot load treatment plan internalControls: %w", err)
+	}
+
+	internalControlIDs := make([]gid.GID, 0, len(mappings))
+	internalControlIDSet := make(map[gid.GID]struct{}, len(mappings))
+
+	for _, mapping := range mappings {
+		if _, ok := internalControlIDSet[mapping.InternalControlID]; !ok {
+			internalControlIDs = append(internalControlIDs, mapping.InternalControlID)
+			internalControlIDSet[mapping.InternalControlID] = struct{}{}
+		}
+	}
+
+	internalControlMap := make(map[gid.GID]*coredata.InternalControl, len(internalControlIDs))
+
+	if len(internalControlIDs) > 0 {
+		var internalControls coredata.InternalControls
+		if err := internalControls.LoadByIDs(ctx, conn, scope, internalControlIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
+			return nil, fmt.Errorf("cannot load internalControls: %w", err)
+		}
+
+		for _, internalControl := range internalControls {
+			internalControlMap[internalControl.ID] = internalControl
+		}
+	}
+
+	internalControlsByPlan := make(map[gid.GID][]docgen.RiskAnalysisInternalControl, len(planIDs))
+
+	for _, mapping := range mappings {
+		internalControl, ok := internalControlMap[mapping.InternalControlID]
+		if !ok {
+			continue
+		}
+
+		internalControlsByPlan[mapping.TreatmentPlanID] = append(
+			internalControlsByPlan[mapping.TreatmentPlanID],
+			docgen.RiskAnalysisInternalControl{
+				Name:  sanitizeTrackerCell(internalControl.Name),
+				State: sanitizeTrackerCell(formatInternalControlState(internalControl.State)),
+			},
+		)
+	}
+
+	for _, internalControls := range internalControlsByPlan {
+		slices.SortFunc(internalControls, func(a, b docgen.RiskAnalysisInternalControl) int {
+			if cmp := strings.Compare(a.Name, b.Name); cmp != 0 {
+				return cmp
+			}
+
+			return strings.Compare(a.State, b.State)
+		})
+	}
+
+	return internalControlsByPlan, nil
+}
+
+func (s *GeneratedDocumentService) buildRiskAnalysisDiagrams(
+	ctx context.Context,
+	scope coredata.Scoper,
+	conn pg.Querier,
+	riskAnalysisID gid.GID,
+) ([]docgen.RiskAnalysisDiagram, error) {
+	diagrams, err := page.LoadAll(
+		ctx,
+		page.OrderBy[coredata.RiskAnalysisDiagramOrderField]{
+			Field:     coredata.RiskAnalysisDiagramOrderFieldCreatedAt,
+			Direction: page.OrderDirectionAsc,
+		},
+		func(ctx context.Context, cursor *page.Cursor[coredata.RiskAnalysisDiagramOrderField]) ([]*coredata.RiskAnalysisDiagram, error) {
+			var batch coredata.RiskAnalysisDiagrams
+			if err := batch.LoadByRiskAnalysisID(ctx, conn, scope, riskAnalysisID, cursor); err != nil {
+				return nil, fmt.Errorf("cannot load diagrams: %w", err)
+			}
+
+			return batch, nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([]docgen.RiskAnalysisDiagram, 0, len(diagrams))
+	for _, diagram := range diagrams {
+		mermaid, err := s.buildRiskAnalysisDiagramMermaid(ctx, scope, conn, diagram.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		scenarios, err := s.buildRiskAnalysisDiagramScenarios(ctx, scope, conn, diagram.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		rows = append(rows, docgen.RiskAnalysisDiagram{
+			Name:      sanitizeTrackerCell(diagram.Name),
+			Mermaid:   mermaid,
+			Scenarios: scenarios,
+		})
+	}
+
+	return rows, nil
+}
+
+func (s *GeneratedDocumentService) buildRiskAnalysisDiagramMermaid(
+	ctx context.Context,
+	scope coredata.Scoper,
+	conn pg.Querier,
+	diagramID gid.GID,
+) (string, error) {
+	nodes, err := page.LoadAll(
+		ctx,
+		page.OrderBy[coredata.RiskAnalysisNodeOrderField]{
+			Field:     coredata.RiskAnalysisNodeOrderFieldCreatedAt,
+			Direction: page.OrderDirectionAsc,
+		},
+		func(ctx context.Context, cursor *page.Cursor[coredata.RiskAnalysisNodeOrderField]) ([]*coredata.RiskAnalysisNode, error) {
+			var batch coredata.RiskAnalysisNodes
+			if err := batch.LoadByRiskAnalysisDiagramID(ctx, conn, scope, diagramID, cursor); err != nil {
+				return nil, fmt.Errorf("cannot load diagram nodes: %w", err)
+			}
+
+			return batch, nil
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+
+	boundaries, err := page.LoadAll(
+		ctx,
+		page.OrderBy[coredata.RiskAnalysisBoundaryOrderField]{
+			Field:     coredata.RiskAnalysisBoundaryOrderFieldCreatedAt,
+			Direction: page.OrderDirectionAsc,
+		},
+		func(ctx context.Context, cursor *page.Cursor[coredata.RiskAnalysisBoundaryOrderField]) ([]*coredata.RiskAnalysisBoundary, error) {
+			var batch coredata.RiskAnalysisBoundaries
+			if err := batch.LoadByRiskAnalysisDiagramID(ctx, conn, scope, diagramID, cursor); err != nil {
+				return nil, fmt.Errorf("cannot load diagram boundaries: %w", err)
+			}
+
+			return batch, nil
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+
+	processes, err := page.LoadAll(
+		ctx,
+		page.OrderBy[coredata.RiskAnalysisProcessOrderField]{
+			Field:     coredata.RiskAnalysisProcessOrderFieldCreatedAt,
+			Direction: page.OrderDirectionAsc,
+		},
+		func(ctx context.Context, cursor *page.Cursor[coredata.RiskAnalysisProcessOrderField]) ([]*coredata.RiskAnalysisProcess, error) {
+			var batch coredata.RiskAnalysisProcesses
+			if err := batch.LoadByRiskAnalysisDiagramID(ctx, conn, scope, diagramID, cursor); err != nil {
+				return nil, fmt.Errorf("cannot load diagram processes: %w", err)
+			}
+
+			return batch, nil
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+
+	threats, err := page.LoadAll(
+		ctx,
+		page.OrderBy[coredata.RiskAnalysisThreatOrderField]{
+			Field:     coredata.RiskAnalysisThreatOrderFieldCreatedAt,
+			Direction: page.OrderDirectionAsc,
+		},
+		func(ctx context.Context, cursor *page.Cursor[coredata.RiskAnalysisThreatOrderField]) ([]*coredata.RiskAnalysisThreat, error) {
+			var batch coredata.RiskAnalysisThreats
+			if err := batch.LoadByRiskAnalysisDiagramID(ctx, conn, scope, diagramID, cursor); err != nil {
+				return nil, fmt.Errorf("cannot load diagram threats: %w", err)
+			}
+
+			return batch, nil
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+
+	return riskmanagement.DiagramMermaidChart(nodes, boundaries, processes, threats), nil
+}
+
+func (s *GeneratedDocumentService) buildRiskAnalysisDiagramScenarios(
+	ctx context.Context,
+	scope coredata.Scoper,
+	conn pg.Querier,
+	diagramID gid.GID,
+) ([]docgen.RiskAnalysisScenario, error) {
+	scenarios, err := page.LoadAll(
+		ctx,
+		page.OrderBy[coredata.RiskAnalysisScenarioOrderField]{
+			Field:     coredata.RiskAnalysisScenarioOrderFieldCreatedAt,
+			Direction: page.OrderDirectionAsc,
+		},
+		func(ctx context.Context, cursor *page.Cursor[coredata.RiskAnalysisScenarioOrderField]) ([]*coredata.RiskAnalysisScenario, error) {
+			var batch coredata.RiskAnalysisScenarios
+			if err := batch.LoadByRiskAnalysisDiagramID(ctx, conn, scope, diagramID, cursor); err != nil {
+				return nil, fmt.Errorf("cannot load diagram scenarios: %w", err)
+			}
+
+			return batch, nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(scenarios) == 0 {
+		return nil, nil
+	}
+
+	scenarioIDs := make([]gid.GID, 0, len(scenarios))
+	for _, scenario := range scenarios {
+		scenarioIDs = append(scenarioIDs, scenario.ID)
+	}
+
+	var riskLinks coredata.RiskAnalysisScenarioRisks
+	if err := riskLinks.LoadByScenarioIDs(ctx, conn, scope, scenarioIDs); err != nil {
+		return nil, fmt.Errorf("cannot load scenario risks: %w", err)
+	}
+
+	var threatLinks coredata.RiskAnalysisScenarioThreats
+	if err := threatLinks.LoadByScenarioIDs(ctx, conn, scope, scenarioIDs); err != nil {
+		return nil, fmt.Errorf("cannot load scenario threats: %w", err)
+	}
+
+	riskIDs := make([]gid.GID, 0, len(riskLinks))
+	riskIDSet := make(map[gid.GID]struct{}, len(riskLinks))
+
+	for _, link := range riskLinks {
+		if _, ok := riskIDSet[link.RiskID]; !ok {
+			riskIDs = append(riskIDs, link.RiskID)
+			riskIDSet[link.RiskID] = struct{}{}
+		}
+	}
+
+	riskMap := make(map[gid.GID]*coredata.Risk, len(riskIDs))
+
+	if len(riskIDs) > 0 {
+		var risks coredata.Risks
+		if err := risks.LoadByIDs(ctx, conn, scope, riskIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
+			return nil, fmt.Errorf("cannot load risks: %w", err)
+		}
+
+		for _, risk := range risks {
+			riskMap[risk.ID] = risk
+		}
+	}
+
+	threats, err := page.LoadAll(
+		ctx,
+		page.OrderBy[coredata.RiskAnalysisThreatOrderField]{
+			Field:     coredata.RiskAnalysisThreatOrderFieldCreatedAt,
+			Direction: page.OrderDirectionAsc,
+		},
+		func(ctx context.Context, cursor *page.Cursor[coredata.RiskAnalysisThreatOrderField]) ([]*coredata.RiskAnalysisThreat, error) {
+			var batch coredata.RiskAnalysisThreats
+			if err := batch.LoadByRiskAnalysisDiagramID(ctx, conn, scope, diagramID, cursor); err != nil {
+				return nil, fmt.Errorf("cannot load diagram threats: %w", err)
+			}
+
+			return batch, nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	threatMap := make(map[gid.GID]*coredata.RiskAnalysisThreat, len(threats))
+	for _, threat := range threats {
+		threatMap[threat.ID] = threat
+	}
+
+	risksByScenario := make(map[gid.GID][]string, len(scenarios))
+
+	for _, link := range riskLinks {
+		risk, ok := riskMap[link.RiskID]
+		if !ok {
+			continue
+		}
+
+		risksByScenario[link.RiskAnalysisScenarioID] = append(
+			risksByScenario[link.RiskAnalysisScenarioID],
+			sanitizeTrackerCell(risk.Name),
+		)
+	}
+
+	threatsByScenario := make(map[gid.GID][]string, len(scenarios))
+
+	for _, link := range threatLinks {
+		threat, ok := threatMap[link.RiskAnalysisThreatID]
+		if !ok {
+			continue
+		}
+
+		label := sanitizeTrackerCell(threat.Name)
+		if category := sanitizeTrackerCell(threat.Category); category != "" {
+			label = label + " (" + category + ")"
+		}
+
+		threatsByScenario[link.RiskAnalysisScenarioID] = append(
+			threatsByScenario[link.RiskAnalysisScenarioID],
+			label,
+		)
+	}
+
+	rows := make([]docgen.RiskAnalysisScenario, 0, len(scenarios))
+	for _, scenario := range scenarios {
+		riskNames := risksByScenario[scenario.ID]
+		threatNames := threatsByScenario[scenario.ID]
+
+		slices.Sort(riskNames)
+
+		slices.Sort(threatNames)
+
+		description := ""
+		if scenario.Description != nil {
+			description = sanitizeTrackerCell(*scenario.Description)
+		}
+
+		rows = append(rows, docgen.RiskAnalysisScenario{
+			Name:        sanitizeTrackerCell(scenario.Name),
+			Description: description,
+			Risks:       riskNames,
+			Threats:     threatNames,
+		})
+	}
+
+	return rows, nil
+}
+
+func formatInternalControlState(state coredata.InternalControlState) string {
+	switch state {
+	case coredata.InternalControlStateNotStarted:
+		return "Not started"
+	case coredata.InternalControlStateInProgress:
+		return "In progress"
+	case coredata.InternalControlStateNotApplicable:
+		return "Not applicable"
+	case coredata.InternalControlStateImplemented:
+		return "Implemented"
+	case coredata.InternalControlStateUnknown:
+		return "Unknown"
+	case coredata.InternalControlStateNotImplemented:
+		return "Not implemented"
+	default:
+		return stringOrNotSpecified(string(state))
 	}
 }
 
@@ -3203,7 +4960,8 @@ func formatRiskTreatment(t coredata.RiskTreatment) string {
 // minor is false a non-empty approverIDs triggers an approval request at
 // (currentMajor+1).0; otherwise the version is published at (currentMajor+1).0.
 func (s *GeneratedDocumentService) publishOrRequestApproval(
-	ctx context.Context, scope coredata.Scoper,
+	ctx context.Context,
+	scope coredata.Scoper,
 	tx pg.Tx,
 	document *coredata.Document,
 	version *coredata.DocumentVersion,
@@ -3212,85 +4970,107 @@ func (s *GeneratedDocumentService) publishOrRequestApproval(
 	minor bool,
 	now time.Time,
 ) error {
-	previousVersion := &coredata.DocumentVersion{}
+	if err := s.svc.Documents.ensureNoPendingApproval(ctx, scope, tx, document.ID); err != nil {
+		return err
+	}
 
-	isFirstVersion := false
+	content, err := richtext.DocumentSchema.Sanitize(version.Content)
+	if err != nil {
+		return fmt.Errorf("cannot sanitize generated document content: %w", err)
+	}
 
-	err := previousVersion.LoadLatestVersion(ctx, tx, scope, document.ID)
-	switch {
-	case err == nil:
-		version.Title = previousVersion.Title
-		version.Classification = previousVersion.Classification
-		version.DocumentType = previousVersion.DocumentType
-	case errors.Is(err, coredata.ErrResourceNotFound):
-		// First publish: keep the caller-provided defaults.
-		isFirstVersion = true
-	default:
-		return fmt.Errorf("cannot load previous document version: %w", err)
+	isFirstVersion := document.Title == ""
+	if isFirstVersion {
+		document.Title = version.Title
+		document.Classification = version.Classification
+
+		document.DocumentType = version.DocumentType
+		if version.Orientation != "" {
+			document.Orientation = version.Orientation
+		}
+	}
+
+	document.Content = content
+	document.UpdatedAt = now
+
+	// Generating a version replaces the live document. An open suggestion
+	// has to be resolved first, the same rule as publishing an authored one.
+	if err := s.svc.Documents.collaboration.EnsureNoOpenSuggestions(ctx, tx, scope, document.ID); err != nil {
+		return err
+	}
+
+	if err := s.svc.Documents.collaboration.PutContent(
+		ctx,
+		tx,
+		scope,
+		document.ID,
+		content,
+	); err != nil {
+		return fmt.Errorf("cannot store generated document content: %w", err)
+	}
+
+	if err := document.Update(ctx, tx, scope); err != nil {
+		return fmt.Errorf("cannot update live document: %w", err)
+	}
+
+	if err := coredata.UpsertSearchResource(
+		ctx,
+		tx,
+		document.ID,
+		document.OrganizationID,
+		document.Title,
+		document.SearchText(),
+	); err != nil {
+		return fmt.Errorf("cannot sync search: %w", err)
+	}
+
+	if err := document.UpdateContent(ctx, tx, scope); err != nil {
+		return fmt.Errorf("cannot update live document content: %w", err)
 	}
 
 	if minor {
-		if document.CurrentPublishedMajor != nil && document.CurrentPublishedMinor != nil {
-			version.Major = *document.CurrentPublishedMajor
-			version.Minor = *document.CurrentPublishedMinor + 1
-		} else {
-			version.Major = 0
-			version.Minor = 1
-		}
-
-		version.Status = coredata.DocumentVersionStatusPublished
-		version.PublishedAt = &now
 		approverIDs = nil
-	} else {
-		if document.CurrentPublishedMajor != nil {
-			version.Major = *document.CurrentPublishedMajor + 1
-		} else {
-			version.Major = 1
-		}
-
-		version.Minor = 0
-		if len(approverIDs) > 0 {
-			version.Status = coredata.DocumentVersionStatusDraft
-			version.PublishedAt = nil
-		} else {
-			version.Status = coredata.DocumentVersionStatusPublished
-			version.PublishedAt = &now
-		}
 	}
 
-	if err := version.Insert(ctx, tx, scope); err != nil {
+	status := coredata.DocumentVersionStatusPublished
+	if len(approverIDs) > 0 {
+		status = coredata.DocumentVersionStatusPendingApproval
+	}
+
+	snapshot, err := s.svc.Documents.insertSnapshot(ctx, scope, tx, document, minor, status, nil)
+	if err != nil {
 		if errors.Is(err, coredata.ErrResourceAlreadyExists) {
-			switch previousVersion.Status {
-			case coredata.DocumentVersionStatusDraft:
-				return fmt.Errorf("a draft version exists, publish or delete it before publishing a new one: %w", err)
-			case coredata.DocumentVersionStatusPendingApproval:
-				return fmt.Errorf("a version is pending approval, approve or reject it before publishing a new one: %w", err)
-			default:
-				return fmt.Errorf("a version already exists at this number: %w", err)
-			}
+			return fmt.Errorf("a version is pending approval, approve or reject it before publishing a new one: %w", err)
 		}
 
-		return fmt.Errorf("cannot insert document version: %w", err)
+		return err
 	}
+
+	*version = *snapshot
 
 	if len(approverIDs) > 0 {
+		profiles := &coredata.MembershipProfiles{}
+		if err := profiles.LoadByIDs(ctx, tx, scope, approverIDs); err != nil {
+			return fmt.Errorf("cannot load approver profiles: %w", err)
+		}
+
 		defaultApprovers := &coredata.DocumentDefaultApprovers{}
 		if err := defaultApprovers.MergeByDocumentID(ctx, tx, scope, document.ID, organizationID, approverIDs); err != nil {
 			return fmt.Errorf("cannot save default approvers: %w", err)
 		}
 
-		quorum, err := s.svc.DocumentApprovals.RequestApprovalInTx(ctx, scope, tx, document, version, approverIDs, nil)
+		quorum, err := s.svc.DocumentApprovals.RequestApproval(ctx, scope, tx, document, version, approverIDs, nil)
 		if err != nil {
 			return fmt.Errorf("cannot request approval: %w", err)
 		}
 
 		if isFirstVersion {
-			if err := s.svc.Documents.emitDocumentEventInTx(ctx, scope, tx, document.ID, coredata.WebhookEventTypeDocumentCreated, nil, nil, nil); err != nil {
+			if err := s.svc.Documents.emitDocumentEvent(ctx, scope, tx, document.ID, coredata.WebhookEventTypeDocumentCreated, nil, nil, nil, nil); err != nil {
 				return fmt.Errorf("cannot emit document created webhook: %w", err)
 			}
 		}
 
-		if err := s.svc.Documents.emitDocumentEventInTx(
+		if err := s.svc.Documents.emitDocumentEvent(
 			ctx,
 			scope,
 			tx,
@@ -3299,19 +5079,12 @@ func (s *GeneratedDocumentService) publishOrRequestApproval(
 			version,
 			nil,
 			&quorum.ID,
+			nil,
 		); err != nil {
 			return fmt.Errorf("cannot emit approval quorum requested webhook: %w", err)
 		}
 
 		return nil
-	}
-
-	document.CurrentPublishedMajor = &version.Major
-	document.CurrentPublishedMinor = &version.Minor
-	document.UpdatedAt = now
-
-	if err := document.Update(ctx, tx, scope); err != nil {
-		return fmt.Errorf("cannot update document: %w", err)
 	}
 
 	if !minor {
@@ -3321,18 +5094,19 @@ func (s *GeneratedDocumentService) publishOrRequestApproval(
 	}
 
 	if isFirstVersion {
-		if err := s.svc.Documents.emitDocumentEventInTx(ctx, scope, tx, document.ID, coredata.WebhookEventTypeDocumentCreated, nil, nil, nil); err != nil {
+		if err := s.svc.Documents.emitDocumentEvent(ctx, scope, tx, document.ID, coredata.WebhookEventTypeDocumentCreated, nil, nil, nil, nil); err != nil {
 			return fmt.Errorf("cannot emit document created webhook: %w", err)
 		}
 	}
 
-	if err := s.svc.Documents.emitDocumentEventInTx(
+	if err := s.svc.Documents.emitDocumentEvent(
 		ctx,
 		scope,
 		tx,
 		version.DocumentID,
 		coredata.WebhookEventTypeDocumentVersionPublished,
 		version,
+		nil,
 		nil,
 		nil,
 	); err != nil {

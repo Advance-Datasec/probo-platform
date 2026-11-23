@@ -1,28 +1,35 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"go.probo.inc/probo/pkg/coredata"
 )
@@ -34,10 +41,14 @@ type PostHogDriver struct {
 
 var _ Driver = (*PostHogDriver)(nil)
 
+// PostHogOrganizationPath is the @current organization endpoint. It is the
+// single source of truth shared with the connection probe so the two never
+// duplicate the path.
+const PostHogOrganizationPath = "/api/organizations/@current/"
+
 const (
-	posthogMembersPath      = "/api/organizations/@current/members/"
-	posthogOrganizationPath = "/api/organizations/@current/"
-	posthogMembersPageSize  = 100
+	posthogMembersPath     = "/api/organizations/@current/members/"
+	posthogMembersPageSize = 100
 
 	// PostHog Cloud regional data hosts. OAuth connections carry no region
 	// (empty baseURL): the region-agnostic oauth.posthog.com gateway used
@@ -52,6 +63,13 @@ const (
 	posthogMembershipLevelAdmin  = 8
 	posthogMembershipLevelOwner  = 15
 )
+
+// ErrPostHogCredentialRejected reports that every PostHog Cloud region refused
+// the token with 401/403 — a definitively dead or revoked credential, as
+// opposed to a transient failure (5xx/network) on the token's own region. The
+// connection probe uses it to tell a rejected credential apart from an
+// inconclusive result, which must not flap the source to disconnected.
+var ErrPostHogCredentialRejected = errors.New("posthog rejected the credential on every region")
 
 type (
 	posthogMembersResponse struct {
@@ -94,7 +112,7 @@ func (d *PostHogDriver) resolveBaseURL(ctx context.Context) error {
 		return nil
 	}
 
-	host, err := resolvePostHogRegion(ctx, d.httpClient)
+	host, err := ResolvePostHogRegion(ctx, d.httpClient)
 	if err != nil {
 		return err
 	}
@@ -164,40 +182,16 @@ func (d *PostHogDriver) membersURL() (string, error) {
 }
 
 func (d *PostHogDriver) resolveNextURL(next string) (string, error) {
-	nextURL, err := url.Parse(next)
-	if err != nil {
-		return "", fmt.Errorf("cannot parse posthog next page URL: %w", err)
-	}
-
-	if nextURL.IsAbs() {
-		base, err := url.Parse(d.baseURL)
-		if err != nil {
-			return "", fmt.Errorf("cannot parse posthog base URL: %w", err)
-		}
-
-		// Pin pagination to the resolved data host. The connection's bearer
-		// token is attached to every request, so an absolute `next` pointing
-		// at a different host (a compromised or spoofed API response) would
-		// forward the token off-host. Refuse cross-host pagination; the
-		// error is static so it never echoes an attacker-controlled host.
-		if !strings.EqualFold(nextURL.Host, base.Host) {
-			return "", fmt.Errorf("cannot follow posthog next page URL: cross-host pagination is not allowed")
-		}
-
-		return nextURL.String(), nil
-	}
-
+	// Resolve against the members endpoint so a relative `next` keeps its
+	// path context, and let sameHostNextPageURL pin the result to the data
+	// host. Both share one host, so checking against the members endpoint is
+	// equivalent to checking against d.baseURL.
 	endpoint, err := url.JoinPath(d.baseURL, posthogMembersPath)
 	if err != nil {
 		return "", fmt.Errorf("cannot build posthog members base URL: %w", err)
 	}
 
-	baseURL, err := url.Parse(endpoint)
-	if err != nil {
-		return "", fmt.Errorf("cannot parse posthog members base URL: %w", err)
-	}
-
-	return baseURL.ResolveReference(nextURL).String(), nil
+	return sameHostNextPageURL("posthog", endpoint, next)
 }
 
 // PostHogRegionBaseURL maps a PostHog Cloud region ("US"/"EU",
@@ -215,20 +209,32 @@ func PostHogRegionBaseURL(region string) (string, bool) {
 	}
 }
 
-// resolvePostHogRegion probes the PostHog Cloud region hosts with the given
+// ResolvePostHogRegion probes the PostHog Cloud region hosts with the given
 // token-bearing client and returns the first that answers 2xx on the @current
 // organization endpoint. OAuth connections authenticate via the region-agnostic
 // oauth.posthog.com gateway, which does not serve /api, so the actual data
 // region (us/eu) must be discovered against the regional hosts directly.
-func resolvePostHogRegion(ctx context.Context, client *http.Client) (string, error) {
+//
+// A token is valid on exactly one region; the other rejects it with 401/403.
+// The result distinguishes the two failure classes the connection probe needs:
+// ErrPostHogCredentialRejected when every region refused the token (dead/revoked
+// credential), and a generic error when a region was merely unreachable or
+// errored transiently, which must not be read as a rejection.
+func ResolvePostHogRegion(ctx context.Context, client *http.Client) (string, error) {
+	allRejected := true
+
 	for _, host := range []string{posthogUSBaseURL, posthogEUBaseURL} {
-		endpoint, err := url.JoinPath(host, posthogOrganizationPath)
+		endpoint, err := url.JoinPath(host, PostHogOrganizationPath)
 		if err != nil {
+			allRejected = false
+
 			continue
 		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
+			allRejected = false
+
 			continue
 		}
 
@@ -242,15 +248,28 @@ func resolvePostHogRegion(ctx context.Context, client *http.Client) (string, err
 				return "", fmt.Errorf("cannot resolve posthog region: %w", ctx.Err())
 			}
 
+			allRejected = false
+
 			continue
 		}
 
 		status := resp.StatusCode
+		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 
 		if status >= http.StatusOK && status < http.StatusMultipleChoices {
 			return host, nil
 		}
+
+		// Only 401/403 is a credential rejection; a 5xx/429 is transient and
+		// leaves the verdict inconclusive rather than rejected.
+		if status != http.StatusUnauthorized && status != http.StatusForbidden {
+			allRejected = false
+		}
+	}
+
+	if allRejected {
+		return "", fmt.Errorf("cannot resolve posthog region: %w", ErrPostHogCredentialRejected)
 	}
 
 	return "", fmt.Errorf("cannot resolve posthog region: no region accepted the connection")
@@ -293,23 +312,17 @@ func posthogAccountRecord(member posthogMember) AccountRecord {
 		Email:       member.User.Email,
 		FullName:    posthogFullName(member.User),
 		Roles:       posthogRoles(member.Level, member.User.RoleAtOrganization),
-		IsAdmin:     posthogIsAdmin(member.Level),
+		IsAdmin:     new(posthogIsAdmin(member.Level)),
 		ExternalID:  member.User.UUID,
 		MFAStatus:   posthogMFAStatus(member.Is2FAEnabled),
 		AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
 		AccountType: coredata.AccessReviewEntryAccountTypeUser,
+		CreatedAt:   parseRFC3339Ptr(member.JoinedAt),
+		LastLogin:   parseRFC3339Ptr(member.LastLogin),
 	}
 
 	if record.ExternalID == "" {
 		record.ExternalID = member.ID
-	}
-
-	if t, ok := parseRFC3339(member.JoinedAt); ok {
-		record.CreatedAt = &t
-	}
-
-	if t, ok := parseRFC3339(member.LastLogin); ok {
-		record.LastLogin = &t
 	}
 
 	return record
@@ -369,7 +382,7 @@ func NewPostHogNameResolver(httpClient *http.Client, baseURL string) NameResolve
 func (r *posthogNameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
 	baseURL := r.baseURL
 	if baseURL == "" {
-		host, err := resolvePostHogRegion(ctx, r.httpClient)
+		host, err := ResolvePostHogRegion(ctx, r.httpClient)
 		if err != nil {
 			// Terminal: cannot determine the region (e.g. revoked token).
 			// Keep the generic source name rather than making the
@@ -380,7 +393,7 @@ func (r *posthogNameResolver) ResolveInstanceName(ctx context.Context) (string, 
 		baseURL = host
 	}
 
-	endpoint, err := url.JoinPath(baseURL, posthogOrganizationPath)
+	endpoint, err := url.JoinPath(baseURL, PostHogOrganizationPath)
 	if err != nil {
 		return "", fmt.Errorf("cannot build posthog organization URL: %w", err)
 	}
@@ -419,17 +432,4 @@ func (r *posthogNameResolver) ResolveInstanceName(ctx context.Context) (string, 
 	}
 
 	return resp.Name, nil
-}
-
-func parseRFC3339(value string) (time.Time, bool) {
-	if value == "" {
-		return time.Time{}, false
-	}
-
-	t, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		return time.Time{}, false
-	}
-
-	return t, true
 }

@@ -1,19 +1,24 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   Dialog,
@@ -21,19 +26,16 @@ import {
   DialogFooter,
   Field,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation } from "react-relay";
 import { graphql } from "relay-runtime";
-import { z } from "zod";
 
 import type { VettingDialogMutation } from "#/__generated__/core/VettingDialogMutation.graphql";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
-
-const schema = z.object({
-  url: z.string().url(),
-});
+import { z } from "#/lib/zod";
 
 const vetMutation = graphql`
   mutation VettingDialogMutation($input: VetThirdPartyInput!) {
@@ -41,10 +43,22 @@ const vetMutation = graphql`
       thirdParty {
         id
         name
+        description
+        category
+        legalName
+        headquarterAddress
         websiteUrl
+        countries
+        certifications
+        statusPageUrl
+        termsOfServiceUrl
+        privacyPolicyUrl
+        serviceLevelAgreementUrl
+        dataProcessingAgreementUrl
+        securityPageUrl
+        trustPageUrl
         vettingStatus
-        ...useThirdPartyFormFragment
-        ...ThirdPartyCompliancePageFragment
+        ...ThirdPartyAssurancePageFragment
         ...ThirdPartyRiskAssessmentPageFragment
       }
     }
@@ -58,8 +72,11 @@ interface VettingDialogProps {
 }
 
 export function VettingDialog({ thirdPartyId, websiteUrl, children }: VettingDialogProps) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const schema = z.object({
+    url: z.string().url(t("vettingDialog.validation.url")),
+  });
+  const toast = useToast();
   const dialogRef = useDialogRef();
   const { register, handleSubmit, reset, formState } = useFormWithSchema(
     schema,
@@ -81,32 +98,32 @@ export function VettingDialog({ thirdPartyId, websiteUrl, children }: VettingDia
       },
       onCompleted(_, errors) {
         if (errors?.length) {
-          toast({
-            title: __("Error"),
+          toast.add({
+            title: t("vettingDialog.messages.error"),
             description: formatError(
-              __("Failed to start vetting."),
+              t("vettingDialog.errors.start"),
               errors,
             ),
-            variant: "error",
+            type: "error",
           });
           return;
         }
-        toast({
-          title: __("Success"),
-          description: __("The third party is being vetted in the background."),
-          variant: "success",
+        toast.add({
+          title: t("vettingDialog.messages.success"),
+          description: t("vettingDialog.messages.started"),
+          type: "success",
         });
         dialogRef.current?.close();
         reset();
       },
       onError(error) {
-        toast({
-          title: __("Error"),
+        toast.add({
+          title: t("vettingDialog.messages.error"),
           description: formatError(
-            __("Failed to start vetting."),
+            t("vettingDialog.errors.start"),
             error,
           ),
-          variant: "error",
+          type: "error",
         });
       },
     });
@@ -116,14 +133,14 @@ export function VettingDialog({ thirdPartyId, websiteUrl, children }: VettingDia
     <Dialog
       ref={dialogRef}
       trigger={children}
-      title={__("Start Vetting")}
+      title={t("vettingDialog.title")}
       className="max-w-lg"
     >
       <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
         <DialogContent padded>
           <Field
             required
-            label={__("Website URL")}
+            label={t("vettingDialog.fields.websiteUrl")}
             type="text"
             {...register("url")}
             error={formState.errors.url?.message}
@@ -131,7 +148,7 @@ export function VettingDialog({ thirdPartyId, websiteUrl, children }: VettingDia
         </DialogContent>
         <DialogFooter>
           <Button type="submit" disabled={isVetting}>
-            {__("Start Vetting")}
+            {t("vettingDialog.actions.start")}
           </Button>
         </DialogFooter>
       </form>

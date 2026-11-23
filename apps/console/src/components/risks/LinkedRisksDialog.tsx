@@ -1,18 +1,23 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
 import {
   Badge,
   Button,
@@ -28,6 +33,7 @@ import {
   Spinner,
 } from "@probo/ui";
 import { type ReactNode, Suspense, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useLazyLoadQuery } from "react-relay";
 import { graphql } from "relay-runtime";
 
@@ -43,6 +49,7 @@ const risksQuery = graphql`
           edges {
             node {
               id
+              referenceId
               name
               category
               description
@@ -64,16 +71,16 @@ type Props = {
 };
 
 export function LinkedRisksDialog({ children, ...props }: Props) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (
-    <Dialog trigger={children} title={__("Link risks")}>
+    <Dialog trigger={children} title={t("linkedRisksDialog.title")}>
       <DialogContent>
         <Suspense fallback={<Spinner centered />}>
           <LinkedRisksDialogContent {...props} />
         </Suspense>
       </DialogContent>
-      <DialogFooter exitLabel={__("Close")} />
+      <DialogFooter exitLabel={t("linkedRisksDialog.actions.close")} />
     </Dialog>
   );
 }
@@ -83,7 +90,7 @@ function LinkedRisksDialogContent(props: Omit<Props, "children">) {
   const data = useLazyLoadQuery<LinkedRisksDialogQuery>(risksQuery, {
     organizationId,
   });
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string | null>(null);
   const risks = useMemo(
@@ -98,7 +105,8 @@ function LinkedRisksDialogContent(props: Omit<Props, "children">) {
     return risks.filter(
       risk =>
         (category === null || risk.category === category)
-        && (risk.name.toLowerCase().includes(search.toLowerCase())
+        && (risk.referenceId.toLowerCase().includes(search.toLowerCase())
+          || risk.name.toLowerCase().includes(search.toLowerCase())
           || risk.description?.toLowerCase().includes(search.toLowerCase())),
     );
   }, [risks, search, category]);
@@ -113,12 +121,12 @@ function LinkedRisksDialogContent(props: Omit<Props, "children">) {
       <div className="flex items-center gap-2 sticky top-0 relative py-4 bg-linear-to-b from-50% from-level-2 to-level-2/0 px-6">
         <Input
           icon={IconMagnifyingGlass}
-          placeholder={__("Search risks...")}
+          placeholder={t("linkedRisksDialog.searchPlaceholder")}
           onValueChange={setSearch}
         />
         <Select
           value={category ?? ""}
-          placeholder={__("All categories")}
+          placeholder={t("linkedRisksDialog.allCategories")}
           onValueChange={setCategory}
           className="max-w-[180px]"
         >
@@ -148,6 +156,7 @@ function LinkedRisksDialogContent(props: Omit<Props, "children">) {
 type RowProps = {
   risk: {
     name: string;
+    referenceId: string;
     category: string;
     id: string;
     description?: string | null;
@@ -159,7 +168,7 @@ type RowProps = {
 };
 
 function RiskRow(props: RowProps) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   const isLinked = props.linkedRisks.has(props.risk.id);
   const onClick = isLinked ? props.onUnlink : props.onLink;
@@ -170,7 +179,12 @@ function RiskRow(props: RowProps) {
       className="py-4 flex items-center gap-4 hover:bg-subtle cursor-pointer px-6 w-full"
       onClick={() => onClick(props.risk.id)}
     >
-      <div className="text-left">{props.risk.name}</div>
+      <div className="text-left">
+        <span className="font-mono text-sm text-txt-secondary mr-2">
+          {props.risk.referenceId}
+        </span>
+        {props.risk.name}
+      </div>
       <Badge variant="neutral">{props.risk.category}</Badge>
       <Button
         disabled={props.disabled}
@@ -181,7 +195,9 @@ function RiskRow(props: RowProps) {
         <span>
           <IconComponent size={16} />
           {" "}
-          {isLinked ? __("Unlink") : __("Link")}
+          {isLinked
+            ? t("linkedRisksDialog.actions.unlink")
+            : t("linkedRisksDialog.actions.link")}
         </span>
       </Button>
     </button>

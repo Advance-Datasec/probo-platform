@@ -1,22 +1,34 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,13 +47,16 @@ import (
 // source, false = deactivated / suspended / deleted). Drivers whose API does
 // not distinguish active from deactivated accounts must leave Active nil
 // rather than fabricate a value.
+// IsAdmin follows the same three-valued contract: nil means the source does
+// not expose admin privileges, while non-nil means the driver observed or
+// derived an explicit value.
 type AccountRecord struct {
 	Email       string
 	FullName    string
 	Roles       []string // system roles/permissions (e.g. "Admin", "Viewer")
 	JobTitle    string   // HR job title / department (e.g. "Software Engineer")
 	Active      *bool
-	IsAdmin     bool
+	IsAdmin     *bool
 	MFAStatus   coredata.MFAStatus
 	AuthMethod  coredata.AccessReviewEntryAuthMethod
 	AccountType coredata.AccessReviewEntryAccountType
@@ -58,6 +73,111 @@ const maxPaginationPages = 500
 // ErrPaginationLimitReached is returned when a driver exhausts the maximum
 // number of pagination pages without reaching the end of the result set.
 var ErrPaginationLimitReached = fmt.Errorf("pagination limit of %d pages reached", maxPaginationPages)
+
+// InstallRejectedError marks a connection the provider accepted but Probo
+// refuses to keep. Message is shown to the user who connected it.
+type InstallRejectedError struct {
+	Message string
+}
+
+func (e *InstallRejectedError) Error() string {
+	return "connection rejected: " + e.Message
+}
+
+// sameHostNextPageURL pins a server-supplied next-page URL to the host the
+// driver was configured with, returning it unchanged when it is safe to
+// follow. The connection's bearer token is attached to every request, so an
+// absolute `next` pointing at a different host — a compromised or spoofed API
+// response, or a provider echoing its real host back at a deployment that
+// overrode the API base — would forward the token off-host. Refuse cross-host
+// pagination; the error is static so it never echoes an attacker-controlled
+// host.
+//
+// The reference is RESOLVED against the base before its host is checked,
+// rather than testing url.URL.IsAbs() first. IsAbs reports whether a scheme is
+// present, so a protocol-relative reference such as "//evil.example.com/x"
+// reads as relative while resolving to that host — checking before resolving
+// would wave it straight through. The scheme is compared too, so a spoofed
+// "http://" next page cannot downgrade the crawl and send the bearer token in
+// cleartext.
+func sameHostNextPageURL(provider, baseURL, next string) (string, error) {
+	nextURL, err := url.Parse(next)
+	if err != nil {
+		return "", fmt.Errorf("cannot parse %s next page URL: %w", provider, err)
+	}
+
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("cannot parse %s base URL: %w", provider, err)
+	}
+
+	resolved := base.ResolveReference(nextURL)
+
+	if !strings.EqualFold(resolved.Host, base.Host) || !strings.EqualFold(resolved.Scheme, base.Scheme) {
+		return "", fmt.Errorf("cannot follow %s next page URL: cross-host pagination is not allowed", provider)
+	}
+
+	// Pinning the host is not enough: "../../oauth2/token" resolves to the same
+	// host and would send the connection's bearer token to an endpoint that is
+	// not the collection being paged. Requiring the resolved path to stay under
+	// the base also stops a relative reference from silently re-rooting — a
+	// bare "users?..." against a versioned base resolves to /users, dropping
+	// the version segment and quietly paging the wrong API.
+	basePath := strings.TrimSuffix(base.EscapedPath(), "/")
+	if basePath != "" {
+		got := resolved.EscapedPath()
+		if got != basePath && !strings.HasPrefix(got, basePath+"/") {
+			return "", fmt.Errorf("cannot follow %s next page URL: it leaves the collection path", provider)
+		}
+	}
+
+	// Resolving normalizes only literal dot segments, so percent-encoded ones
+	// ("%2e%2e", "..%2f") survive with the base prefix intact and pass the
+	// check above — then reach the wire still encoded, where a server that
+	// decodes before routing lands the bearer token on the path that check just
+	// refused. Inspect the DECODED path instead, and refuse a dot segment
+	// rather than cleaning it, so nothing here has to agree with the server's
+	// normalization order. Backslash is a separator too: RFC 3986 does not make
+	// it one, but a server that treats it as one would read "..\x" as a climb.
+	if slices.ContainsFunc(strings.FieldsFunc(resolved.Path, isPathSeparator), isDotSegment) {
+		return "", fmt.Errorf("cannot follow %s next page URL: it leaves the collection path", provider)
+	}
+
+	// Credentials embedded in the reference would reach http.NewRequest and, on
+	// some transports, take precedence over the Authorization header the
+	// connection sets. Drop them; the host is already pinned to the base.
+	resolved.User = nil
+
+	return resolved.String(), nil
+}
+
+// isPathSeparator reports whether r separates path segments for the purpose of
+// the dot-segment check above.
+func isPathSeparator(r rune) bool {
+	return r == '/' || r == '\\'
+}
+
+// isDotSegment reports whether a path segment would climb the tree on some
+// server, which is broader than being exactly "." or "..".
+//
+// Two decorations survive url.Parse and are discarded again by common
+// servers: RFC 3986 path parameters, which Tomcat and Jetty strip (so "..;"
+// and "..;x=1" arrive as ".."), and a NUL byte, which anything backed by a C
+// string truncates (so "..\x00" arrives as ".."). Strip both, then treat any
+// all-dots remainder as a climb — "..." and "...." are not traversal
+// themselves, but a normalizer that collapses them yields one, and no real
+// collection has an all-dots segment to lose.
+//
+// A double-encoded climb ("%252e%252e") still passes: catching it would mean
+// refusing every decoded "%", which legitimate resource names may carry. The
+// host and scheme remain pinned regardless, so that path costs confinement,
+// not the token.
+func isDotSegment(segment string) bool {
+	segment, _, _ = strings.Cut(segment, ";")
+	segment = strings.ReplaceAll(segment, "\x00", "")
+
+	return segment != "" && strings.Trim(segment, ".") == ""
+}
 
 // Driver defines the interface for fetching accounts from an access or
 // identity source. Each driver implementation corresponds to a specific
@@ -85,6 +205,11 @@ func parseRFC3339Ptr(s string) *time.Time {
 	return &t
 }
 
+// joinName joins trimmed first and last names with one space.
+func joinName(first, last string) string {
+	return strings.TrimSpace(strings.TrimSpace(first) + " " + strings.TrimSpace(last))
+}
+
 // activeFromStatus maps a provider status string to the three-valued Active
 // signal for providers whose only "live" state is the literal "active" and
 // whose remaining status enum is not otherwise enumerated: "active" → active,
@@ -105,4 +230,156 @@ func activeFromStatus(status string) *bool {
 
 		return &inactive
 	}
+}
+
+// ownerMemberRoles maps a provider role to a display label for providers whose
+// role model is exactly owner/member (e.g. Crisp operators, Scaleway org user
+// types): "owner" → Owner, "member" → Member. An unknown future value is passed
+// through verbatim and no role yields an empty slice.
+func ownerMemberRoles(role string) []string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "owner":
+		return []string{"Owner"}
+	case "member":
+		return []string{"Member"}
+	default:
+		if r := strings.TrimSpace(role); r != "" {
+			return []string{r}
+		}
+
+		return []string{}
+	}
+}
+
+// isOwnerRole reports whether a provider role is the owner, the only role in the
+// owner/member model that grants administrative access.
+func isOwnerRole(role string) bool {
+	return strings.EqualFold(strings.TrimSpace(role), "owner")
+}
+
+// retryRoundTripper retries 429 and 5xx responses with exponential backoff.
+//
+// The retry budget is bounded by what can still produce a useful answer: a
+// fetch runs under a per-source deadline, so a sleep that outlives the
+// deadline, or that follows the final attempt, only converts a reportable
+// provider status into an opaque timeout. Every wait below is therefore
+// guarded.
+type retryRoundTripper struct {
+	next       http.RoundTripper
+	maxRetries int
+}
+
+const (
+	// retryBaseBackoff is the first backoff step; it doubles per attempt.
+	retryBaseBackoff = 250 * time.Millisecond
+	// maxRetryWait caps a single wait. A provider asking for longer (via
+	// Retry-After) cannot be accommodated inside a per-source budget, so the
+	// throttled response is returned instead and the caller reports it.
+	maxRetryWait = 5 * time.Second
+)
+
+func (rt *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	transport := rt.next
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+
+	var lastResp *http.Response
+
+	for attempt := range rt.maxRetries {
+		// The previous attempt read the body to the end, so a POST resent as
+		// it stands carries nothing: the provider answers 400 and the retry
+		// turns a recoverable 5xx into a failed sync. Rewind onto a clone,
+		// which also keeps this transport from mutating its caller's request.
+		attemptReq := req
+
+		if attempt > 0 && req.Body != nil {
+			if req.GetBody == nil {
+				break
+			}
+
+			body, err := req.GetBody()
+			if err != nil {
+				return nil, fmt.Errorf("cannot rewind request body for retry: %w", err)
+			}
+
+			attemptReq = req.Clone(req.Context())
+			attemptReq.Body = body
+		}
+
+		resp, err := transport.RoundTrip(attemptReq)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500 {
+			return resp, nil
+		}
+
+		// Buffer and re-attach the body so the caller can still read it
+		// if this turns out to be the final (retry-exhausted) response.
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		lastResp = resp
+
+		// Nothing follows the last attempt, so waiting here would burn the
+		// caller's deadline to return the response it already has.
+		if attempt == rt.maxRetries-1 {
+			break
+		}
+
+		wait := retryBaseBackoff << attempt
+		// Retry-After is authoritative on 429: retrying sooner just earns
+		// another 429 and spends an attempt doing it.
+		if after, ok := retryAfter(resp); ok {
+			wait = after
+		}
+
+		if wait > maxRetryWait {
+			break
+		}
+
+		// Sleeping past the deadline guarantees a context error that hides
+		// the provider's actual status from the caller.
+		if deadline, ok := req.Context().Deadline(); ok && time.Until(deadline) <= wait {
+			break
+		}
+
+		timer := time.NewTimer(wait)
+
+		select {
+		case <-req.Context().Done():
+			timer.Stop()
+
+			return nil, req.Context().Err()
+		case <-timer.C:
+		}
+	}
+
+	return lastResp, nil
+}
+
+// retryAfter reads a Retry-After header in either documented form —
+// delta-seconds or an HTTP-date. The bool reports whether the header was
+// present and parseable; a date already in the past yields a zero wait.
+func retryAfter(resp *http.Response) (time.Duration, bool) {
+	value := strings.TrimSpace(resp.Header.Get("Retry-After"))
+	if value == "" {
+		return 0, false
+	}
+
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds < 0 {
+			return 0, false
+		}
+
+		return time.Duration(seconds) * time.Second, true
+	}
+
+	if at, err := http.ParseTime(value); err == nil {
+		return max(time.Until(at), 0), true
+	}
+
+	return 0, false
 }

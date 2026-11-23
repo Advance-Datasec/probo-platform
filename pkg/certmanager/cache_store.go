@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package certmanager
 
@@ -53,35 +59,47 @@ func (w *CacheStore) WarmCache(ctx context.Context) error {
 	err := w.pg.WithConn(
 		ctx,
 		func(ctx context.Context, conn pg.Querier) error {
-			domains := coredata.CustomDomains{}
-			if err := domains.LoadActiveCertificates(ctx, conn, coredata.NewNoScope()); err != nil {
+			var domains coredata.CustomDomains
+
+			keepCertificateIDs, err := domains.LoadReferencedCertificateIDs(ctx, conn)
+			if err != nil {
+				return fmt.Errorf("cannot load referenced certificate ids: %w", err)
+			}
+
+			var caches coredata.CachedCertificates
+			if err := caches.DeleteWhereCertificateIDNotIn(ctx, conn, keepCertificateIDs); err != nil {
+				return fmt.Errorf("cannot delete unreferenced certificate cache: %w", err)
+			}
+
+			certificates := coredata.Certificates{}
+			if err := certificates.LoadActiveReferenced(ctx, conn, coredata.NewNoScope()); err != nil {
 				return fmt.Errorf("cannot load active certificates: %w", err)
 			}
 
-			if len(domains) == 0 {
+			if len(certificates) == 0 {
 				w.logger.InfoCtx(ctx, "no active certificates to warm")
 				return nil
 			}
 
-			w.logger.InfoCtx(ctx, "found active certificates to cache", log.Int("count", len(domains)))
+			w.logger.InfoCtx(ctx, "found active certificates to cache", log.Int("count", len(certificates)))
 
 			successCount := 0
 
-			for _, domain := range domains {
+			for _, certificate := range certificates {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
 				default:
 				}
 
-				if err := w.warmDomain(ctx, conn, domain); err != nil {
-					w.logger.ErrorCtx(ctx, "cannot warm certificate cache for domain", log.String("domain", domain.Domain), log.Error(err))
+				if err := w.warmCertificate(ctx, conn, certificate); err != nil {
+					w.logger.ErrorCtx(ctx, "cannot warm certificate cache for hostname", log.String("hostname", certificate.Hostname), log.Error(err))
 				} else {
 					successCount++
 				}
 			}
 
-			w.logger.InfoCtx(ctx, "successfully warmed cache", log.Int("success_count", successCount), log.Int("total_count", len(domains)))
+			w.logger.InfoCtx(ctx, "successfully warmed cache", log.Int("success_count", successCount), log.Int("total_count", len(certificates)))
 
 			return nil
 		},
@@ -95,49 +113,27 @@ func (w *CacheStore) WarmCache(ctx context.Context) error {
 	return nil
 }
 
-func (w *CacheStore) warmDomain(ctx context.Context, conn pg.Querier, domain *coredata.CustomDomain) error {
-	var loadedDomain coredata.CustomDomain
-	if err := loadedDomain.LoadByID(ctx, conn, coredata.NewNoScope(), domain.ID); err != nil {
-		return fmt.Errorf("cannot load domain with decrypted values: %w", err)
+func (w *CacheStore) warmCertificate(ctx context.Context, conn pg.Querier, certificate *coredata.Certificate) error {
+	var loadedCertificate coredata.Certificate
+	if err := loadedCertificate.LoadByID(ctx, conn, coredata.NewNoScope(), certificate.ID); err != nil {
+		return fmt.Errorf("cannot load certificate with decrypted values: %w", err)
 	}
 
-	if err := loadedDomain.ParseCertificate(w.encryptionKey); err != nil {
+	if err := loadedCertificate.ParseCertificate(w.encryptionKey); err != nil {
 		return fmt.Errorf("cannot parse certificate: %w", err)
 	}
 
-	if len(loadedDomain.SSLCertificatePEM) == 0 {
-		return fmt.Errorf("domain has no certificate PEM")
+	if loadedCertificate.SSLExpiresAt == nil {
+		return fmt.Errorf("certificate has no expiry date")
 	}
 
-	privateKeyPEM, err := loadedDomain.DecryptPrivateKey(w.encryptionKey)
-	if err != nil {
-		return fmt.Errorf("cannot decrypt private key: %w", err)
-	}
-
-	if len(privateKeyPEM) == 0 {
-		return fmt.Errorf("domain has no private key PEM")
-	}
-
-	if loadedDomain.SSLExpiresAt == nil {
-		return fmt.Errorf("domain certificate has no expiry date")
-	}
-
-	if time.Now().After(*loadedDomain.SSLExpiresAt) {
+	if time.Now().After(*loadedCertificate.SSLExpiresAt) {
 		return fmt.Errorf("certificate has expired")
 	}
 
-	cache := &coredata.CachedCertificate{
-		Domain:           loadedDomain.Domain,
-		CertificatePEM:   string(loadedDomain.SSLCertificatePEM),
-		PrivateKeyPEM:    string(privateKeyPEM),
-		CertificateChain: loadedDomain.SSLCertificateChain,
-		ExpiresAt:        *loadedDomain.SSLExpiresAt,
-		CachedAt:         time.Now(),
-		CustomDomainID:   loadedDomain.ID,
-	}
-
-	if err := cache.Upsert(ctx, conn); err != nil {
-		return fmt.Errorf("cannot upsert cache entry: %w", err)
+	var cache coredata.CachedCertificate
+	if err := cache.RefreshFromCertificate(ctx, conn, &loadedCertificate, w.encryptionKey); err != nil {
+		return fmt.Errorf("cannot refresh certificate cache: %w", err)
 	}
 
 	return nil

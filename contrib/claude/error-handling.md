@@ -33,34 +33,37 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 
 export interface ErrorBoundaryProps {
   children: ReactNode;
-  // A node, or a render function that receives the caught error + a reset fn.
-  fallback?: ReactNode | ((error: Error, reset: () => void) => ReactNode);
-  onError?: (error: Error, info: ErrorInfo) => void;
+  // A node, or a render function that receives the caught value + a reset fn.
+  // `unknown` because anything can be thrown, not just an Error.
+  fallback?: ReactNode | ((error: unknown, reset: () => void) => ReactNode);
+  onError?: (error: unknown, info: ErrorInfo) => void;
 }
 
 interface ErrorBoundaryState {
-  error: Error | null;
+  // Tracked separately from `error` so a falsy thrown value (null, 0, "") still
+  // renders the fallback instead of looping back into the failing subtree.
+  hasError: boolean;
+  error: unknown;
 }
 
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { error: null };
+  state: ErrorBoundaryState = { hasError: false, error: null };
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-    return { error };
+  static getDerivedStateFromError(error: unknown): ErrorBoundaryState {
+    return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo) {
+  componentDidCatch(error: unknown, info: ErrorInfo) {
     this.props.onError?.(error, info);
   }
 
-  reset = () => this.setState({ error: null });
+  reset = () => this.setState({ hasError: false, error: null });
 
   render() {
-    const { error } = this.state;
-    if (error) {
+    if (this.state.hasError) {
       const { fallback } = this.props;
       if (typeof fallback === "function") {
-        return fallback(error, this.reset);
+        return fallback(this.state.error, this.reset);
       }
       return fallback ?? null;
     }
@@ -121,7 +124,7 @@ Boundaries will not catch a rejected promise in a submit handler. Wrap the risky
 // Good — async event handler guards itself; the boundary above can't help here
 function PublishButton() {
   const { t } = useTranslation();
-  const toast = Toast.useToastManager();
+  const toast = useToast();
   const [isPublishing, setIsPublishing] = useState(false);
 
   async function onPublish() {
@@ -155,6 +158,144 @@ function PublishButton() {
 ```
 
 For Relay mutations, prefer the built-in `onCompleted` / `onError` callbacks (see [`relay.md`](relay.md)) over a manual `try`/`catch`; use `try`/`catch` for non-Relay async work (fetch, parsing, third-party SDKs).
+
+## Relay field errors and fragment-level boundaries
+
+A GraphQL response can be **partial**: `data` is present but one field carries an
+error (with a `path`). To contain such a failure to the component that reads the
+bad field — instead of collapsing the whole page — two pieces cooperate:
+
+1. **The fetch layer only throws request-level errors.** A request-level error
+   has **no `path`** (any operation), or a path of **length 1 on a mutation**
+   (the mutation root — the whole operation is that one field). Those throw
+   and propagate to the nearest boundary. Query and subscription field errors
+   (including a root `@catch` field such as `ssoLoginURL` or `node`) are
+   **left in the response** so Relay can attribute them to the reading field.
+
+   [`packages/relay/src/fetch.ts`](../../packages/relay/src/fetch.ts)
+   (`makeFetchQuery`) throws only request-level errors. Session gates
+   (`UNAUTHENTICATED`, `FULL_NAME_REQUIRED`, `ASSUMPTION_REQUIRED`,
+   `NDA_SIGNATURE_REQUIRED`, `MEMBERSHIP_REQUIRED`) still throw even when they
+   have a path, because the backend attaches a resolver path to those.
+
+2. **`@throwOnFieldError` on the query/fragment that reads the field.** With the
+   directive set, a field error throws **at the read site** (`usePreloadedQuery`
+   for a query, `useFragment` for a fragment). Put it on the **fragment** to
+   isolate a section/row, and on the **query** to route page-level field errors
+   to the route boundary.
+
+Because `useFragment` throws in the component body (not in a child), the boundary
+must be an **ancestor**. Split the component into a thin wrapper (holds the
+`ErrorBoundary`) and a `*Content` child (reads the fragment):
+
+```tsx
+export function RecentUpdatesSection({ trustCenterKey }: Props) {
+  const { t } = useTranslation();
+  return (
+    <ErrorBoundary
+      // This section reads a field of the preloaded page query — there is no
+      // local refetch, so recover with a reload, not the boundary's `reset`
+      // (see "Retrying: reset vs refetch vs reload" below).
+      fallback={(
+        <InlineError
+          message={t("errors.inline.message")}
+          retryLabel={t("errors.inline.retry")}
+          onRetry={() => window.location.reload()}
+        />
+      )}
+    >
+      <RecentUpdatesSectionContent trustCenterKey={trustCenterKey} />
+    </ErrorBoundary>
+  );
+}
+
+function RecentUpdatesSectionContent({ trustCenterKey }: Props) {
+  const data = useFragment(fragment, trustCenterKey); // throws here on a field error
+  // ...
+}
+
+const fragment = graphql`
+  fragment RecentUpdatesSection_trustCenter on TrustCenter @throwOnFieldError { ... }
+`;
+```
+
+The portal ships three fallback tiers, all backed by the same `ErrorBoundary`:
+
+| Tier | Placement | Fallback |
+|------|-----------|----------|
+| Global | root route (`RootErrorBoundary`) | `ErrorState` full page (standalone) |
+| Page | pathless child route inside the layout | `ErrorState` inside the shell (TopBar/footer survive) |
+| Section / row | around a fragment-reading subtree | `InlineError` (vertical for sections, horizontal for rows) with a retry |
+
+`ErrorState` and `InlineError` are presentational v2 kit components (see
+[`ui.md`](ui.md)); the app maps the caught error to copy/actions and passes them
+in.
+
+### Retrying: reset vs refetch vs reload
+
+A boundary's `reset` alone does **not** clear a Relay field error — at **any**
+level, not just lists. `reset` only re-renders the subtree; the read hits the
+**same errored record** still cached in the store and throws again. `reset` is
+therefore only a real recovery for *transient render errors* (e.g. a non-Relay
+render crash). To recover a Relay field error you must go back to the network
+first, then clear the boundary. Pick the mechanism by what owns the data:
+
+| Context | Recovery |
+|---------|----------|
+| Route / page boundary | `window.location.reload()` (or router revalidation) |
+| Refetchable list/section (`useRefetchableFragment`) | `refetch(..., { fetchPolicy: "network-only" })`, then reset the boundary once it settles |
+| Section reading a preloaded query (no local refetch) | reload the owning query via the loader's `loadQuery(..., { fetchPolicy: "network-only" })`, or fall back to `window.location.reload()` |
+| Transient / non-Relay render error | `reset` |
+
+In all the network cases, reset the boundary **after** the fetch settles (not
+before), or the remount races the in-flight request straight back into the same
+error.
+
+`ListErrorBoundary` encapsulates the refetchable-list case: it owns a reset key
+and exposes `onRetry(done)`, where the caller (which holds `refetch`, above the
+boundary) refetches `network-only` and passes the `onComplete` callback as
+`done`.
+
+```tsx
+// The page owns refetch; item fragments carry @throwOnFieldError, so a row's
+// field error throws below the boundary while refetch survives above it.
+<ListErrorBoundary
+  onRetry={done => startTransition(() => {
+    refetch(variables, { fetchPolicy: "network-only", onComplete: done });
+  })}
+>
+  {rows}
+</ListErrorBoundary>
+```
+
+Because `useRefetchableFragment` throws at its own read site, put
+`@throwOnFieldError` on the **item** fragments (so the throw lands below the
+boundary), not on the refetchable list fragment (whose read is above it — a
+whole-connection failure there is a page-level error via `@required`).
+
+## Custom errors for node-type mismatches
+
+When a page fetches `node(id:)` and the resolved `__typename` is not the type the
+view expects, throw a dedicated error, not a bare `Error`, so the boundary can
+render the correct state (404):
+
+```tsx
+// Good — a typed error the boundary maps to the not-found page
+import { NotFoundError } from "#/lib/relay/errors";
+
+if (data.node?.__typename !== "MailingListUpdate") {
+  throw new NotFoundError("Update not found");
+}
+```
+
+```tsx
+// Bad — an untyped error the boundary can only show as a generic failure
+if (data.node?.__typename !== "MailingListUpdate") {
+  throw new Error("Update not found");
+}
+```
+
+See [`relay.md`](relay.md) (Node type guards).
 
 ## Placement guidance
 

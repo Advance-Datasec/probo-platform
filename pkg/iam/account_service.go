@@ -1,32 +1,43 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package iam
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"time"
 
+	"go.gearno.de/crypto/uuid"
 	"go.gearno.de/kit/pg"
 	"go.probo.inc/probo/packages/emails"
 	"go.probo.inc/probo/pkg/coredata"
+	"go.probo.inc/probo/pkg/filevalidation"
 	"go.probo.inc/probo/pkg/gid"
+	"go.probo.inc/probo/pkg/imageutil"
 	"go.probo.inc/probo/pkg/mail"
 	"go.probo.inc/probo/pkg/page"
-	"go.probo.inc/probo/pkg/securetoken"
 	"go.probo.inc/probo/pkg/statelesstoken"
 	"go.probo.inc/probo/pkg/validator"
 )
@@ -34,13 +45,6 @@ import (
 type (
 	AccountService struct {
 		*Service
-	}
-
-	PersonalAPIKeyTokenData struct {
-		Version     int       `json:"v"`
-		KeyID       gid.GID   `json:"kid"`
-		PrincipalID gid.GID   `json:"pid"`
-		IssuedAt    time.Time `json:"iat"`
 	}
 
 	EmailConfirmationData struct {
@@ -56,10 +60,38 @@ type (
 	UpdateIdentityRequest struct {
 		FullName string `json:"fullName"`
 	}
+
+	UpdateAvatarRequest struct {
+		File UploadedFile
+	}
+
+	UpdateLocaleRequest struct {
+		Locale string `json:"locale"`
+	}
 )
+
+// SupportedIdentityLocales are short URL locale tags accepted for
+// Identity.locale. Keep in sync with the compliance-portal URL_LOCALES list.
+var SupportedIdentityLocales = []string{
+	"en", "fr", "de", "es", "id", "it", "ja", "ko", "nl", "pl", "pt", "tr", "uk", "zh",
+}
 
 const (
 	TokenTypeEmailConfirmation = "email_confirmation"
+
+	// JPEG and PNG only.
+	maxAvatarFileSize = 5 << 20
+	// 512 covers 3× display of ~96px menu avatars.
+	avatarMaxEdge = 512
+)
+
+var (
+	avatarValidator = filevalidation.NewValidator(
+		filevalidation.WithMimeTypes(imageutil.ContentTypeJPEG, imageutil.ContentTypePNG),
+		filevalidation.WithMaxFileSize(maxAvatarFileSize),
+	)
+
+	errAvatarTooLarge = errors.New("avatar file exceeds maximum size")
 )
 
 func NewAccountService(svc *Service) *AccountService {
@@ -74,12 +106,56 @@ func (req ChangeEmailRequest) Validate() error {
 	return v.Error()
 }
 
-func (req UpdateIdentityRequest) Validate() error {
+func (req *UpdateIdentityRequest) Validate() error {
+	req.FullName = strings.TrimSpace(req.FullName)
+
 	v := validator.New()
 
 	v.Check(req.FullName, "full_name", validator.NotEmpty(), validator.MinLen(2), validator.MaxLen(255))
 
 	return v.Error()
+}
+
+func (req *UpdateAvatarRequest) Validate() error {
+	if err := avatarValidator.Validate(req.File.Filename, req.File.ContentType, req.File.Size); err != nil {
+		return validator.ValidationErrors{
+			&validator.ValidationError{
+				Field:   "file",
+				Code:    validator.ErrorCodeInvalidFormat,
+				Message: err.Error(),
+				Value:   req.File.Filename,
+			},
+		}
+	}
+
+	return nil
+}
+
+func (req UpdateLocaleRequest) Validate() error {
+	v := validator.New()
+
+	v.Check(
+		req.Locale,
+		"locale",
+		validator.NotEmpty(),
+		validator.MaxLen(8),
+		validator.OneOfSlice(SupportedIdentityLocales),
+	)
+
+	return v.Error()
+}
+
+func readAvatarBytes(r io.Reader) ([]byte, error) {
+	payload, err := io.ReadAll(io.LimitReader(r, maxAvatarFileSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("cannot read avatar file: %w", err)
+	}
+
+	if int64(len(payload)) > maxAvatarFileSize {
+		return nil, errAvatarTooLarge
+	}
+
+	return payload, nil
 }
 
 func (s AccountService) ChangeEmail(ctx context.Context, identityID gid.GID, req *ChangeEmailRequest) error {
@@ -90,7 +166,7 @@ func (s AccountService) ChangeEmail(ctx context.Context, identityID gid.GID, req
 	confirmationToken, err := statelesstoken.NewToken(
 		s.tokenSecret,
 		TokenTypeEmailConfirmation,
-		24*time.Hour,
+		s.emailConfirmationTokenValidity,
 		EmailConfirmationData{IdentityID: identityID, Email: req.NewEmail},
 	)
 	if err != nil {
@@ -155,18 +231,21 @@ func (s AccountService) ChangeEmail(ctx context.Context, identityID gid.GID, req
 	)
 }
 
-func (s AccountService) VerifyEmail(ctx context.Context, token string) error {
+func (s AccountService) VerifyEmail(ctx context.Context, token string) (*coredata.Identity, bool, error) {
 	payload, err := statelesstoken.ValidateToken[EmailConfirmationData](s.tokenSecret, TokenTypeEmailConfirmation, token)
 	if err != nil {
-		return NewInvalidTokenError()
+		return nil, false, NewInvalidTokenError()
 	}
 
-	return s.pg.WithTx(
+	var (
+		identity      = &coredata.Identity{}
+		newlyVerified bool
+	)
+
+	err = s.pg.WithTx(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
-			identity := &coredata.Identity{}
-
-			err := identity.LoadByID(ctx, tx, payload.Data.IdentityID)
+			err := identity.LoadByIDForUpdate(ctx, tx, payload.Data.IdentityID)
 			if err != nil {
 				if err == coredata.ErrResourceNotFound {
 					return NewIdentityNotFoundError(payload.Data.IdentityID)
@@ -180,7 +259,7 @@ func (s AccountService) VerifyEmail(ctx context.Context, token string) error {
 			}
 
 			if identity.EmailAddressVerified {
-				return NewEmailAlreadyVerifiedError()
+				return nil
 			}
 
 			identity.EmailAddressVerified = true
@@ -189,6 +268,65 @@ func (s AccountService) VerifyEmail(ctx context.Context, token string) error {
 			err = identity.Update(ctx, tx)
 			if err != nil {
 				return fmt.Errorf("cannot update identity: %w", err)
+			}
+
+			newlyVerified = true
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, false, err
+	}
+
+	return identity, newlyVerified, nil
+}
+
+func (s AccountService) ResendVerificationEmail(ctx context.Context, email mail.Addr) error {
+	return s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, tx pg.Tx) error {
+			identity := &coredata.Identity{}
+			if err := identity.LoadByEmail(ctx, tx, email); err != nil {
+				if err == coredata.ErrResourceNotFound {
+					return nil // Don't leak information about non-existent identities
+				}
+
+				return fmt.Errorf("cannot load identity: %w", err)
+			}
+
+			if identity.EmailAddressVerified {
+				return nil // Don't leak information about already-verified identities
+			}
+
+			confirmationToken, err := statelesstoken.NewToken(
+				s.tokenSecret,
+				TokenTypeEmailConfirmation,
+				s.emailConfirmationTokenValidity,
+				EmailConfirmationData{IdentityID: identity.ID, Email: identity.EmailAddress},
+			)
+			if err != nil {
+				return fmt.Errorf("cannot generate confirmation token: %w", err)
+			}
+
+			emailPresenter := emails.NewPresenter(s.baseURL, identity.FullName)
+
+			subject, textBody, htmlBody, err := emailPresenter.RenderConfirmEmail(ctx, "/auth/verify-email", confirmationToken)
+			if err != nil {
+				return fmt.Errorf("cannot render confirmation email: %w", err)
+			}
+
+			confirmationEmail := coredata.NewEmail(
+				identity.FullName,
+				identity.EmailAddress,
+				subject,
+				textBody,
+				htmlBody,
+				nil,
+			)
+
+			if err := confirmationEmail.Insert(ctx, tx); err != nil {
+				return fmt.Errorf("cannot insert confirmation email: %w", err)
 			}
 
 			return nil
@@ -396,19 +534,21 @@ func (s AccountService) UpdateIdentity(ctx context.Context, identityID gid.GID, 
 	return identity, nil
 }
 
-func (s AccountService) ListPersonalAPIKeys(
+func (s AccountService) GetIdentitiesByIDs(
 	ctx context.Context,
-	identityID gid.GID,
-	cursor *page.Cursor[coredata.PersonalAPIKeyOrderField],
-) (*page.Page[*coredata.PersonalAPIKey, coredata.PersonalAPIKeyOrderField], error) {
-	var personalAccessTokens coredata.PersonalAPIKeys
+	identityIDs []gid.GID,
+) (coredata.Identities, error) {
+	var identities coredata.Identities
+
+	if len(identityIDs) == 0 {
+		return identities, nil
+	}
 
 	err := s.pg.WithConn(
 		ctx,
 		func(ctx context.Context, conn pg.Querier) error {
-			err := personalAccessTokens.LoadByIdentityID(ctx, conn, identityID)
-			if err != nil {
-				return fmt.Errorf("cannot load personal access tokens: %w", err)
+			if err := identities.LoadByIDs(ctx, conn, identityIDs); err != nil {
+				return fmt.Errorf("cannot load identities: %w", err)
 			}
 
 			return nil
@@ -418,67 +558,223 @@ func (s AccountService) ListPersonalAPIKeys(
 		return nil, err
 	}
 
-	return page.NewPage(personalAccessTokens, cursor), nil
+	return identities, nil
 }
 
-func (s AccountService) CountPersonalAPIKeys(ctx context.Context, identityID gid.GID) (int, error) {
-	var count int
+func (s AccountService) GetFilesByIDs(
+	ctx context.Context,
+	scope coredata.Scoper,
+	fileIDs ...gid.GID,
+) (coredata.Files, error) {
+	var files coredata.Files
+
+	if len(fileIDs) == 0 {
+		return files, nil
+	}
 
 	err := s.pg.WithConn(
 		ctx,
-		func(ctx context.Context, conn pg.Querier) (err error) {
-			personalAccessTokens := coredata.PersonalAPIKeys{}
-
-			count, err = personalAccessTokens.CountByIdentityID(ctx, conn, identityID)
-			if err != nil {
-				return fmt.Errorf("cannot count personal access tokens: %w", err)
-			}
-
-			return nil
-		},
-	)
-
-	return count, err
-}
-func (s *AccountService) RevealPersonalAPIKeyToken(
-	ctx context.Context,
-	identityID gid.GID,
-	personalAPIKeyID gid.GID,
-) (string, error) {
-	var token string
-
-	err := s.pg.WithTx(
-		ctx,
-		func(ctx context.Context, tx pg.Tx) (err error) {
-			personalAPIKey := &coredata.PersonalAPIKey{}
-			if err := personalAPIKey.LoadByID(ctx, tx, personalAPIKeyID); err != nil {
-				if err == coredata.ErrResourceNotFound {
-					return NewPersonalAPIKeyNotFoundError(personalAPIKeyID)
-				}
-
-				return fmt.Errorf("cannot load personal api key: %w", err)
-			}
-
-			if personalAPIKey.IdentityID != identityID {
-				return NewPersonalAPIKeyNotFoundError(personalAPIKeyID)
-			}
-
-			token, err = securetoken.Sign(
-				personalAPIKey.ID.String(),
-				s.tokenSecret,
-			)
-			if err != nil {
-				return fmt.Errorf("cannot generate personal api key token: %w", err)
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := files.LoadActiveByIDs(ctx, conn, scope, fileIDs); err != nil {
+				return fmt.Errorf("cannot load files: %w", err)
 			}
 
 			return nil
 		},
 	)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	return token, nil
+	return files, nil
+}
+
+func (s AccountService) UpdateAvatar(
+	ctx context.Context,
+	identityID gid.GID,
+	req *UpdateAvatarRequest,
+) (*coredata.Identity, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+
+	payload, err := readAvatarBytes(req.File.Content)
+	if err != nil {
+		return nil, validator.ValidationErrors{
+			&validator.ValidationError{
+				Field:   "file",
+				Code:    validator.ErrorCodeInvalidFormat,
+				Message: err.Error(),
+				Value:   req.File.Filename,
+			},
+		}
+	}
+
+	normalized, err := imageutil.Downscale(bytes.NewReader(payload), avatarMaxEdge)
+	if err != nil {
+		return nil, validator.ValidationErrors{
+			&validator.ValidationError{
+				Field:   "file",
+				Code:    validator.ErrorCodeInvalidFormat,
+				Message: err.Error(),
+				Value:   req.File.Filename,
+			},
+		}
+	}
+
+	now := time.Now()
+	fileID := gid.New(gid.NilTenant, coredata.FileEntityType)
+	objectKey := uuid.MustNewV7()
+	scope := coredata.NewScope(gid.NilTenant, gid.Nil)
+
+	avatarFile := &coredata.File{
+		ID:             fileID,
+		OrganizationID: gid.Nil,
+		BucketName:     s.bucket,
+		MimeType:       normalized.ContentType,
+		FileName:       req.File.Filename,
+		FileKey:        objectKey.String(),
+		FileSize:       int64(len(normalized.Bytes)),
+		Visibility:     coredata.FileVisibilityPublic,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	fileSize, err := s.fm.PutFile(
+		ctx,
+		avatarFile,
+		bytes.NewReader(normalized.Bytes),
+		map[string]string{
+			"file-id":     fileID.String(),
+			"identity-id": identityID.String(),
+			"type":        "identity-avatar",
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot upload avatar file: %w", err)
+	}
+
+	avatarFile.FileSize = fileSize
+
+	identity := &coredata.Identity{}
+
+	err = s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, tx pg.Tx) error {
+			if err := identity.LoadByID(ctx, tx, identityID); err != nil {
+				if errors.Is(err, coredata.ErrResourceNotFound) {
+					return NewIdentityNotFoundError(identityID)
+				}
+
+				return fmt.Errorf("cannot load identity: %w", err)
+			}
+
+			if err := avatarFile.Insert(ctx, tx, scope); err != nil {
+				return fmt.Errorf("cannot insert avatar file: %w", err)
+			}
+
+			if identity.AvatarFileID != nil {
+				previous := coredata.File{ID: *identity.AvatarFileID}
+				if err := previous.SoftDelete(ctx, tx, scope); err != nil {
+					return fmt.Errorf("cannot soft-delete previous avatar file: %w", err)
+				}
+			}
+
+			identity.AvatarFileID = &avatarFile.ID
+			identity.UpdatedAt = now
+
+			if err := identity.Update(ctx, tx); err != nil {
+				return fmt.Errorf("cannot update identity: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return identity, nil
+}
+
+func (s AccountService) DeleteAvatar(
+	ctx context.Context,
+	identityID gid.GID,
+) (*coredata.Identity, error) {
+	identity := &coredata.Identity{}
+	scope := coredata.NewScope(gid.NilTenant, gid.Nil)
+
+	err := s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, tx pg.Tx) error {
+			if err := identity.LoadByID(ctx, tx, identityID); err != nil {
+				if errors.Is(err, coredata.ErrResourceNotFound) {
+					return NewIdentityNotFoundError(identityID)
+				}
+
+				return fmt.Errorf("cannot load identity: %w", err)
+			}
+
+			if identity.AvatarFileID == nil {
+				return nil
+			}
+
+			previous := coredata.File{ID: *identity.AvatarFileID}
+			if err := previous.SoftDelete(ctx, tx, scope); err != nil {
+				return fmt.Errorf("cannot soft-delete avatar file: %w", err)
+			}
+
+			identity.AvatarFileID = nil
+			identity.UpdatedAt = time.Now()
+
+			if err := identity.Update(ctx, tx); err != nil {
+				return fmt.Errorf("cannot update identity: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return identity, nil
+}
+
+func (s AccountService) UpdateLocale(ctx context.Context, identityID gid.GID, req *UpdateLocaleRequest) (*coredata.Identity, error) {
+	if err := req.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	identity := &coredata.Identity{}
+
+	err := s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, tx pg.Tx) error {
+			err := identity.LoadByID(ctx, tx, identityID)
+			if err != nil {
+				if err == coredata.ErrResourceNotFound {
+					return NewIdentityNotFoundError(identityID)
+				}
+
+				return fmt.Errorf("cannot load identity: %w", err)
+			}
+
+			identity.Locale = &req.Locale
+			identity.UpdatedAt = time.Now()
+
+			if err := identity.Update(ctx, tx); err != nil {
+				return fmt.Errorf("cannot update identity locale: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return identity, nil
 }
 
 func (s AccountService) GetIdentityForMembership(ctx context.Context, membershipID gid.GID) (*coredata.Identity, error) {
@@ -518,86 +814,6 @@ func (s AccountService) GetIdentityForMembership(ctx context.Context, membership
 	}
 
 	return identity, nil
-}
-
-func (s *AccountService) CreatePersonalAPIKey(
-	ctx context.Context,
-	identityID gid.GID,
-	name string,
-	expiresAt time.Time,
-) (*coredata.PersonalAPIKey, string, error) {
-	var (
-		personalAPIKey *coredata.PersonalAPIKey
-		token          string
-	)
-
-	err := s.pg.WithTx(
-		ctx,
-		func(ctx context.Context, tx pg.Tx) (err error) {
-			now := time.Now()
-
-			personalAPIKey = &coredata.PersonalAPIKey{
-				ID:         gid.New(gid.NilTenant, coredata.PersonalAPIKeyEntityType),
-				IdentityID: identityID,
-				Name:       name,
-				ExpiresAt:  expiresAt,
-				CreatedAt:  now,
-				UpdatedAt:  now,
-			}
-
-			if err := personalAPIKey.Insert(ctx, tx); err != nil {
-				return fmt.Errorf("cannot insert personal api key: %w", err)
-			}
-
-			token, err = securetoken.Sign(
-				personalAPIKey.ID.String(),
-				s.tokenSecret,
-			)
-			if err != nil {
-				return fmt.Errorf("cannot generate personal api key token: %w", err)
-			}
-
-			return nil
-		},
-	)
-	if err != nil {
-		return nil, "", err
-	}
-
-	return personalAPIKey, token, nil
-}
-
-func (s *AccountService) DeletePersonalAPIKey(
-	ctx context.Context,
-	identityID gid.GID,
-	personalAPIKeyID gid.GID,
-) error {
-	return s.pg.WithTx(
-		ctx,
-		func(ctx context.Context, tx pg.Tx) error {
-			personalAPIKey := &coredata.PersonalAPIKey{}
-
-			err := personalAPIKey.LoadByID(ctx, tx, personalAPIKeyID)
-			if err != nil {
-				if err == coredata.ErrResourceNotFound {
-					return NewPersonalAPIKeyNotFoundError(personalAPIKeyID)
-				}
-
-				return fmt.Errorf("cannot load personal api key: %w", err)
-			}
-
-			if personalAPIKey.IdentityID != identityID {
-				return NewPersonalAPIKeyNotFoundError(personalAPIKeyID)
-			}
-
-			err = personalAPIKey.Delete(ctx, tx)
-			if err != nil {
-				return fmt.Errorf("cannot delete personal api key: %w", err)
-			}
-
-			return nil
-		},
-	)
 }
 
 func (s AccountService) ListInvitingOrganizations(ctx context.Context, identityID gid.GID) ([]*coredata.Organization, error) {

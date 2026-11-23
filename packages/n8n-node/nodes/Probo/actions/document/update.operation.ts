@@ -1,35 +1,39 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import type { INodeProperties, IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
+import { organizationLocator, documentLocator } from '../../locators';
 import { proboApiRequest } from '../../GenericFunctions';
 
 export const description: INodeProperties[] = [
-	{
-		displayName: 'Document ID',
-		name: 'documentId',
-		type: 'string',
-		displayOptions: {
-			show: {
-				resource: ['document'],
-				operation: ['update'],
-			},
-		},
-		default: '',
+	organizationLocator({
+		resource: ['document'],
+		operation: ['update'],
+		required: false,
+		description: 'Organization to search documents in. Leave this empty when entering a document ID.',
+	}),
+	documentLocator({
+		resource: ['document'],
+		operation: ['update'],
 		description: 'The ID of the document to update',
-		required: true,
-	},
+	}),
 	{
 		displayName: 'Update Fields',
 		name: 'updateFields',
@@ -44,23 +48,6 @@ export const description: INodeProperties[] = [
 		},
 		options: [
 			{
-				displayName: 'Title',
-				name: 'title',
-				type: 'string',
-				default: '',
-				description: 'The title of the document. Edits to a published document auto-create a draft.',
-			},
-			{
-				displayName: 'Content',
-				name: 'content',
-				type: 'string',
-				typeOptions: {
-					rows: 6,
-				},
-				default: '',
-				description: 'The content of the document in markdown format. Edits to a published document auto-create a draft.',
-			},
-			{
 				displayName: 'Classification',
 				name: 'classification',
 				type: 'options',
@@ -71,7 +58,24 @@ export const description: INodeProperties[] = [
 					{ name: 'Secret', value: 'SECRET' },
 				],
 				default: 'INTERNAL',
-				description: 'The classification of the document',
+				description: 'The classification of the document. Updating it edits the current draft version, creating one from the latest published version if none exists.',
+			},
+			{
+				displayName: 'Content',
+				name: 'content',
+				type: 'string',
+				typeOptions: {
+					rows: 6,
+				},
+				default: '',
+				description: 'The body of the document as a ProseMirror document JSON string. An image node sets fileId from an attachment upload. A file node sets fileId, fileName, mimeType, and size. Updating it edits the current draft version, creating one from the latest published version if none exists.',
+			},
+			{
+				displayName: 'Default Approver IDs',
+				name: 'defaultApproverIds',
+				type: 'string',
+				default: '',
+				description: 'Comma-separated list of default approver profile IDs',
 			},
 			{
 				displayName: 'Document Type',
@@ -89,26 +93,14 @@ export const description: INodeProperties[] = [
 					{ name: 'Template', value: 'TEMPLATE' },
 				],
 				default: 'POLICY',
-				description: 'The type of the document',
+				description: 'The type of the document. Updating it edits the current draft version, creating one from the latest published version if none exists.',
 			},
 			{
-				displayName: 'Trust Center Visibility',
-				name: 'trustCenterVisibility',
-				type: 'options',
-				options: [
-					{ name: 'None', value: 'NONE' },
-					{ name: 'Private', value: 'PRIVATE' },
-					{ name: 'Public', value: 'PUBLIC' },
-				],
-				default: 'NONE',
-				description: 'The trust center visibility of the document',
-			},
-			{
-				displayName: 'Default Approver IDs',
-				name: 'defaultApproverIds',
+				displayName: 'Title',
+				name: 'title',
 				type: 'string',
 				default: '',
-				description: 'Comma-separated list of default approver profile IDs',
+				description: 'The title of the document. Updating it edits the current draft version, creating one from the latest published version if none exists.',
 			},
 		],
 	},
@@ -118,13 +110,12 @@ export async function execute(
 	this: IExecuteFunctions,
 	itemIndex: number,
 ): Promise<INodeExecutionData> {
-	const documentId = this.getNodeParameter('documentId', itemIndex) as string;
+	const documentId = this.getNodeParameter('documentId', itemIndex, '', { extractValue: true }) as string;
 	const updateFields = this.getNodeParameter('updateFields', itemIndex, {}) as {
 		title?: string;
 		content?: string;
 		classification?: string;
 		documentType?: string;
-		trustCenterVisibility?: string;
 		defaultApproverIds?: string;
 	};
 
@@ -134,7 +125,6 @@ export async function execute(
 				document {
 					id
 					status
-					trustCenterVisibility
 					currentPublishedMajor
 					currentPublishedMinor
 					archivedAt
@@ -143,13 +133,18 @@ export async function execute(
 				}
 				documentVersion {
 					id
-					status
+					title
 					major
 					minor
-					title
-					content
+					status
+					content {
+						prosemirror
+					}
+					changelog
 					classification
 					documentType
+					publishedAt
+					createdAt
 					updatedAt
 				}
 			}
@@ -157,11 +152,10 @@ export async function execute(
 	`;
 
 	const input: Record<string, unknown> = { id: documentId };
-	if (updateFields.title !== undefined) input.title = updateFields.title;
-	if (updateFields.content !== undefined) input.content = updateFields.content;
+	if (updateFields.title !== undefined && updateFields.title !== '') input.title = updateFields.title;
+	if (updateFields.content !== undefined && updateFields.content !== '') input.content = updateFields.content;
 	if (updateFields.classification !== undefined) input.classification = updateFields.classification;
 	if (updateFields.documentType !== undefined) input.documentType = updateFields.documentType;
-	if (updateFields.trustCenterVisibility !== undefined) input.trustCenterVisibility = updateFields.trustCenterVisibility;
 	if (updateFields.defaultApproverIds !== undefined && updateFields.defaultApproverIds !== '') {
 		input.defaultApproverIds = updateFields.defaultApproverIds.split(',').map(id => id.trim()).filter(Boolean);
 	}

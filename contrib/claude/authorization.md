@@ -251,7 +251,7 @@ and `r.AuthorizeBatch` (MCP) — keep the returned scope and pass it down.
 | Product action constants (`core:*`) | `pkg/probo/actions.go` |
 | IAM action constants (`iam:*`) | `pkg/iam/iam_actions.go` |
 | Product role policies (`ProboPolicySet`) | `pkg/probo/policies.go` |
-| Per-service policy sets (e.g. `accessreview.PolicySet`, `agentrun.PolicySet`) | `pkg/<service>/actions.go`, `pkg/<service>/policies.go` |
+| Per-service policy sets (e.g. `accessreview.PolicySet`, `agentexecution.PolicySet`) | `pkg/<service>/actions.go`, `pkg/<service>/policies.go` |
 | IAM role policies (`IAMPolicySet`) | `pkg/iam/iam_policies.go` |
 | Authorizer + `AuthorizationAttributer` | `pkg/iam/authorizer.go` |
 | PolicySet registration | `pkg/iam/policy_set.go` |
@@ -259,7 +259,7 @@ and `r.AuthorizeBatch` (MCP) — keep the returned scope and pass it down.
 | OAuth2 scope constants (per domain) | `pkg/<service>/oauth2_scopes.go` |
 | OAuth2 discovery + request context | `pkg/iam/oauth2/` |
 | GraphQL authz helper | `pkg/server/api/authz/authorization.go` |
-| MCP authz + recovery | `pkg/server/api/mcp/v1/resolver.go`, `mcputils/recovery.go` |
+| MCP authz + recovery | `pkg/server/api/mcp/v1/resolver.go`, `mcpx/recovery.go` |
 
 ## Action constants
 
@@ -291,15 +291,19 @@ Scopes are namespace- or product-level only — no resource segments (e.g. `v1:p
 - Authorization server (RFC 8414): `scopes_supported` on `/.well-known/oauth-authorization-server` lists OIDC + all API scopes; `protected_resources` links to the resource metadata document
 - Protected resource (RFC 9728): `scopes_supported` on `/.well-known/oauth-protected-resource` lists `openid` plus write API scopes only (no `:read` suffix); matches CIMD client registration
 
-**Enforcement:** OAuth2 bearer-token requests carry the validated access token on the request context (`pkg/iam/oauth2/request_context.go`). Before IAM policy evaluation, `iam.Authorizer` checks registered `oauth2scope.Registry` mappings via `Registry.Allows`. Each domain package exports `OAuth2ScopeMappings` in its `oauth2_scopes.go`; `probod` registers all domain mappings on the shared registry before `iam.NewService`. The check uses explicit scope→action lists — no `:read` / `:get` heuristics at enforcement time. Session, personal API key, and SCIM auth skip the check (no access token on context). Unmapped IAM actions **deny** OAuth requests (fail closed). Enforcement reads scopes from the access token directly.
+**Enforcement:** OAuth2 bearer-token requests carry the validated access token on the request context (`pkg/iam/oauth2/request_context.go`). Before IAM policy evaluation, `iam.Authorizer` checks registered `oauth2scope.Registry` mappings via `Registry.Allows`. Each domain package exports an OAuth2 scope mapping in its `oauth2_scopes.go` (`OAuth2ScopeMappings`, or `IAMOAuth2ScopeMappings` in `pkg/iam`); `probod` registers all domain mappings on the shared registry before `iam.NewService`. The check uses explicit scope→action lists — no `:read` / `:get` heuristics at enforcement time. Session and SCIM auth skip the check (no access token on context). Unmapped IAM actions **deny** OAuth requests (fail closed). Enforcement reads scopes from the access token directly.
 
-Add new namespace-level scope constants in the owning package's `oauth2_scopes.go`, map their IAM actions in that package's `OAuth2ScopeMappings`, and add the mapping to `probod` wiring alongside the other domain registrations. Write scopes are registered only when their mutating IAM actions are mapped.
+**When adding or extending IAM actions:** every new action used by GraphQL, MCP, CLI, or n8n must be listed in the owning package's OAuth2 scope mapping (`OAuth2ScopeMappings`, or `IAMOAuth2ScopeMappings` in `pkg/iam`). Prefer an existing `v1:<namespace>` / `v1:<namespace>:read` pair (e.g. commitment CRUD under `v1:compliance-page`). Only introduce a new namespace-level scope when no existing scope fits — then add constants in `oauth2_scopes.go`, map actions in the package's OAuth2 scope mapping, and register the mapping in `probod` wiring. Write scopes are registered only when their mutating IAM actions are mapped.
+
+When you add a new `v1:<namespace>` pair, add labels in the console locale files. Put the keys `v1:<namespace>` and `v1:<namespace>:read` under `oauthScopes.api` in `apps/console/src/_locales/{en-US,fr-FR,nl-NL}.json`.
+
+E2E MCP tests authenticate with OAuth2 access tokens. Keep each tool's IAM action in the package's OAuth2 scope mapping so those requests pass the scope gate.
 
 **Well-known Probo CLI client:** `iam_oauth2_clients` scopes for `AAAAAAAAAAAASwAAAAAAAAAAcHJiY2xp` must match `CLIClientScopes` in `pkg/cli/config/config.go` (requested by `prb auth login`). When adding API scopes, update the client migration, `CLIClientScopes`, and scope registration together.
 
 ### Personal OAuth2 access tokens
 
-Manual bearer tokens created from the console are stored in `iam_oauth2_access_tokens` with a `NULL` `client_id` and are scoped to the creating identity. They are managed via Connect GraphQL on the signed-in user's `Identity`, similar to personal API keys. IAM actions:
+Manual bearer tokens created from the console are stored in `iam_oauth2_access_tokens` with a `NULL` `client_id` and are scoped to the creating identity. They are managed via Connect GraphQL on the signed-in user's `Identity`. IAM actions:
 
 | Action | Purpose |
 |--------|---------|
@@ -319,16 +323,8 @@ Manual bearer tokens created from the console are stored in `iam_oauth2_access_t
 | `VIEWER` | Read-only access to most entities |
 | `AUDITOR` | Read-only, excludes internal/employee content |
 | `EMPLOYEE` | Can sign documents and view internal content |
-
-## Built-in role policies
-
-| Role | Access level |
-|------|-------------|
-| `OWNER` | Full access to all features including org management |
-| `ADMIN` | Full access to core features, restricted org management |
-| `VIEWER` | Read-only access to most entities |
-| `AUDITOR` | Read-only, excludes internal/employee content |
-| `EMPLOYEE` | Can sign documents and view internal content |
+| `COMPLIANCE_PORTAL_MANAGER` | Full compliance portal management, related entity visibility, and employee portal policy signing |
+| `COMPLIANCE_PORTAL_ACCESS_MANAGER` | Manage visitor and document access requests, and sign policies in the employee portal |
 
 ## New entity IAM wiring
 
@@ -336,9 +332,10 @@ When adding a new entity that needs authorization:
 
 1. **Action constants** — add `core:<entity>:<verb>` constants in `pkg/probo/actions.go` (get, list, create, update, delete)
 2. **Role policies** — wire actions into the appropriate role policies in `pkg/probo/policies.go` (`OwnerPolicy`, `AdminPolicy`, `ViewerPolicy`, etc.) with `organization_id` condition
-3. **`AuthorizationAttributes`** — implement on the `coredata` entity struct, returning at minimum `{"organization_id": ...}` (use the denormalized `OrganizationID` field — see coredata doc)
-4. **Entity type registry** — register in `pkg/coredata/entity_type_reg.go` and `NewEntityFromID` so the authorizer can construct the entity from its GID
-5. **Resolver calls** — add `scope, err := r.authorize(ctx, id, probo.ActionEntityGet)` in GraphQL resolvers and `scope, err := r.Authorize(ctx, id, probo.ActionEntityGet)` in MCP resolvers, then pass `scope` to services
+3. **OAuth2 scope mappings** — add every new action to the owning package's OAuth2 scope mapping in `pkg/<service>/oauth2_scopes.go` (`OAuth2ScopeMappings`, or `IAMOAuth2ScopeMappings` in `pkg/iam`). Put list/get on `v1:<namespace>:read` and mutating verbs on `v1:<namespace>`. Reuse an existing namespace when the feature belongs to one (e.g. compliance-page commitments → `v1:compliance-page`). Unmapped actions deny all OAuth2 callers (MCP included) even when role policies allow them.
+4. **`AuthorizationAttributes`** — implement on the `coredata` entity struct, returning at minimum `{"organization_id": ...}` (use the denormalized `OrganizationID` field — see coredata doc)
+5. **Entity type registry** — register in `pkg/coredata/entity_type_reg.go` and `NewEntityFromID` so the authorizer can construct the entity from its GID
+6. **Resolver calls** — add `scope, err := r.authorize(ctx, id, probo.ActionEntityGet)` in GraphQL resolvers and `scope, err := r.Authorize(ctx, id, probo.ActionEntityGet)` in MCP resolvers, then pass `scope` to services
 
 ## Decision logging
 

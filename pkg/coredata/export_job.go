@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -48,20 +54,51 @@ type (
 	ExportJobs []*ExportJob
 
 	DocumentExportArguments struct {
-		DocumentIDs    []gid.GID  `json:"document_ids"`
-		WithWatermark  bool       `json:"with_watermark"`
-		WatermarkEmail *mail.Addr `json:"watermark_email"`
-		WithSignatures bool       `json:"with_signatures"`
+		DocumentIDs    []gid.GID `json:"document_ids"`
+		WithWatermark  bool      `json:"with_watermark"`
+		WatermarkText  *string   `json:"watermark_text"`
+		WithSignatures bool      `json:"with_signatures"`
 	}
 
 	FrameworkExportArguments struct {
 		FrameworkID gid.GID `json:"framework_id"`
+	}
+
+	LogExportArguments struct {
+		FromTime time.Time `json:"from_time"`
+		ToTime   time.Time `json:"to_time"`
 	}
 )
 
 var (
 	ErrNoExportJobAvailable = errors.New("no export job available")
 )
+
+func (a *DocumentExportArguments) UnmarshalJSON(data []byte) error {
+	var arguments struct {
+		DocumentIDs    []gid.GID `json:"document_ids"`
+		WithWatermark  bool      `json:"with_watermark"`
+		WatermarkText  *string   `json:"watermark_text"`
+		WatermarkEmail *string   `json:"watermark_email"`
+		WithSignatures bool      `json:"with_signatures"`
+	}
+
+	if err := json.Unmarshal(data, &arguments); err != nil {
+		return fmt.Errorf("cannot unmarshal document export arguments: %w", err)
+	}
+
+	a.DocumentIDs = arguments.DocumentIDs
+	a.WithWatermark = arguments.WithWatermark
+	a.WatermarkText = arguments.WatermarkText
+
+	if a.WatermarkText == nil {
+		a.WatermarkText = arguments.WatermarkEmail
+	}
+
+	a.WithSignatures = arguments.WithSignatures
+
+	return nil
+}
 
 // AuthorizationAttributes returns the authorization attributes for policy evaluation.
 func (ej *ExportJob) AuthorizationAttributes(
@@ -158,7 +195,6 @@ SET
 	status = @status,
 	error = @error,
 	file_id = @file_id,
-	started_at = @started_at,
 	completed_at = @completed_at
 WHERE
 	%s
@@ -169,14 +205,110 @@ WHERE
 		"status":       ej.Status,
 		"error":        ej.Error,
 		"file_id":      ej.FileID,
-		"started_at":   ej.StartedAt,
 		"completed_at": ej.CompletedAt,
 		"id":           ej.ID,
 	}
 	maps.Copy(args, scope.SQLArguments())
-	_, err := conn.Exec(ctx, q, args)
 
-	return err
+	result, err := conn.Exec(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot update export job: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return ErrResourceNotFound
+	}
+
+	return nil
+}
+
+// UpdateIfStatus updates the export job only when its current status matches
+// expected. Used to finalize a claim without clobbering a job that was
+// reclaimed and reassigned to another worker.
+func (ej *ExportJob) UpdateIfStatus(
+	ctx context.Context,
+	conn pg.Tx,
+	scope Scoper,
+	expected ExportJobStatus,
+) error {
+	q := `
+UPDATE
+	export_jobs
+SET
+	status = @status,
+	error = @error,
+	file_id = @file_id,
+	completed_at = @completed_at
+WHERE
+	%s
+	AND id = @id
+	AND status = @expected_status
+`
+	q = fmt.Sprintf(q, scope.SQLFragment())
+	args := pgx.StrictNamedArgs{
+		"status":          ej.Status,
+		"error":           ej.Error,
+		"file_id":         ej.FileID,
+		"completed_at":    ej.CompletedAt,
+		"id":              ej.ID,
+		"expected_status": expected,
+	}
+	maps.Copy(args, scope.SQLArguments())
+
+	result, err := conn.Exec(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot update export job: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return ErrResourceNotFound
+	}
+
+	return nil
+}
+
+// MarkProcessing claims the job for processing and starts its lease clock.
+func (ej *ExportJob) MarkProcessing(
+	ctx context.Context,
+	conn pg.Tx,
+	scope Scoper,
+) error {
+	now := time.Now()
+	ej.Status = ExportJobStatusProcessing
+	ej.StartedAt = &now
+
+	q := `
+UPDATE
+	export_jobs
+SET
+	status = @status,
+	started_at = @started_at,
+	error = NULL,
+	completed_at = NULL
+WHERE
+	%s
+	AND id = @id
+	AND status = @pending_status
+`
+	q = fmt.Sprintf(q, scope.SQLFragment())
+	args := pgx.StrictNamedArgs{
+		"status":         ej.Status,
+		"started_at":     ej.StartedAt,
+		"id":             ej.ID,
+		"pending_status": ExportJobStatusPending,
+	}
+	maps.Copy(args, scope.SQLArguments())
+
+	result, err := conn.Exec(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot mark export job as processing: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return ErrResourceNotFound
+	}
+
+	return nil
 }
 
 func (ej *ExportJob) LoadByID(
@@ -316,4 +448,86 @@ func (ej *ExportJob) GetFrameworkID() (gid.GID, error) {
 	}
 
 	return args.FrameworkID, nil
+}
+
+func (ej *ExportJob) GetLogExportArguments() (*LogExportArguments, error) {
+	switch ej.Type {
+	case ExportJobTypeAuditLog, ExportJobTypeSCIMEvent:
+	default:
+		return nil, fmt.Errorf("export job is not a log export")
+	}
+
+	var args LogExportArguments
+	if err := json.Unmarshal(ej.Arguments, &args); err != nil {
+		return nil, fmt.Errorf("cannot unmarshal log export arguments: %w", err)
+	}
+
+	return &args, nil
+}
+
+func ResetStaleExportJobs(
+	ctx context.Context,
+	conn pg.Querier,
+	staleAfter time.Duration,
+) error {
+	q := `
+UPDATE export_jobs
+SET
+	status = @pending_status,
+	started_at = NULL
+WHERE
+	status = @processing_status
+	AND started_at < @stale_threshold
+`
+
+	args := pgx.StrictNamedArgs{
+		"pending_status":    ExportJobStatusPending,
+		"processing_status": ExportJobStatusProcessing,
+		"stale_threshold":   time.Now().Add(-staleAfter),
+	}
+
+	_, err := conn.Exec(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot reset stale export jobs: %w", err)
+	}
+
+	return nil
+}
+
+// TouchExportJobLease renews the processing lease so long-running exports
+// are not requeued by ResetStaleExportJobs while still actively working.
+func TouchExportJobLease(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	id gid.GID,
+) error {
+	q := `
+UPDATE export_jobs
+SET
+	started_at = @started_at
+WHERE
+	%s
+	AND id = @id
+	AND status = @processing_status
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+	args := pgx.StrictNamedArgs{
+		"id":                id,
+		"started_at":        time.Now(),
+		"processing_status": ExportJobStatusProcessing,
+	}
+	maps.Copy(args, scope.SQLArguments())
+
+	result, err := conn.Exec(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot touch export job lease: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return ErrResourceNotFound
+	}
+
+	return nil
 }

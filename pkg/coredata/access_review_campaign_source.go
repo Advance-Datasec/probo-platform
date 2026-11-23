@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -41,6 +47,7 @@ type (
 		AccessReviewSourceID   *gid.GID     `db:"access_review_source_id"`
 		Name                   string       `db:"name"`
 		ConnectorID            *gid.GID     `db:"connector_id"`
+		ConnectorAccountID     *gid.GID     `db:"connector_account_id"`
 		CreatedAt              time.Time    `db:"created_at"`
 		UpdatedAt              time.Time    `db:"updated_at"`
 	}
@@ -105,6 +112,7 @@ INSERT INTO access_review_campaign_sources (
 	access_review_source_id,
 	name,
 	connector_id,
+	connector_account_id,
 	created_at,
 	updated_at
 ) VALUES (
@@ -115,13 +123,15 @@ INSERT INTO access_review_campaign_sources (
 	@access_review_source_id,
 	@name,
 	@connector_id,
+	@connector_account_id,
 	@created_at,
 	@updated_at
 )
 ON CONFLICT (access_review_campaign_id, access_review_source_id) DO UPDATE SET
-	name         = EXCLUDED.name,
-	connector_id = EXCLUDED.connector_id,
-	updated_at   = EXCLUDED.updated_at
+	name                  = EXCLUDED.name,
+	connector_id          = EXCLUDED.connector_id,
+	connector_account_id  = EXCLUDED.connector_account_id,
+	updated_at            = EXCLUDED.updated_at
 RETURNING id
 `
 	args := pgx.StrictNamedArgs{
@@ -132,12 +142,152 @@ RETURNING id
 		"access_review_source_id":   s.AccessReviewSourceID,
 		"name":                      s.Name,
 		"connector_id":              s.ConnectorID,
+		"connector_account_id":      s.ConnectorAccountID,
 		"created_at":                s.CreatedAt,
 		"updated_at":                s.UpdatedAt,
 	}
 
 	if err := conn.QueryRow(ctx, q, args).Scan(&s.ID); err != nil {
 		return fmt.Errorf("cannot upsert campaign source: %w", err)
+	}
+
+	return nil
+}
+
+func (sources *AccessReviewCampaignSources) MergeByCampaignID(
+	ctx context.Context,
+	conn pg.Tx,
+	scope Scoper,
+	campaignID gid.GID,
+	accessReviewSources AccessReviewSources,
+) error {
+	ids := make([]string, 0, len(accessReviewSources))
+	organizationIDs := make([]string, 0, len(accessReviewSources))
+	names := make([]string, 0, len(accessReviewSources))
+	connectorIDs := make([]*string, 0, len(accessReviewSources))
+	connectorAccountIDs := make([]*string, 0, len(accessReviewSources))
+
+	accountIDs := make([]gid.GID, 0, len(accessReviewSources))
+	for _, source := range accessReviewSources {
+		if source.ConnectorAccountID != nil {
+			accountIDs = append(accountIDs, *source.ConnectorAccountID)
+		}
+	}
+
+	connectorIDsByAccount, err := ConnectorIDsByAccountIDs(ctx, conn, scope, accountIDs)
+	if err != nil {
+		return err
+	}
+
+	seen := make(map[gid.GID]struct{}, len(accessReviewSources))
+	for _, source := range accessReviewSources {
+		if _, ok := seen[source.ID]; ok {
+			continue
+		}
+
+		seen[source.ID] = struct{}{}
+
+		var connectorID *string
+
+		if source.ConnectorAccountID != nil {
+			if id, ok := connectorIDsByAccount[*source.ConnectorAccountID]; ok {
+				s := id.String()
+				connectorID = &s
+			}
+		}
+
+		var connectorAccountID *string
+
+		if source.ConnectorAccountID != nil {
+			s := source.ConnectorAccountID.String()
+			connectorAccountID = &s
+		}
+
+		ids = append(ids, source.ID.String())
+		organizationIDs = append(organizationIDs, source.OrganizationID.String())
+		names = append(names, source.Name)
+		connectorIDs = append(connectorIDs, connectorID)
+		connectorAccountIDs = append(connectorAccountIDs, connectorAccountID)
+	}
+
+	now := time.Now()
+
+	q := `
+WITH desired_sources AS (
+	SELECT
+		id AS access_review_source_id,
+		organization_id,
+		name,
+		connector_id,
+		connector_account_id
+	FROM unnest(
+		@access_review_source_ids::text[],
+		@organization_ids::text[],
+		@names::text[],
+		@connector_ids::text[],
+		@connector_account_ids::text[]
+	) AS t(id, organization_id, name, connector_id, connector_account_id)
+)
+MERGE INTO access_review_campaign_sources AS target
+USING desired_sources AS source
+ON
+	%s
+	AND target.access_review_campaign_id = @access_review_campaign_id
+	AND target.access_review_source_id = source.access_review_source_id
+WHEN MATCHED THEN
+	UPDATE SET
+		name                 = source.name,
+		connector_id         = source.connector_id,
+		connector_account_id = source.connector_account_id,
+		updated_at           = @now
+WHEN NOT MATCHED THEN
+	INSERT (
+		id,
+		organization_id,
+		tenant_id,
+		access_review_campaign_id,
+		access_review_source_id,
+		name,
+		connector_id,
+		connector_account_id,
+		created_at,
+		updated_at
+	)
+	VALUES (
+		generate_gid(decode_base64_unpadded(@tenant_id), @access_review_campaign_source_entity_type),
+		source.organization_id,
+		@tenant_id,
+		@access_review_campaign_id,
+		source.access_review_source_id,
+		source.name,
+		source.connector_id,
+		source.connector_account_id,
+		@now,
+		@now
+	)
+WHEN NOT MATCHED BY SOURCE
+	AND %s
+	AND target.access_review_campaign_id = @access_review_campaign_id THEN
+	DELETE
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment(), scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"access_review_campaign_id":                 campaignID,
+		"access_review_source_ids":                  ids,
+		"organization_ids":                          organizationIDs,
+		"names":                                     names,
+		"connector_ids":                             connectorIDs,
+		"connector_account_ids":                     connectorAccountIDs,
+		"access_review_campaign_source_entity_type": AccessReviewCampaignSourceEntityType,
+		"tenant_id":                                 scope.GetTenantID(),
+		"now":                                       now,
+	}
+	maps.Copy(args, scope.SQLArguments())
+
+	if _, err := conn.Exec(ctx, q, args); err != nil {
+		return fmt.Errorf("cannot merge campaign sources: %w", err)
 	}
 
 	return nil
@@ -158,6 +308,7 @@ SELECT
 	access_review_source_id,
 	name,
 	connector_id,
+	connector_account_id,
 	created_at,
 	updated_at
 FROM access_review_campaign_sources
@@ -234,6 +385,7 @@ SELECT
 	access_review_source_id,
 	name,
 	connector_id,
+	connector_account_id,
 	created_at,
 	updated_at
 FROM access_review_campaign_sources

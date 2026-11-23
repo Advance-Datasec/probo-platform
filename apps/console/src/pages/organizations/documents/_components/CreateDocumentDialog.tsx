@@ -1,18 +1,24 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
+import { formatError } from "@probo/helpers";
 import {
   Badge,
   Breadcrumb,
@@ -25,23 +31,22 @@ import {
   PropertyRow,
   useDialogRef,
 } from "@probo/ui";
-import { clsx } from "clsx";
-import { type ReactNode, useCallback, useState } from "react";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
+import { type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import { useMutation } from "react-relay";
 import { graphql } from "relay-runtime";
-import type { z } from "zod";
 
 import type { CreateDocumentDialogMutation } from "#/__generated__/core/CreateDocumentDialogMutation.graphql";
 import { ControlledField } from "#/components/form/ControlledField";
 import { DocumentClassificationOptions } from "#/components/form/DocumentClassificationOptions";
 import { DocumentTypeOptions } from "#/components/form/DocumentTypeOptions";
-import { RichTextEditor } from "#/components/form/RichTextEditor";
-import { documentSchema, useDocumentForm } from "#/hooks/forms/useDocumentForm";
-import { useMutationWithToasts } from "#/hooks/useMutationWithToasts";
+import { PeopleMultiSelectField } from "#/components/form/PeopleMultiSelectField";
+import { useFormWithSchema } from "#/hooks/useFormWithSchema";
 import { useOrganizationId } from "#/hooks/useOrganizationId";
+import { z } from "#/lib/zod";
 
-import { type DocumentTemplate, documentTemplates } from "./templates";
-
-type Props = {
+type CreateDocumentDialogProps = {
   trigger?: ReactNode;
   connection: string;
 };
@@ -70,43 +75,33 @@ const createDocumentMutation = graphql`
 /**
  * Dialog to create or update a document
  */
-export function CreateDocumentDialog({ trigger, connection }: Props) {
-  const { __ } = useTranslate();
+export function CreateDocumentDialog({ trigger, connection }: CreateDocumentDialogProps) {
+  const { t } = useTranslation();
   const organizationId = useOrganizationId();
-  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
-  const [editorKey, setEditorKey] = useState(0);
+  const toast = useToast();
+  const documentSchema = z.object({
+    title: z.string().min(1, t("createDocumentDialog.validation.titleRequired")),
+    documentType: z.enum(["OTHER", "GOVERNANCE", "POLICY", "PROCEDURE", "PLAN", "REGISTER", "RECORD", "REPORT", "TEMPLATE"]),
+    classification: z.enum(["PUBLIC", "INTERNAL", "CONFIDENTIAL", "SECRET"]),
+    defaultApproverIds: z.array(z.string()),
+  });
 
-  const { control, handleSubmit, register, formState, reset, setValue, watch }
-    = useDocumentForm();
-  const errors = formState.errors ?? {};
-  const contentValue = watch("content");
-  const [createDocument, isLoading]
-    = useMutationWithToasts<CreateDocumentDialogMutation>(createDocumentMutation);
-
-  const onContentChange = useCallback(
-    (html: string) => {
-      setValue("content", html, { shouldValidate: true });
+  const { control, handleSubmit, register, formState, reset } = useFormWithSchema(
+    documentSchema,
+    {
+      defaultValues: {
+        documentType: "POLICY",
+        classification: "INTERNAL",
+        defaultApproverIds: [],
+      },
     },
-    [setValue],
   );
+  const errors = formState.errors ?? {};
+  const [createDocument, isLoading]
+    = useMutation<CreateDocumentDialogMutation>(createDocumentMutation);
 
-  const applyTemplate = (template: DocumentTemplate) => {
-    setValue("title", template.title);
-    setValue("content", template.content, { shouldValidate: true });
-    setValue("documentType", template.documentType);
-    setValue("classification", template.classification);
-    setSelectedTemplate(template.id);
-    setEditorKey(k => k + 1);
-  };
-
-  const clearTemplate = () => {
-    reset();
-    setSelectedTemplate(null);
-    setEditorKey(k => k + 1);
-  };
-
-  const onSubmit = async (data: z.infer<typeof documentSchema>) => {
-    await createDocument({
+  const onSubmit = (data: z.infer<typeof documentSchema>) => {
+    createDocument({
       variables: {
         input: {
           ...data,
@@ -114,13 +109,29 @@ export function CreateDocumentDialog({ trigger, connection }: Props) {
         },
         connections: [connection],
       },
-      successMessage: __("Document created successfully."),
-      errorMessage: __("Failed to create document"),
-      onSuccess: () => {
+      onCompleted(_, errors) {
+        if (errors?.length) {
+          toast.add({
+            title: t("createDocumentDialog.errors.title"),
+            description: formatError(t("createDocumentDialog.errors.create"), errors),
+            type: "error",
+          });
+          return;
+        }
+        toast.add({
+          title: t("createDocumentDialog.messages.successTitle"),
+          description: t("createDocumentDialog.messages.created"),
+          type: "success",
+        });
         dialogRef.current?.close();
         reset();
-        setSelectedTemplate(null);
-        setEditorKey(k => k + 1);
+      },
+      onError(error) {
+        toast.add({
+          title: t("createDocumentDialog.errors.title"),
+          description: error.message,
+          type: "error",
+        });
       },
     });
   };
@@ -131,87 +142,39 @@ export function CreateDocumentDialog({ trigger, connection }: Props) {
     <Dialog
       ref={dialogRef}
       trigger={trigger}
-      title={<Breadcrumb items={[__("Documents"), __("New Document")]} />}
-      className="w-[85vw]! max-w-[85vw]! h-[85vh]!"
-      onClose={() => {
-        reset();
-        setSelectedTemplate(null);
-        setEditorKey(k => k + 1);
-      }}
+      title={(
+        <Breadcrumb
+          items={[
+            t("createDocumentDialog.breadcrumbs.documents"),
+            t("createDocumentDialog.breadcrumbs.new"),
+          ]}
+        />
+      )}
     >
-      <form
-        onSubmit={e => void handleSubmit(onSubmit)(e)}
-        className="flex flex-col h-[calc(85vh-110px)]"
-      >
-        <DialogContent className="grid grid-cols-[1fr_420px] flex-1 max-h-none!">
-          <div className="flex flex-col overflow-hidden">
-            <div className="py-4 px-10 shrink-0">
-              <Input
-                id="title"
-                aria-label={__("Title")}
-                required
-                variant="title"
-                placeholder={__("Document title")}
-                {...register("title")}
-              />
-            </div>
-            <div className="flex-1 overflow-hidden">
-              <RichTextEditor
-                key={editorKey}
-                value={contentValue}
-                onChange={onContentChange}
-                placeholder={__("Add content")}
-              />
-            </div>
+      <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
+        <DialogContent className="grid grid-cols-[1fr_420px]">
+          <div className="py-8 px-10 space-y-4">
+            <Input
+              id="title"
+              aria-label={t("createDocumentDialog.fields.title")}
+              required
+              variant="title"
+              placeholder={t("createDocumentDialog.fields.titlePlaceholder")}
+              {...register("title")}
+            />
           </div>
-          {/* Properties & templates sidebar */}
-          <div className="py-5 px-6 bg-subtle overflow-y-auto">
-            <Label>{__("Template")}</Label>
-            <div className="flex flex-wrap gap-1.5 mt-2 mb-5">
-              <button
-                type="button"
-                onClick={clearTemplate}
-                className={clsx(
-                  "flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-medium transition-all cursor-pointer",
-                  selectedTemplate === null
-                    ? "border-primary bg-primary/5 text-primary ring-1 ring-primary/20"
-                    : "border-border-low bg-level-1 text-txt-secondary hover:border-txt-tertiary hover:text-txt-primary",
-                )}
-              >
-                {__("Blank")}
-              </button>
-              {documentTemplates.map((template) => {
-                const Icon = template.icon;
-                const isActive = selectedTemplate === template.id;
-                return (
-                  <button
-                    key={template.id}
-                    type="button"
-                    onClick={() => applyTemplate(template)}
-                    className={clsx(
-                      "flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-medium transition-all cursor-pointer",
-                      isActive
-                        ? "border-primary bg-primary/5 text-primary ring-1 ring-primary/20"
-                        : "border-border-low bg-level-1 text-txt-secondary hover:border-txt-tertiary hover:text-txt-primary",
-                    )}
-                  >
-                    <Icon size={12} />
-                    {__(template.name)}
-                  </button>
-                );
-              })}
-            </div>
-
-            <Label>{__("Properties")}</Label>
-            <PropertyRow label={__("Status")}>
+          {/* Properties form */}
+          <div className="py-5 px-6 bg-subtle">
+            <Label>{t("createDocumentDialog.properties.title")}</Label>
+            <PropertyRow label={t("createDocumentDialog.properties.status")}>
               <Badge variant="neutral" size="md">
-                {__("Draft")}
+                {t("createDocumentDialog.status.draft")}
               </Badge>
             </PropertyRow>
 
             <PropertyRow
               id="documentType"
-              label={__("Type")}
+              label={t("createDocumentDialog.properties.type")}
               error={errors.documentType?.message}
             >
               <ControlledField
@@ -225,7 +188,7 @@ export function CreateDocumentDialog({ trigger, connection }: Props) {
 
             <PropertyRow
               id="classification"
-              label={__("Classification")}
+              label={t("createDocumentDialog.properties.classification")}
               error={errors.classification?.message}
             >
               <ControlledField
@@ -237,11 +200,20 @@ export function CreateDocumentDialog({ trigger, connection }: Props) {
               </ControlledField>
             </PropertyRow>
 
+            <PropertyRow label={t("createDocumentDialog.properties.approvers")}>
+              <PeopleMultiSelectField
+                name="defaultApproverIds"
+                control={control}
+                organizationId={organizationId}
+                placeholder={t("createDocumentDialog.fields.approversPlaceholder")}
+              />
+            </PropertyRow>
+
           </div>
         </DialogContent>
         <DialogFooter>
           <Button type="submit" disabled={isLoading}>
-            {__("Create document")}
+            {t("createDocumentDialog.actions.create")}
           </Button>
         </DialogFooter>
       </form>

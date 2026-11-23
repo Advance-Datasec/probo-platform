@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package docgen
 
@@ -26,6 +32,7 @@ import (
 
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/prosemirror"
+	"go.probo.inc/probo/pkg/richtext"
 )
 
 var (
@@ -198,6 +205,7 @@ type (
 		CompanyHorizontalLogoBase64 string
 		MermaidJS                   template.JS
 		Landscape                   bool
+		BaseURL                     string
 	}
 
 	SignatureData struct {
@@ -275,24 +283,68 @@ type (
 	}
 
 	RiskListRow struct {
-		Name                    string
-		Description             string
-		Category                string
-		Treatment               string
-		Owner                   string
-		InherentLikelihood      int
-		InherentLikelihoodLabel string
-		InherentImpact          int
-		InherentImpactLabel     string
-		InherentRiskScore       int
-		InherentSeverity        string
-		ResidualLikelihood      int
-		ResidualLikelihoodLabel string
-		ResidualImpact          int
-		ResidualImpactLabel     string
-		ResidualRiskScore       int
-		ResidualSeverity        string
-		Note                    string
+		Name        string
+		Description string
+		Category    string
+		Note        string
+	}
+
+	RiskAnalysisData struct {
+		Title            string
+		OrganizationName string
+		CreatedAt        time.Time
+		Period           string
+		Description      string
+		Matrix           RiskAnalysisMatrix
+		MaxScore         int
+		ScoreBands       string
+		TotalPlans       int
+		Rows             []RiskAnalysisRow
+		Diagrams         []RiskAnalysisDiagram
+	}
+
+	RiskAnalysisMatrix struct {
+		Size   string
+		Charts []RiskAnalysisMatrixChart
+	}
+
+	RiskAnalysisMatrixChart struct {
+		Title string
+		HTML  string
+	}
+
+	RiskAnalysisRow struct {
+		ReferenceID        string
+		Name               string
+		Description        string
+		Category           string
+		Treatment          string
+		Owner              string
+		InherentLikelihood string
+		InherentImpact     string
+		InherentRiskScore  string
+		ResidualLikelihood string
+		ResidualImpact     string
+		ResidualRiskScore  string
+		InternalControls   []RiskAnalysisInternalControl
+	}
+
+	RiskAnalysisInternalControl struct {
+		Name  string
+		State string
+	}
+
+	RiskAnalysisDiagram struct {
+		Name      string
+		Mermaid   string
+		Scenarios []RiskAnalysisScenario
+	}
+
+	RiskAnalysisScenario struct {
+		Name        string
+		Description string
+		Risks       []string
+		Threats     []string
 	}
 
 	FindingListData struct {
@@ -305,6 +357,7 @@ type (
 
 	FindingListRow struct {
 		ReferenceID        string
+		Title              string
 		Kind               string
 		Description        string
 		Source             string
@@ -336,6 +389,56 @@ type (
 		Regulator              string
 		Owner                  string
 		DueDate                string
+	}
+
+	BusinessFunctionListData struct {
+		Title                  string
+		OrganizationName       string
+		CreatedAt              time.Time
+		TotalBusinessFunctions int
+		Rows                   []BusinessFunctionListRow
+	}
+
+	BusinessFunctionListRow struct {
+		ReferenceID     string
+		Name            string
+		Classification  string
+		MTD             string
+		RTO             string
+		RPO             string
+		ImpactTolerance string
+		Notes           string
+		Owner           string
+		Assets          string
+		ThirdParties    string
+	}
+
+	AiSystemListData struct {
+		Title            string
+		OrganizationName string
+		CreatedAt        time.Time
+		TotalAiSystems   int
+		Rows             []AiSystemListRow
+	}
+
+	AiSystemListRow struct {
+		Name                    string
+		Version                 string
+		CompanyRoles            string
+		Status                  string
+		Owner                   string
+		Source                  string
+		Purpose                 string
+		IntendedUseCases        string
+		AutonomyLevel           string
+		HumanOversightMechanism string
+		RiskClassification      string
+		KeyStakeholders         string
+		DataSourcesAndType      string
+		DeploymentDate          string
+		LastReviewDate          string
+		NextReviewDate          string
+		Notes                   string
 	}
 
 	ProcessingActivityListData struct {
@@ -429,11 +532,10 @@ type (
 		TrustPageURL                  string
 		Certifications                string
 		Countries                     string
-		BusinessOwner                 string
-		SecurityOwner                 string
+		Administrators                string
 		Services                      []ThirdPartyListService
 		Contacts                      []ThirdPartyListContact
-		RiskAssessments               []ThirdPartyListRiskAssessment
+		RiskAnalyses                  []ThirdPartyListRiskAssessment
 		ComplianceReports             []ThirdPartyListComplianceReport
 		BusinessAssociateAgreement    *ThirdPartyListAgreement
 		DataPrivacyAgreement          *ThirdPartyListAgreement
@@ -457,6 +559,11 @@ type (
 		DataSensitivity string
 		BusinessImpact  string
 		Notes           string
+		// NotesBlocks is a comma-separated sequence of ProseMirror block
+		// nodes (no surrounding array brackets), ready to splice into the
+		// third-party register JSON template after the "Notes:" label.
+		// Populated by BuildThirdPartyListDocument from Notes markdown.
+		NotesBlocks string
 	}
 
 	ThirdPartyListComplianceReport struct {
@@ -473,7 +580,6 @@ type (
 	TrackerPolicyData struct {
 		OrganizationName  string
 		WebsiteOrigin     string
-		GeneratedAt       time.Time
 		PrivacyPolicyURL  string
 		ConsentExpiryDays int
 		Categories        []TrackerPolicyCategory
@@ -548,7 +654,7 @@ func ProseMirrorJSONToHTML(content json.RawMessage) template.HTML {
 		return template.HTML(fmt.Sprintf("<p>%s</p>", html.EscapeString(s)))
 	}
 
-	htmlStr, err := prosemirror.RenderHTML(node)
+	htmlStr, err := richtext.DocumentHTML.Render(node)
 	if err != nil {
 		return template.HTML(fmt.Sprintf("<p>%s</p>", html.EscapeString(s)))
 	}

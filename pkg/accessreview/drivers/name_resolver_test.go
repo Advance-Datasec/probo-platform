@@ -1,21 +1,28 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -24,6 +31,75 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNameStatusError(t *testing.T) {
+	t.Parallel()
+
+	terminal := []int{
+		http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusNotFound,
+	}
+	for _, code := range terminal {
+		err := nameStatusError("thing", code)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrTerminalNameResolution, "status %d must be terminal", code)
+	}
+
+	retryable := []int{
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout,
+	}
+	for _, code := range retryable {
+		err := nameStatusError("thing", code)
+		require.Error(t, err)
+		assert.False(t, errors.Is(err, ErrTerminalNameResolution), "status %d must be retryable", code)
+	}
+}
+
+// TestNameResolversTerminalOnClientError guards the fix that makes the
+// grafana, metabase and tailscale name resolvers surface a permanent 4xx as
+// ErrTerminalNameResolution. Without it a revoked-credential source hot-loops
+// the source-name worker, which never marks such a source synced.
+func TestNameResolversTerminalOnClientError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"message":"unauthorized"}`))
+		}),
+	)
+	t.Cleanup(srv.Close)
+
+	cases := []struct {
+		name     string
+		resolver NameResolver
+	}{
+		{name: "attio", resolver: NewAttioNameResolver(srv.Client(), srv.URL)},
+		{name: "grafana", resolver: NewGrafanaNameResolver(srv.Client(), srv.URL)},
+		{name: "metabase", resolver: NewMetabaseNameResolver(srv.Client(), srv.URL)},
+		{name: "tally", resolver: NewTallyNameResolver(srv.Client(), srv.URL)},
+		{name: "tailscale", resolver: NewTailscaleNameResolver(&http.Client{Transport: &hostRewriter{target: srv.URL}}, "https://api.tailscale.com/api/v2")},
+	}
+
+	for _, tc := range cases {
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				t.Parallel()
+
+				_, err := tc.resolver.ResolveInstanceName(context.Background())
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrTerminalNameResolution)
+			},
+		)
+	}
+}
 
 // hostRewriter redirects requests to the configured target host so that
 // resolvers with hardcoded production URLs (api.notion.com, etc.) can be
@@ -91,7 +167,7 @@ func TestNotionNameResolver(t *testing.T) {
 
 			client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
 
-			got, err := NewNotionNameResolver(client).ResolveInstanceName(context.Background())
+			got, err := NewNotionNameResolver(client, "https://api.notion.com/v1").ResolveInstanceName(context.Background())
 			if tc.wantErr {
 				require.Error(t, err)
 				return
@@ -114,7 +190,7 @@ func TestSentryNameResolver(t *testing.T) {
 			return nil, nil
 		})}
 
-		got, err := NewSentryNameResolver(client, "").ResolveInstanceName(context.Background())
+		got, err := NewSentryNameResolver(client, "", "https://sentry.io/api/0").ResolveInstanceName(context.Background())
 		require.NoError(t, err)
 		assert.Empty(t, got)
 	})
@@ -164,7 +240,7 @@ func TestSentryNameResolver(t *testing.T) {
 
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				assert.Equal(t, http.MethodGet, r.Method)
-				assert.Equal(t, "/api/0/organizations/acme", r.URL.Path)
+				assert.Equal(t, "/api/0/organizations/acme/", r.URL.Path)
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(tc.status)
 				_, _ = w.Write([]byte(tc.body))
@@ -173,7 +249,7 @@ func TestSentryNameResolver(t *testing.T) {
 
 			client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
 
-			got, err := NewSentryNameResolver(client, "acme").ResolveInstanceName(context.Background())
+			got, err := NewSentryNameResolver(client, "acme", "https://sentry.io/api/0").ResolveInstanceName(context.Background())
 			if tc.wantErr {
 				require.Error(t, err)
 				return
@@ -196,7 +272,7 @@ func TestQoveryNameResolver(t *testing.T) {
 			return nil, nil
 		})}
 
-		got, err := NewQoveryNameResolver(client, "").ResolveInstanceName(context.Background())
+		got, err := NewQoveryNameResolver(client, "", "https://api.qovery.com").ResolveInstanceName(context.Background())
 		require.NoError(t, err)
 		assert.Empty(t, got)
 	})
@@ -248,7 +324,7 @@ func TestQoveryNameResolver(t *testing.T) {
 
 			client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
 
-			got, err := NewQoveryNameResolver(client, "26ac87db-ae79-4be4-bd33-7f839f0e1647").ResolveInstanceName(context.Background())
+			got, err := NewQoveryNameResolver(client, "26ac87db-ae79-4be4-bd33-7f839f0e1647", "https://api.qovery.com").ResolveInstanceName(context.Background())
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
 		})
@@ -266,7 +342,7 @@ func TestRenderNameResolver(t *testing.T) {
 			return nil, nil
 		})}
 
-		got, err := NewRenderNameResolver(client, "").ResolveInstanceName(context.Background())
+		got, err := NewRenderNameResolver(client, "", "https://api.render.com/v1").ResolveInstanceName(context.Background())
 		require.NoError(t, err)
 		assert.Empty(t, got)
 	})
@@ -318,7 +394,7 @@ func TestRenderNameResolver(t *testing.T) {
 
 			client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
 
-			got, err := NewRenderNameResolver(client, "tea-test").ResolveInstanceName(context.Background())
+			got, err := NewRenderNameResolver(client, "tea-test", "https://api.render.com/v1").ResolveInstanceName(context.Background())
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
 		})
@@ -336,7 +412,7 @@ func TestNeonNameResolver(t *testing.T) {
 			return nil, nil
 		})}
 
-		got, err := NewNeonNameResolver(client, "").ResolveInstanceName(context.Background())
+		got, err := NewNeonNameResolver(client, "", "https://console.neon.tech/api/v2").ResolveInstanceName(context.Background())
 		require.NoError(t, err)
 		assert.Empty(t, got)
 	})
@@ -388,7 +464,7 @@ func TestNeonNameResolver(t *testing.T) {
 
 			client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
 
-			got, err := NewNeonNameResolver(client, "org-cool-breeze-12345678").ResolveInstanceName(context.Background())
+			got, err := NewNeonNameResolver(client, "org-cool-breeze-12345678", "https://console.neon.tech/api/v2").ResolveInstanceName(context.Background())
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
 		})
@@ -446,7 +522,7 @@ func TestTailscaleNameResolver(t *testing.T) {
 
 			client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
 
-			got, err := NewTailscaleNameResolver(client).ResolveInstanceName(context.Background())
+			got, err := NewTailscaleNameResolver(client, "https://api.tailscale.com/api/v2").ResolveInstanceName(context.Background())
 			if tc.wantErr {
 				require.Error(t, err)
 				return
@@ -469,7 +545,7 @@ func TestHerokuNameResolver(t *testing.T) {
 			return nil, nil
 		})}
 
-		got, err := NewHerokuNameResolver(client, herokuPersonalAccountSlug).ResolveInstanceName(context.Background())
+		got, err := NewHerokuNameResolver(client, herokuPersonalAccountSlug, "https://api.heroku.com").ResolveInstanceName(context.Background())
 		require.NoError(t, err)
 		assert.Equal(t, "Personal account", got)
 	})
@@ -488,7 +564,7 @@ func TestHerokuNameResolver(t *testing.T) {
 
 		client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
 
-		got, err := NewHerokuNameResolver(client, "acme").ResolveInstanceName(context.Background())
+		got, err := NewHerokuNameResolver(client, "acme", "https://api.heroku.com").ResolveInstanceName(context.Background())
 		require.NoError(t, err)
 		assert.Equal(t, "Acme Inc", got)
 	})
@@ -562,7 +638,7 @@ func TestGitHubNameResolver(t *testing.T) {
 
 			client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
 
-			got, err := NewGitHubNameResolver(client, tc.org).ResolveInstanceName(context.Background())
+			got, err := NewGitHubNameResolver(client, tc.org, "https://api.github.com").ResolveInstanceName(context.Background())
 			if tc.wantErr {
 				require.Error(t, err)
 				return
@@ -580,10 +656,458 @@ func TestGitHubNameResolver(t *testing.T) {
 	}
 }
 
+func TestRailwayNameResolver(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "single workspace names the source",
+			status: http.StatusOK,
+			body:   `{"data":{"me":{"name":"Jane Doe","workspaces":[{"id":"w1","name":"Acme Workspace"}]}}}`,
+			want:   "Acme Workspace",
+		},
+		{
+			name:   "multiple workspaces fall back to account holder",
+			status: http.StatusOK,
+			body:   `{"data":{"me":{"name":"Jane Doe","workspaces":[{"id":"w1","name":"Acme"},{"id":"w2","name":"Beta"}]}}}`,
+			want:   "Jane Doe",
+		},
+		{
+			name:   "no workspaces fall back to account holder",
+			status: http.StatusOK,
+			body:   `{"data":{"me":{"name":"Jane Doe","workspaces":[]}}}`,
+			want:   "Jane Doe",
+		},
+		{
+			name:   "graphql error body is terminal (no name)",
+			status: http.StatusOK,
+			body:   `{"data":{"me":null},"errors":[{"message":"unauthorized"}]}`,
+			want:   "",
+		},
+		{
+			name:   "null me is terminal (no name)",
+			status: http.StatusOK,
+			body:   `{"data":{"me":null}}`,
+			want:   "",
+		},
+		{
+			name:   "non-2xx is terminal (no name)",
+			status: http.StatusInternalServerError,
+			body:   `{"message":"boom"}`,
+			want:   "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodPost, r.Method)
+				assert.Equal(t, "/graphql/v2", r.URL.Path)
+				assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
+
+			got, err := NewRailwayNameResolver(client, "https://backboard.railway.com/graphql/v2").ResolveInstanceName(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestCrispNameResolver(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty website id returns nothing without HTTP call", func(t *testing.T) {
+		t.Parallel()
+
+		client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatalf("resolver should not make an HTTP call for an empty website id")
+			return nil, nil
+		})}
+
+		got, err := NewCrispNameResolver(client, "", "https://api.crisp.chat/v1").ResolveInstanceName(context.Background())
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
+
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "200 returns website name",
+			status: http.StatusOK,
+			body:   `{"data":{"name":"Acme Support"}}`,
+			want:   "Acme Support",
+		},
+		{
+			name:   "401 is terminal (no name)",
+			status: http.StatusUnauthorized,
+			body:   `{"error":true,"reason":"not_allowed"}`,
+			want:   "",
+		},
+		{
+			name:   "404 is terminal (no name)",
+			status: http.StatusNotFound,
+			body:   `{"error":true,"reason":"website_not_found"}`,
+			want:   "",
+		},
+		{
+			name:   "500 is terminal (no name)",
+			status: http.StatusInternalServerError,
+			body:   `{"error":true,"reason":"boom"}`,
+			want:   "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodGet, r.Method)
+				assert.Equal(t, "/v1/website/1a2b3c4d", r.URL.Path)
+				assert.Equal(t, crispTierValue, r.Header.Get(crispTierHeader))
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
+
+			got, err := NewCrispNameResolver(client, "1a2b3c4d", "https://api.crisp.chat/v1").ResolveInstanceName(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 // roundTripperFunc adapts a function into an http.RoundTripper, useful for
 // asserting that a resolver short-circuits before making any HTTP call.
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
+}
+
+func TestSquareNameResolver(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "200 returns business name",
+			status: http.StatusOK,
+			body:   `{"merchant":{"business_name":"Acme Coffee"}}`,
+			want:   "Acme Coffee",
+		},
+		{
+			name:   "401 is terminal (no name)",
+			status: http.StatusUnauthorized,
+			body:   `{"errors":[{"code":"UNAUTHORIZED"}]}`,
+			want:   "",
+		},
+		{
+			name:   "403 is terminal (no name)",
+			status: http.StatusForbidden,
+			body:   `{"errors":[{"code":"FORBIDDEN"}]}`,
+			want:   "",
+		},
+		{
+			name:   "500 is terminal (no name)",
+			status: http.StatusInternalServerError,
+			body:   `{"errors":[{"code":"INTERNAL_SERVER_ERROR"}]}`,
+			want:   "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodGet, r.Method)
+				assert.Equal(t, "/v2/merchants/me", r.URL.Path)
+				assert.Equal(t, squareAPIVersion, r.Header.Get("Square-Version"))
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
+
+			got, err := NewSquareNameResolver(client, "https://connect.squareup.com/v2").ResolveInstanceName(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestGoogleAnalyticsNameResolver(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty account id returns nothing without HTTP call", func(t *testing.T) {
+		t.Parallel()
+
+		client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatalf("resolver should not make an HTTP call for an empty account id")
+			return nil, nil
+		})}
+
+		got, err := NewGoogleAnalyticsNameResolver(client, "", "https://analyticsadmin.googleapis.com/v1alpha").ResolveInstanceName(context.Background())
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
+
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "200 returns display name",
+			status: http.StatusOK,
+			body:   `{"displayName":"Acme Analytics"}`,
+			want:   "Acme Analytics",
+		},
+		{
+			name:   "401 is terminal (no name)",
+			status: http.StatusUnauthorized,
+			body:   `{"error":{"code":401}}`,
+			want:   "",
+		},
+		{
+			name:   "403 is terminal (no name)",
+			status: http.StatusForbidden,
+			body:   `{"error":{"code":403}}`,
+			want:   "",
+		},
+		{
+			name:   "404 is terminal (no name)",
+			status: http.StatusNotFound,
+			body:   `{"error":{"code":404}}`,
+			want:   "",
+		},
+		{
+			name:   "500 is terminal (no name)",
+			status: http.StatusInternalServerError,
+			body:   `{"error":{"code":500}}`,
+			want:   "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodGet, r.Method)
+				assert.Equal(t, "/v1alpha/accounts/123456", r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
+
+			got, err := NewGoogleAnalyticsNameResolver(client, "123456", "https://analyticsadmin.googleapis.com/v1alpha").ResolveInstanceName(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestSegmentNameResolver(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reads the workspace name from the API root", func(t *testing.T) {
+		t.Parallel()
+
+		var gotPath string
+
+		srv := httptest.NewServer(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				_, _ = w.Write([]byte(`{"data":{"workspace":{"id":"9aQ1Lj62S4bomZKLF4DPqW","name":"Acme Prod","slug":"acme-prod"}}}`))
+			}),
+		)
+		t.Cleanup(srv.Close)
+
+		name, err := NewSegmentNameResolver(srv.Client(), srv.URL).ResolveInstanceName(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, "Acme Prod", name)
+		// Get Workspace is the API root, not /workspace or /workspaces/{id}.
+		assert.Equal(t, "/", gotPath)
+	})
+
+	// A revoked token must not make the source-name worker retry forever.
+	t.Run("a client error is terminal", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(
+			http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusUnauthorized)
+			}),
+		)
+		t.Cleanup(srv.Close)
+
+		_, err := NewSegmentNameResolver(srv.Client(), srv.URL).ResolveInstanceName(context.Background())
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrTerminalNameResolution)
+	})
+
+	t.Run("a server error stays retryable", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(
+			http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusBadGateway)
+			}),
+		)
+		t.Cleanup(srv.Close)
+
+		_, err := NewSegmentNameResolver(srv.Client(), srv.URL).ResolveInstanceName(context.Background())
+		require.Error(t, err)
+		assert.False(t, errors.Is(err, ErrTerminalNameResolution))
+	})
+
+	t.Run("an unset base URL resolves to nothing", func(t *testing.T) {
+		t.Parallel()
+
+		name, err := NewSegmentNameResolver(http.DefaultClient, "").ResolveInstanceName(context.Background())
+		require.NoError(t, err)
+		assert.Empty(t, name)
+	})
+}
+
+// The Segment Public API declares permissions on the shared UserV1 schema but
+// today only populates it on the single-user read, so the driver falls back to
+// GET /users/{id}. This pins the other branch: when the list does carry
+// permissions, no per-user request is made. The httptest server fails the test
+// if one is.
+func TestSegmentDriverUsesInlinePermissions(t *testing.T) {
+	t.Parallel()
+
+	var perUserCalls int
+
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/users":
+				_, _ = w.Write([]byte(`{"data":{"users":[{"id":"u1","name":"Ada","email":"ada@example.com","permissions":[{"roleName":"Workspace Owner"}]},{"id":"u2","name":"Bob","email":"bob@example.com","permissions":[]}],"pagination":{}}}`))
+			case "/invites":
+				_, _ = w.Write([]byte(`{"data":{"invites":[],"pagination":{}}}`))
+			default:
+				perUserCalls++
+
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		}),
+	)
+	t.Cleanup(srv.Close)
+
+	records, err := NewSegmentDriver(srv.Client(), srv.URL).ListAccounts(context.Background())
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+
+	assert.Zero(t, perUserCalls, "inline permissions must not trigger the per-user fetch")
+
+	assert.Equal(t, "ada@example.com", records[0].Email)
+	assert.Equal(t, new(true), records[0].IsAdmin)
+	assert.Equal(t, []string{"Workspace Owner"}, records[0].Roles)
+
+	// An empty (but present) permissions array is authoritative: the user
+	// genuinely has no roles, so it must not be mistaken for "not populated".
+	assert.Equal(t, "bob@example.com", records[1].Email)
+	assert.Equal(t, new(false), records[1].IsAdmin)
+	assert.Empty(t, records[1].Roles)
+}
+
+func TestUpCloudNameResolver(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		status     int
+		body       string
+		want       string
+		wantErr    bool
+		isTerminal bool
+	}{
+		{
+			name:   "main account username",
+			status: http.StatusOK,
+			body:   `{"account":{"credits":50000,"username":"aureliens"}}`,
+			want:   "aureliens",
+		},
+		{
+			name:   "no username in payload",
+			status: http.StatusOK,
+			body:   `{"account":{"credits":0}}`,
+			want:   "",
+		},
+		{
+			name:       "revoked token is terminal",
+			status:     http.StatusUnauthorized,
+			body:       `{"error":{"error_code":"AUTHENTICATION_FAILED"}}`,
+			wantErr:    true,
+			isTerminal: true,
+		},
+		{
+			name:    "server error stays retryable",
+			status:  http.StatusInternalServerError,
+			body:    `{"error":{"error_code":"BOOM"}}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodGet, r.Method)
+				assert.Equal(t, "/1.3/account", r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
+
+			got, err := NewUpCloudNameResolver(client, "https://api.upcloud.com/1.3").ResolveInstanceName(context.Background())
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Equal(t, tc.isTerminal, errors.Is(err, ErrTerminalNameResolution))
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }

@@ -1,9 +1,9 @@
 apiVersion: v2
 name: probo
-description: A Helm chart for deploying Govrly - Open Source Compliance Platform
+description: A Helm chart for deploying Probo - Open Source Compliance Platform
 type: application
-version: 0.10.0
-appVersion: "0.222.0"
+version: 0.33.0
+appVersion: "0.352.0"
 keywords:
   - compliance
   - soc2

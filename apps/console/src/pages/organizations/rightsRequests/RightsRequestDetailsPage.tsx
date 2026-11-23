@@ -1,33 +1,33 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import {
   formatDatetime,
   formatError,
-  getRightsRequestStateLabel,
-  getRightsRequestStateOptions,
   getRightsRequestStateVariant,
-  getRightsRequestTypeLabel,
-  getRightsRequestTypeOptions,
   type GraphQLError,
   toDateInput,
 } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   ActionDropdown,
   Badge,
-  Breadcrumb,
   Button,
   Card,
   DropdownItem,
@@ -37,19 +37,20 @@ import {
   Option,
   Select,
   Textarea,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { Controller } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import {
   ConnectionHandler,
   type PreloadedQuery,
   usePreloadedQuery,
 } from "react-relay";
-import { z } from "zod";
 
 import type { RightsRequestGraphNodeQuery } from "#/__generated__/core/RightsRequestGraphNodeQuery.graphql";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
 import { useOrganizationId } from "#/hooks/useOrganizationId";
+import { z } from "#/lib/zod";
 
 import {
   rightsRequestNodeQuery,
@@ -59,8 +60,8 @@ import {
 } from "../../../hooks/graph/RightsRequestGraph";
 
 const updateRequestSchema = z.object({
-  requestType: z.enum(["ACCESS", "DELETION", "PORTABILITY"]),
-  requestState: z.enum(["TODO", "IN_PROGRESS", "DONE"]),
+  requestType: z.enum(["ACCESS", "DELETION", "RECTIFICATION", "PORTABILITY", "OBJECTION", "COMPLAINT"]),
+  requestState: z.enum(["TODO", "IN_PROGRESS", "DONE", "REJECTED"]),
   dataSubject: z.string().optional(),
   contact: z.string().optional(),
   details: z.string().optional(),
@@ -78,8 +79,8 @@ export default function RightsRequestDetailsPage(props: Props) {
     props.queryRef,
   );
   const request = data.node;
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
   const organizationId = useOrganizationId();
 
   const updateRequest = useUpdateRightsRequest();
@@ -122,74 +123,54 @@ export default function RightsRequestDetailsPage(props: Props) {
         actionTaken: formData.actionTaken || undefined,
       });
 
-      toast({
-        title: __("Success"),
-        description: __("Rights request updated successfully"),
-        variant: "success",
+      toast.add({
+        title: t("rightsRequestDetailsPage.messages.success"),
+        description: t("rightsRequestDetailsPage.messages.updated"),
+        type: "success",
       });
     } catch (error) {
-      toast({
-        title: __("Error"),
+      toast.add({
+        title: t("rightsRequestDetailsPage.messages.error"),
         description: formatError(
-          __("Failed to update rights request"),
+          t("rightsRequestDetailsPage.errors.update"),
           error as GraphQLError,
         ),
-        variant: "error",
+        type: "error",
       });
     }
   });
 
-  const typeOptions = getRightsRequestTypeOptions(__);
-  const stateOptions = getRightsRequestStateOptions(__);
-
-  const breadcrumbRequestsUrl = `/organizations/${organizationId}/rights-requests`;
+  const typeOptions = ["ACCESS", "DELETION", "RECTIFICATION", "PORTABILITY", "OBJECTION", "COMPLAINT"] as const;
+  const stateOptions = ["TODO", "IN_PROGRESS", "DONE", "REJECTED"] as const;
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <Breadcrumb
-          items={[
-            {
-              label: __("Rights Requests"),
-              to: breadcrumbRequestsUrl,
-            },
-            { label: request.dataSubject || request.id! },
-          ]}
-        />
-        {request.canDelete && (
+      {request.canDelete && (
+        <div className="flex items-center justify-end">
           <ActionDropdown>
             <DropdownItem onClick={deleteRequest} variant="danger">
-              {__("Delete")}
+              {t("rightsRequestDetailsPage.actions.delete")}
             </DropdownItem>
           </ActionDropdown>
-        )}
-      </div>
+        </div>
+      )}
 
       <Card>
         <div className="p-6">
           <div className="mb-6">
             <div className="flex items-center gap-4">
               <h1 className="text-2xl font-bold">
-                {getRightsRequestTypeLabel(
-                  __,
-                  request.requestType || "ACCESS",
-                )}
+                {t(`rightsRequestDetailsPage.types.${(request.requestType || "ACCESS").toLowerCase()}`)}
               </h1>
               <Badge variant="neutral">
-                {getRightsRequestTypeLabel(
-                  __,
-                  request.requestType || "ACCESS",
-                )}
+                {t(`rightsRequestDetailsPage.types.${(request.requestType || "ACCESS").toLowerCase()}`)}
               </Badge>
               <Badge
                 variant={getRightsRequestStateVariant(
                   request.requestState || "TODO",
                 )}
               >
-                {getRightsRequestStateLabel(
-                  __,
-                  request.requestState || "TODO",
-                )}
+                {t(`rightsRequestDetailsPage.states.${(request.requestState || "TODO").toLowerCase()}`)}
               </Badge>
             </div>
           </div>
@@ -202,7 +183,7 @@ export default function RightsRequestDetailsPage(props: Props) {
                 render={({ field }) => (
                   <div>
                     <Label>
-                      {__("Request Type")}
+                      {t("rightsRequestDetailsPage.fields.requestType")}
                       {" "}
                       *
                     </Label>
@@ -212,10 +193,10 @@ export default function RightsRequestDetailsPage(props: Props) {
                     >
                       {typeOptions.map(option => (
                         <Option
-                          key={option.value}
-                          value={option.value}
+                          key={option}
+                          value={option}
                         >
-                          {option.label}
+                          {t(`rightsRequestDetailsPage.types.${option.toLowerCase()}`)}
                         </Option>
                       ))}
                     </Select>
@@ -238,7 +219,7 @@ export default function RightsRequestDetailsPage(props: Props) {
                 render={({ field }) => (
                   <div>
                     <Label>
-                      {__("State")}
+                      {t("rightsRequestDetailsPage.fields.state")}
                       {" "}
                       *
                     </Label>
@@ -248,10 +229,10 @@ export default function RightsRequestDetailsPage(props: Props) {
                     >
                       {stateOptions.map(option => (
                         <Option
-                          key={option.value}
-                          value={option.value}
+                          key={option}
+                          value={option}
                         >
-                          {option.label}
+                          {t(`rightsRequestDetailsPage.states.${option.toLowerCase()}`)}
                         </Option>
                       ))}
                     </Select>
@@ -270,22 +251,22 @@ export default function RightsRequestDetailsPage(props: Props) {
             </div>
 
             <Field
-              label={__("Data Subject")}
+              label={t("rightsRequestDetailsPage.fields.dataSubject")}
               {...register("dataSubject")}
               error={formState.errors.dataSubject?.message}
             />
 
             <Field
-              label={__("Contact")}
+              label={t("rightsRequestDetailsPage.fields.contact")}
               {...register("contact")}
               error={formState.errors.contact?.message}
             />
 
             <div>
-              <Label>{__("Details")}</Label>
+              <Label>{t("rightsRequestDetailsPage.fields.details")}</Label>
               <Textarea
                 {...register("details")}
-                placeholder={__("Enter request details")}
+                placeholder={t("rightsRequestDetailsPage.placeholders.details")}
                 rows={3}
               />
               {formState.errors.details?.message && (
@@ -297,7 +278,7 @@ export default function RightsRequestDetailsPage(props: Props) {
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label>{__("Deadline")}</Label>
+                <Label>{t("rightsRequestDetailsPage.fields.deadline")}</Label>
                 <Input type="date" {...register("deadline")} />
                 {formState.errors.deadline?.message && (
                   <div className="text-red-500 text-sm mt-1">
@@ -308,10 +289,10 @@ export default function RightsRequestDetailsPage(props: Props) {
             </div>
 
             <div>
-              <Label>{__("Action Taken")}</Label>
+              <Label>{t("rightsRequestDetailsPage.fields.actionTaken")}</Label>
               <Textarea
                 {...register("actionTaken")}
-                placeholder={__("Enter action taken")}
+                placeholder={t("rightsRequestDetailsPage.placeholders.actionTaken")}
                 rows={3}
               />
               {formState.errors.actionTaken?.message && (
@@ -329,8 +310,8 @@ export default function RightsRequestDetailsPage(props: Props) {
                   disabled={formState.isSubmitting}
                 >
                   {formState.isSubmitting
-                    ? __("Saving...")
-                    : __("Save Changes")}
+                    ? t("rightsRequestDetailsPage.actions.saving")
+                    : t("rightsRequestDetailsPage.actions.save")}
                 </Button>
               )}
             </div>

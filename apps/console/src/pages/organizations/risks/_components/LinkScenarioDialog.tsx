@@ -1,18 +1,23 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   Dialog,
@@ -26,6 +31,7 @@ import {
   Spinner,
 } from "@probo/ui";
 import { cloneElement, isValidElement, type MouseEvent, type ReactElement, type ReactNode, Suspense, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   type PreloadedQuery,
   usePaginationFragment,
@@ -63,8 +69,8 @@ const scenariosFragment = graphql`
     before: { type: "CursorKey", defaultValue: null }
     last: { type: "Int", defaultValue: null }
   ) {
-    riskAssessmentScenarios(first: $first, after: $after, last: $last, before: $before)
-      @connection(key: "LinkScenarioDialogQuery_riskAssessmentScenarios") {
+    riskAnalysisScenarios(first: $first, after: $after, last: $last, before: $before)
+      @connection(key: "LinkScenarioDialogQuery_riskAnalysisScenarios") {
       edges {
         node {
           id
@@ -86,7 +92,7 @@ interface LinkScenarioDialogProps {
 }
 
 export function LinkScenarioDialog({ children, ...props }: LinkScenarioDialogProps) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const organizationId = useOrganizationId();
   const [queryRef, loadQuery]
     = useQueryLoader<LinkScenarioDialogQuery>(scenariosQuery);
@@ -101,7 +107,7 @@ export function LinkScenarioDialog({ children, ...props }: LinkScenarioDialogPro
     : children;
 
   return (
-    <Dialog trigger={trigger} title={__("Link scenarios")}>
+    <Dialog trigger={trigger} title={t("linkScenarioDialog.title")}>
       <DialogContent>
         {queryRef
           ? (
@@ -113,7 +119,7 @@ export function LinkScenarioDialog({ children, ...props }: LinkScenarioDialogPro
               <Spinner centered />
             )}
       </DialogContent>
-      <DialogFooter exitLabel={__("Close")} />
+      <DialogFooter exitLabel={t("linkScenarioDialog.actions.close")} />
     </Dialog>
   );
 }
@@ -129,11 +135,11 @@ function LinkScenarioDialogContent(props: ContentProps) {
       scenariosFragment,
       query.organization as LinkScenarioDialogFragment$key,
     );
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [search, setSearch] = useState("");
   const scenarios = useMemo(
-    () => data.riskAssessmentScenarios?.edges?.map(edge => edge.node) ?? [],
-    [data.riskAssessmentScenarios],
+    () => data.riskAnalysisScenarios?.edges?.map(edge => edge.node) ?? [],
+    [data.riskAnalysisScenarios],
   );
   const linkedIds = useMemo(() => {
     return new Set(props.linkedScenarios?.map(s => s.id) ?? []);
@@ -152,7 +158,7 @@ function LinkScenarioDialogContent(props: ContentProps) {
       <div className="flex items-center gap-2 sticky top-0 relative py-4 bg-linear-to-b from-50% from-level-2 to-level-2/0 px-6">
         <Input
           icon={IconMagnifyingGlass}
-          placeholder={__("Search scenarios...")}
+          placeholder={t("linkScenarioDialog.searchPlaceholder")}
           onValueChange={setSearch}
         />
       </div>
@@ -178,7 +184,7 @@ function LinkScenarioDialogContent(props: ContentProps) {
   );
 }
 
-type Scenario = NodeOf<LinkScenarioDialogFragment$data["riskAssessmentScenarios"]>;
+type Scenario = NodeOf<LinkScenarioDialogFragment$data["riskAnalysisScenarios"]>;
 
 function ScenarioRow(props: {
   scenario: Scenario;
@@ -187,7 +193,7 @@ function ScenarioRow(props: {
   onUnlink: (scenarioId: string) => void;
   disabled?: boolean;
 }) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const isLinked = props.linkedScenarios.has(props.scenario.id);
 
   const onToggle = () => {
@@ -205,7 +211,7 @@ function ScenarioRow(props: {
           {props.scenario.name}
         </div>
         <div className="text-xs text-txt-secondary truncate">
-          {props.scenario.description || __("No description")}
+          {props.scenario.description || t("linkScenarioDialog.noDescription")}
         </div>
       </div>
       <Button
@@ -215,7 +221,7 @@ function ScenarioRow(props: {
         disabled={props.disabled}
         className="ml-6"
       >
-        {isLinked ? __("Unlink") : __("Link")}
+        {isLinked ? t("linkScenarioDialog.actions.unlink") : t("linkScenarioDialog.actions.link")}
       </Button>
     </div>
   );

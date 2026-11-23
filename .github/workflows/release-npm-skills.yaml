@@ -1,0 +1,102 @@
+name: "Release skills"
+
+on:
+  push:
+    tags:
+      - "@probo/skills/v*"
+
+permissions:
+  contents: "read"
+
+jobs:
+  publish:
+    name: "publish"
+    runs-on: "ubuntu-latest"
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: "actions/checkout@v7.0.1"
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - uses: "actions/setup-node@v7.1.0"
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+          registry-url: "https://registry.npmjs.org"
+          scope: "@probo"
+      - run: "npm install -g npm@^12.0.2"
+      - run: "npm ci"
+      - name: "Verify package.json version matches tag"
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME##*/v}"
+          PKG_VERSION="$(node -p "require('./packages/skills/package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)" >&2
+            exit 1
+          fi
+      - run: "npm --workspace @probo/skills run validate"
+      - uses: "anchore/sbom-action@v0.24.3"
+        with:
+          path: ./packages/skills
+          format: cyclonedx-json
+          output-file: packages/skills/sbom.json
+      - uses: "anchore/scan-action@v7.4.2"
+        with:
+          path: ./packages/skills
+          fail-build: true
+          severity-cutoff: critical
+      - name: "Generate checksums for published files"
+        run: |
+          cd packages/skills
+          PACKFILE=$(npm pack --silent)
+          tar -tzf "$PACKFILE" \
+            | grep -v '/$' \
+            | sort \
+            | while read -r file; do
+                hash=$(tar -xOf "$PACKFILE" "$file" | sha256sum | head -c 64)
+                echo "$hash  $file"
+              done > checksums.txt
+          rm -f "$PACKFILE"
+          test -s checksums.txt
+      - run: "npm --workspace @probo/skills publish --access public --dry-run"
+      - run: "npm --workspace @probo/skills publish --access public"
+      - uses: "actions/attest-sbom@v4.1.0"
+        with:
+          subject-path: "packages/skills/**"
+          sbom-path: "packages/skills/sbom.json"
+      - uses: "actions/attest-build-provenance@v4.2.2"
+        with:
+          subject-path: "packages/skills/**"
+      - name: "Extract release notes"
+        run: |
+          VERSION="${GITHUB_REF_NAME##*/v}"
+          awk -v ver="$VERSION" '
+            /^## \[/ { if (found) exit; if ($0 ~ "\\[" ver "\\]") found=1 }
+            found
+          ' packages/skills/CHANGELOG.md > release-notes.md
+      - name: "Create GitHub release"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PRERELEASE_FLAG=""
+          if echo "${GITHUB_REF_NAME}" | grep -qE '(alpha|beta|rc)'; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          gh release delete "${GITHUB_REF_NAME}" --yes 2>/dev/null || true
+
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            $PRERELEASE_FLAG \
+            packages/skills/sbom.json packages/skills/checksums.txt
+      - uses: "actions/upload-artifact@v7.0.2"
+        with:
+          name: "skills-sbom"
+          path: |
+            packages/skills/sbom.json
+            packages/skills/checksums.txt
+          retention-days: 30

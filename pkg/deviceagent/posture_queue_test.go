@@ -1,24 +1,32 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package deviceagent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,6 +34,35 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const testDeviceID = "device-1"
+
+func setTestEnrollment(a *Agent, serverURL, deviceID, apiKey string) {
+	a.cfg = &Config{}
+	a.enrollments = []trackedEnrollment{
+		{
+			ServerURL: serverURL,
+			DeviceID:  deviceID,
+			APIKey:    apiKey,
+			client:    NewClient(serverURL, apiKey, a.UserAgent),
+		},
+	}
+}
+
+func TestLoadPostureQueues_DropsLegacyArray(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := pendingPosturesPath(dir)
+	require.NoError(t, os.WriteFile(path, []byte("[]"), 0o600))
+
+	queues, err := loadPostureQueues(dir)
+	require.NoError(t, err)
+	require.Empty(t, queues)
+
+	_, err = os.Stat(path)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
 
 func TestPendingPostureQueue_EnqueueTrimsOldestBatches(t *testing.T) {
 	t.Parallel()
@@ -42,6 +79,8 @@ func TestPendingPostureQueue_EnqueueTrimsOldestBatches(t *testing.T) {
 		}
 		dropped, err := enqueuePendingPostureBatch(
 			dir,
+			testDeviceID,
+			"0.1",
 			results,
 			time.Unix(int64(i), 0),
 		)
@@ -55,7 +94,7 @@ func TestPendingPostureQueue_EnqueueTrimsOldestBatches(t *testing.T) {
 		assert.Equal(t, 1, dropped)
 	}
 
-	batches, err := loadPendingPostureBatches(dir)
+	batches, err := loadPendingPostureBatches(dir, testDeviceID)
 	require.NoError(t, err)
 	require.Len(t, batches, maxPendingPostureBatches)
 	assert.Equal(t, "check-3", batches[0].Results[0].CheckKey)
@@ -73,12 +112,16 @@ func TestAgent_flushQueuedPostures(t *testing.T) {
 			dir := t.TempDir()
 			_, err := enqueuePendingPostureBatch(
 				dir,
+				testDeviceID,
+				"0.1",
 				[]PostureResultPayload{{CheckKey: "first", Status: "pass", ObservedAt: time.Now().UTC()}},
 				time.Now().UTC(),
 			)
 			require.NoError(t, err)
 			_, err = enqueuePendingPostureBatch(
 				dir,
+				testDeviceID,
+				"0.1",
 				[]PostureResultPayload{{CheckKey: "second", Status: "pass", ObservedAt: time.Now().UTC()}},
 				time.Now().UTC(),
 			)
@@ -94,10 +137,10 @@ func TestAgent_flushQueuedPostures(t *testing.T) {
 			defer srv.Close()
 
 			a := New(dir, "test", nil)
-			a.client = NewClient(srv.URL, "api-key", "test-agent")
+			setTestEnrollment(a, srv.URL, testDeviceID, "api-key")
 			a.flushQueuedPostures(context.Background())
 
-			batches, err := loadPendingPostureBatches(dir)
+			batches, err := loadPendingPostureBatches(dir, testDeviceID)
 			require.NoError(t, err)
 			assert.Len(t, batches, 0)
 			assert.Equal(t, int32(2), calls.Load())
@@ -112,12 +155,16 @@ func TestAgent_flushQueuedPostures(t *testing.T) {
 			dir := t.TempDir()
 			_, err := enqueuePendingPostureBatch(
 				dir,
+				testDeviceID,
+				"0.1",
 				[]PostureResultPayload{{CheckKey: "first", Status: "pass", ObservedAt: time.Now().UTC()}},
 				time.Now().UTC(),
 			)
 			require.NoError(t, err)
 			_, err = enqueuePendingPostureBatch(
 				dir,
+				testDeviceID,
+				"0.1",
 				[]PostureResultPayload{{CheckKey: "second", Status: "pass", ObservedAt: time.Now().UTC()}},
 				time.Now().UTC(),
 			)
@@ -139,10 +186,10 @@ func TestAgent_flushQueuedPostures(t *testing.T) {
 			defer srv.Close()
 
 			a := New(dir, "test", nil)
-			a.client = NewClient(srv.URL, "api-key", "test-agent")
+			setTestEnrollment(a, srv.URL, testDeviceID, "api-key")
 			a.flushQueuedPostures(context.Background())
 
-			batches, err := loadPendingPostureBatches(dir)
+			batches, err := loadPendingPostureBatches(dir, testDeviceID)
 			require.NoError(t, err)
 			require.Len(t, batches, 1)
 			assert.Equal(t, "second", batches[0].Results[0].CheckKey)
@@ -158,6 +205,8 @@ func TestAgent_flushQueuedPostures(t *testing.T) {
 			dir := t.TempDir()
 			_, err := enqueuePendingPostureBatch(
 				dir,
+				testDeviceID,
+				"0.1",
 				[]PostureResultPayload{{CheckKey: "first", Status: "pass", ObservedAt: time.Now().UTC()}},
 				time.Now().UTC(),
 			)
@@ -174,7 +223,7 @@ func TestAgent_flushQueuedPostures(t *testing.T) {
 
 			now := time.Unix(10_000, 0).UTC()
 			a := New(dir, "test", nil)
-			a.client = NewClient(srv.URL, "api-key", "test-agent")
+			setTestEnrollment(a, srv.URL, testDeviceID, "api-key")
 			a.now = func() time.Time { return now }
 			a.randInt63n = func(n int64) int64 { return n / 2 }
 
@@ -203,6 +252,8 @@ func TestAgent_flushQueuedPostures(t *testing.T) {
 			dir := t.TempDir()
 			_, err := enqueuePendingPostureBatch(
 				dir,
+				testDeviceID,
+				"0.1",
 				[]PostureResultPayload{{CheckKey: "first", Status: "pass", ObservedAt: time.Now().UTC()}},
 				time.Now().UTC(),
 			)
@@ -225,7 +276,7 @@ func TestAgent_flushQueuedPostures(t *testing.T) {
 
 			now := time.Unix(20_000, 0).UTC()
 			a := New(dir, "test", nil)
-			a.client = NewClient(srv.URL, "api-key", "test-agent")
+			setTestEnrollment(a, srv.URL, testDeviceID, "api-key")
 			a.now = func() time.Time { return now }
 			a.randInt63n = func(n int64) int64 { return n / 2 }
 
@@ -241,9 +292,48 @@ func TestAgent_flushQueuedPostures(t *testing.T) {
 			assert.Zero(t, a.pendingFlushBackoff)
 			assert.True(t, a.pendingFlushRetryAt.IsZero())
 
-			batches, err := loadPendingPostureBatches(dir)
+			batches, err := loadPendingPostureBatches(dir, testDeviceID)
 			require.NoError(t, err)
 			assert.Len(t, batches, 0)
+		},
+	)
+
+	t.Run(
+		"sends empty agent version for legacy queued batches",
+		func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			_, err := enqueuePendingPostureBatch(
+				dir,
+				testDeviceID,
+				"",
+				[]PostureResultPayload{{CheckKey: "legacy", Status: "pass", ObservedAt: time.Now().UTC()}},
+				time.Now().UTC(),
+			)
+			require.NoError(t, err)
+
+			var (
+				calls atomic.Int32
+				got   PosturesRequest
+			)
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "/api/agent/v1/postures", r.URL.Path)
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+				calls.Add(1)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			a := New(dir, "2.0.0", nil)
+			setTestEnrollment(a, srv.URL, testDeviceID, "api-key")
+			a.flushQueuedPostures(context.Background())
+
+			require.Equal(t, int32(1), calls.Load())
+			require.Len(t, got.Results, 1)
+			assert.Empty(t, got.AgentVersion)
+			assert.Equal(t, "legacy", got.Results[0].CheckKey)
 		},
 	)
 }

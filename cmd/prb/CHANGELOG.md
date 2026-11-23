@@ -4,6 +4,843 @@ All notable changes to the `prb` CLI will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- `evidence link` uploads a `<name>.uri` file containing an HTTP or
+  HTTPS URL, matching the console link form
+
+## [0.273.0] - 2026-11-20
+
+### Added
+
+- `audit-log list` filters by `--actor-type`, `--outcome`,
+  `--request-id`, and a `--from`/`--to` date range read in local time.
+  `--action` accepts a trailing `*` to match a prefix (`iam:*`). The
+  list shows the actor id beside the email
+- `audit-log view` shows the outcome, denial reason, actor snapshot,
+  client IP, user agent, and request id. It falls back to the actor
+  name when there is no email
+
+## [0.272.0] - 2026-11-20
+
+### Added
+
+- `tag` commands create, update, delete, attach, detach, and list
+  tags. Tag names are unique in an organization, and a resource can
+  carry several. `tag list` shows the tags in an organization or on
+  one resource
+- `search` finds resources across types with a query. Bare words match
+  titles as prefixes. `tag:name` requires a tag, and repeating it
+  requires every tag. `type:name` restricts results to a resource
+  type, and repeating it accepts several types
+
+## [0.271.0] - 2026-11-17
+
+### Added
+
+- `cookie-banner view` prints page loads for each UTC day in the
+  requested window, oldest first
+- `cookie-banner view --days` and `tracker-pattern view --days` set
+  how many UTC days to count, today included. The default is 7 and the
+  maximum is 90
+
+### Changed
+
+- **Breaking**: `cookie-banner view` shows page loads for each UTC day
+  in the requested window instead of the latest sample. The JSON
+  output has `dailyPageLoads` instead of `latestSample`
+- **Breaking**: `tracker-pattern view` shows hits for each UTC day in
+  the requested window instead of sample hits. The JSON output has
+  `dailyHits` instead of `sampleHits`
+
+### Removed
+
+- **Breaking**: `cookie-banner start-sample`, `stop-sample`, and
+  `list-samples`. Page views are always counted, by UTC day
+
+## [0.270.1] - 2026-11-17
+
+### Fixed
+
+- CLI release builds again. `prb risk-analysis create` still uses the
+  same default score bands, without pulling in the email templates
+  that stopped the 0.270.0 build
+
+## [0.270.0] - 2026-11-17
+
+### Added
+
+- `prb risk-analysis create --score-levels` and
+  `prb risk-analysis update --score-levels` set each level's minimum
+  score, as `LOW=1,MEDIUM=5,HIGH=10`. Omitting the flag on create
+  uses the default bands for the matrix size. `list` and `view`
+  print the levels, and `fork` returns them
+
+## [0.269.0] - 2026-11-16
+
+### Added
+
+- `prb document suggestion start --quote --replacement --comment
+  --occurrence` starts a suggestion with its first redline
+- `prb document suggestion add`, `table`, and `format` add a text,
+  table row, column, or table, or character style redline to an open
+  suggestion
+- `prb document change text`, `format`, `table`, and `block` edit a
+  document with `--mode APPLY`, or store the same change on an open
+  suggestion with `--mode SUGGEST`. `block` covers headings, lists,
+  quotes, code blocks, dividers, images, files, and mentions
+
+## [0.268.0] - 2026-11-13
+
+### Added
+
+- `prb tracker-pattern view` shows a `Source Banner:` line when a
+  tracker source was promoted from a sibling banner
+
+## [0.267.0] - 2026-11-13
+
+### Added
+
+- Asana task sync commands: `prb task publish-asana` publishes a task
+  as a new Asana task, `prb task link-asana` links it to an existing
+  one, `prb task list-asana-teams`, `list-asana-projects`, and
+  `list-asana-tasks` search Asana, `prb task asana-project-setup`
+  shows a project's sections, priority fields, and mapping,
+  `prb task update-asana-project-mapping` saves that mapping, and
+  `prb task update-asana-settings` updates the organization's settings
+- `prb task create --asana-project` publishes the new task to an Asana
+  project, and `--no-asana-project` skips the default project
+
+
+## [0.266.0] - 2026-11-12
+
+### Added
+
+- `prb document comment` lists (`ls`), views, creates, replies to,
+  updates, deletes, resolves, and reopens document comments
+- `prb document suggestion` lists (`ls`), views, starts, accepts, and
+  rejects document suggestions
+
+### Removed
+
+- **Breaking**: `prb document delete-draft`
+
+## [0.265.0] - 2026-11-11
+
+### Added
+
+- `prb file download <id> [path]` downloads a private file. An existing
+  destination is left in place. Pass `-` to write the bytes to stdout
+- `prb third-party create --parent-id` adds the new third party to a
+  parent's supply chain
+- `prb finding ls --query` (`-q`) searches by title or reference ID.
+  `prb finding update --title` sets the title
+
+### Changed
+
+- **Breaking**: `prb finding create` requires `--title`. `finding ls`
+  includes the title, and `finding view` uses it as the heading
+
+## [0.264.0] - 2026-11-03
+
+### Added
+
+- `prb cookie-banner request-scan`, `list-scans`, and `view-scan`
+  request and inspect cookie banner scans
+- `prb cookie-banner list-scan-resources` and `list-scan-trackers`
+  list what a scan found
+
+## [0.263.1] - 2026-11-03
+
+### Fixed
+
+- `prb` keeps the saved login for the refresh-token lifetime. Every
+  command refreshes an expired access token, and overlapping commands
+  share that refresh instead of invalidating it
+
+## [0.263.0] - 2026-11-02
+
+### Added
+
+- `access-review campaign retry-fetch <campaign-id> --source-id <source-id>`
+  queues a new fetch for a campaign source whose fetch failed
+
+### Changed
+
+- **Breaking**: non-interactive `prb auth login` requires `--hostname`
+  and no longer uses `eu.probo.com` when the flag is omitted. In a
+  terminal, the prompt lists US, then EU, then a custom host
+- `connector create --token-url` is deprecated and ignored. The
+  server names the token endpoint
+
+## [0.262.0] - 2026-10-30
+
+### Added
+
+- `employee-portal document add` shares a published document with
+  an employee portal. `employee-portal document list` (`ls`) lists
+  those documents. `employee-portal document remove` stops sharing
+  one and asks for confirmation unless `--yes` is set. Login now
+  requests the `v1:employee-portal` scope
+
+### Fixed
+
+- A resource id that starts with `-` is accepted as a positional
+  argument. Base64url ids use `-` in the alphabet, and the flag
+  parser was rejecting them as unknown flags
+
+## [0.261.0] - 2026-10-28
+
+### Added
+
+- `internal-control list` filters with `--implementation-status`
+  (repeatable), `--owner`, and `--needs-attention`, and sorts with
+  `--order-by NEXT_DUE`. `--filter` matches the name or the code
+
+## [0.260.0] - 2026-10-27
+
+### Added
+
+- `--json` is shorthand for `--output json` on commands that print a
+  result. Combining it with a different `--output` value is an error
+- `risk-analysis diagram mermaid --json` prints the diagram node
+- List commands take `--after`. The next cursor is printed on stderr.
+  Repeat the same command and filters with that cursor. Stdout stays
+  the table or the JSON array
+- `processing-activity create` asks whether processing involves
+  international transfers. `--international-transfers` sets the field
+
+### Changed
+
+- How to call `prb` is published as the `using-prb` skill in
+  `@probo/skills`. Install it from the repository with `gh skill` or
+  `npx skills`. The binary does not embed a copy
+- **Breaking**: `third-party` is the command name; the `thirdParty` and
+  `third_party` command aliases are removed. `tp` is the short alias
+- `--org` and `--organization` are the same organization flag.
+  `connector connect --organization` stays the boolean that connects a
+  cloud organization
+- **Breaking**: `--third-party-ids` is the vendor-id flag; the hidden
+  `--thirdParty-ids` flag alias is removed
+- `auth status` shows the host selected by `PROBO_HOST` and whether
+  `PROBO_TOKEN` is set
+- `webhook list` lists one organization's subscriptions and takes `--org`
+- A missing organization is reported the same way on every command
+- Creates now require the fields the API requires: task priority, asset
+  amount, owner, and data types, datum and obligation owner,
+  processing-activity role and assessments, and control description
+
+### Fixed
+
+- `org list` filters active profiles with `states`
+- `asset list` no longer queries an `AssetFilter` the API does not define
+- `document list` and `document view` show the document title, type, and
+  classification
+- A non-positive `--limit` is an error, and a bad `--order-direction`
+  is rejected before the command calls the API
+- `dpia create` and `tia create` match the API payload. `dpia view`,
+  `tia view`, `cookie-category view`, and `tracker-pattern view` accept
+  null text and boolean fields
+
+## [0.259.0] - 2026-10-27
+
+### Added
+
+- `cookie-banner update --force-opt-in` shows the opt-in banner to
+  every visitor regardless of regulation; `cookie-banner view` shows
+  the setting
+
+## [0.258.0] - 2026-10-22
+
+### Added
+
+- `document list-history`, `document view-history-snapshot`, and
+  `document restore-history` list edit sessions, show a highlighted
+  snapshot, and restore a session
+
+### Changed
+
+- `document view-version` reads the ProseMirror content of the
+  version. `document create` reads the title from the document
+
+## [0.257.0] - 2026-10-22
+
+### Added
+
+- `compliance-portal view` prints the public URL, the custom domain
+  with its full DNS records, and the Slack status. Slack is hidden
+  when the caller cannot read connectors
+
+## [0.256.0] - 2026-10-22
+
+### Added
+
+- `cookie-banner start-sample`, `cookie-banner stop-sample`, and
+  `cookie-banner list-samples` open, close, and list sample windows.
+  `list-samples` is also `ls-samples`
+
+### Changed
+
+- `cookie-banner view` shows the latest sample id, whether it is
+  frozen, and sample page loads, instead of discovery loads
+- `tracker-pattern view` shows sample hits instead of discovery hits
+
+## [0.255.0] - 2026-10-21
+
+### Removed
+
+- `tracker-pattern create` no longer takes `--display-name`, and
+  `tracker-pattern list` drops the `DISPLAY NAME` column; the pattern is
+  shown as the name
+
+### Fixed
+
+- `evidence view` requests `fileName` and `mimeType` on File so the
+  console API accepts the query
+
+## [0.254.0] - 2026-10-20
+
+### Added
+
+- `connector update-api-key` replaces a connector's customer API key
+  without deleting the connector or losing its enabled accounts
+
+### Fixed
+
+- The `connector create` help examples no longer suggest OVHcloud
+  without its required region
+
+## [0.253.0] - 2026-10-19
+
+### Changed
+
+- `risk create` and `risk update` no longer accept `--treatment`,
+  `--inherent-likelihood`, `--inherent-impact`, `--residual-likelihood`,
+  `--residual-impact`, or `--owner`; these now live on treatment plans.
+  `risk view` still shows existing values
+
+## [0.252.0] - 2026-10-19
+
+### Changed
+
+- `device list` accepts `--state`, `--platform`, and `--agent-version`
+  several times and keeps devices that match any value
+
+## [0.251.0] - 2026-10-16
+
+### Added
+
+- `audit link-framework` and `audit unlink-framework` add or remove a
+  framework on an audit
+
+### Changed
+
+- `audit create` accepts `--framework` several times, and the
+  interactive prompt selects one or more frameworks. `audit view` lists
+  every framework linked to the audit
+
+## [0.250.0] - 2026-10-16
+
+### Added
+
+- `task create` accepts `--linear-team` to publish the task to a Linear
+  team. Omit it to use the organization's default Linear team.
+  `--no-linear-team` creates the task with no Linear team
+- `task update-linear-settings` sets the organization's default Linear
+  team and whether new issues on that team are imported
+
+### Changed
+
+- `task create` prints the created task and reports a failed Linear
+  publish on stderr. The command still exits successfully because the
+  task exists
+
+## [0.249.0] - 2026-10-15
+
+### Added
+
+- `device download` saves the PDF snapshot of device postures
+- `device list` filters by owner, state, platform, and agent version
+- Revoke and delete several devices in a single all-or-nothing call
+
+## [0.248.0] - 2026-10-15
+
+### Changed
+
+- `access-review source list` and `access-review source view` show the
+  account name of each source
+
+## [0.247.0] - 2026-10-14
+
+### Added
+
+- `file upload` uploads a private file to embed in rich text
+
+### Changed
+
+- `--content` on document, task, task comment, and risk analysis
+  commands accepts markdown or ProseMirror JSON. Images and links to
+  `/api/files/v1/{id}` are kept
+
+## [0.246.1] - 2026-10-14
+
+### Fixed
+
+- `evidence upload` sends the file's content type instead of
+  `application/octet-stream`, which the server rejected
+- File uploads reject filenames containing control characters instead of
+  writing them into the multipart headers
+
+## [0.246.0] - 2026-10-14
+
+### Changed
+
+- `tracker-pattern` and `tracker-resource` list and view no longer show
+  last-seen timestamps
+
+## [0.245.0] - 2026-10-13
+
+### Added
+
+- `connector create` creates an API-key or client-credentials connector
+  for a provider that needs no extra setting. A blank client id or secret
+  is rejected. AWS, GCP, and Azure workload identity stay on
+  `connector connect`
+
+### Changed
+
+- **Breaking**: `access-review source create` no longer collects cloud
+  credentials. Connect the provider first, then pass `--connector-id`.
+  A CSV source is `--csv-file` and has no provider
+
+### Fixed
+
+- `employee-portal list` reports that the list is unavailable when the
+  server omits it
+
+## [0.244.0] - 2026-10-09
+
+### Added
+
+- `cookie-banner view` and `tracker-pattern view` show discovery page loads
+  and hits by browser family
+
+
+## [0.243.0] - 2026-10-09
+
+### Added
+
+- `connector update <connector-id> --name` renames a connector
+
+### Changed
+
+- `connector connect` and `access-review source create` take a required
+  `--name` that identifies the connector, so several connections to one
+  provider stay distinct. `connector list` and `connector view` show it
+- `task create` and `task update` accept a repeatable `--internal-control`
+  to link a task to several internal controls. Passing an empty value on
+  `task update` clears them all
+- `access-review source create` sends the source in a single list, which
+  matches the new server API
+
+## [0.242.0] - 2026-10-08
+
+### Added
+
+- `employee-portal list`, `employee-portal view`, and
+  `employee-portal update` manage an organization's employee portal
+
+## [0.241.0] - 2026-10-06
+
+### Changed
+
+- The `measure` command is renamed to `internal-control`. `--measure`
+  and `--measure-id` are now `--internal-control` and
+  `--internal-control-id` on evidence, task, and the link commands
+- The next occurrence of a recurring task is created when its deadline
+  passes, not when the task is marked done. `task update` no longer
+  prints "Created next task <id> (<name>)". The interval stays on the
+  task until the deadline passes
+
+## [0.240.0] - 2026-10-05
+
+### Added
+
+- `org list` shows the organization legal name
+- `cookie-banner view` shows whether the banner is CORSless
+- `consent-record list` and `consent-record view` show the origin the
+  consent was recorded from
+
+## [0.239.0] - 2026-10-05
+
+### Added
+
+- `measure create` and `measure update` accept the internal control
+  fields: `--code`, `--control-type`, `--nature`, `--operating-mode`,
+  `--operating-frequency`, `--operating-event`, `--evidence-cadence`,
+  `--testing-cadence`, `--implementation-status`, `--owner-id` and
+  `--reviewer-id`. Cadences are ISO-8601 durations, and flags that do not
+  belong to the selected operating mode are rejected. `measure view` and
+  `measure list` show the owner and reviewer
+
+## [0.238.0] - 2026-09-30
+
+### Added
+
+- `task list` accepts `--assigned-to` to filter by the profile a task is
+  assigned to
+
+## [0.237.0] - 2026-09-25
+
+### Added
+
+- `task list` accepts `--query` (`-q`) and `--state` to filter by name
+  and state
+
+### Changed
+
+- `task comment list` and `task comment view` leave the owner blank when
+  a comment has none, which is how a Linear comment from a non-member
+  is stored
+
+## [0.236.0] - 2026-09-25
+
+### Added
+
+- `task link-linear` links a task to an existing Linear issue (`--team-id`
+  and `--issue-id` required). Linking updates the Probo task with the
+  Linear issue
+- `task list-linear-issues` searches Linear issues in a team (`--team-id`
+  required, optional `--query` and `--limit`)
+
+### Changed
+
+- `task list-linear-teams` searches and pages teams (`--query`, `--limit`)
+  instead of returning every team
+
+## [0.235.0] - 2026-09-24
+
+### Added
+
+- `connector list`, `connector view`, `connector discover`,
+  `connector enable-accounts`, and `connector connect` manage connector
+  accounts, so one connector credential can cover several accounts
+- `webhook event list` accepts `TASK_CREATED`, `TASK_UPDATED`,
+  `TASK_DELETED`, `TASK_COMMENT_CREATED`, `TASK_COMMENT_UPDATED`, and
+  `TASK_COMMENT_DELETED`
+- `finding list` accepts `--audit` to list only the findings linked to
+  an audit
+
+## [0.234.0] - 2026-09-23
+
+### Added
+
+- `task list-linear-teams` lists Linear teams for an organization
+- `task publish-linear` publishes a task to Linear (`--team-id` required)
+- `task unlink-external` unlinks a task from its external issue
+- `task view` shows the linked external issue identifier and URL
+- `scim bridge reactivate` schedules the next sync for now, clears
+  consecutive errors, and sets a failed or disabled bridge back to
+  active
+
+### Changed
+
+- `webhook event list` accepts `--status` (`PENDING`, `SUCCEEDED`,
+  `FAILED`). JSON output includes the outbound payload
+
+## [0.233.0] - 2026-09-22
+
+### Added
+
+- `cookie-banner view` shows the publisher country and TCF CMP ID;
+  `update` accepts `--publisher-country-code`
+- `cookie-category view` shows TCF purpose IDs; `update` accepts
+  `--tcf-purpose-ids`
+- `consent-record view` shows the optional IAB TCF string when present
+- `risk-analysis publish` publishes a risk analysis as a document
+  version, with repeatable `--approver` and `--minor`
+
+## [0.232.0] - 2026-09-22
+
+### Changed
+
+- `risk delete` describes that deleting a risk also removes its analysis
+  history
+
+## [0.231.0] - 2026-09-18
+
+### Changed
+
+- `risk-analysis create`/`fork`/`update` send `--description` as
+  ProseMirror JSON, and `view`/`list` render stored rich text as
+  plaintext, matching tasks
+
+## [0.230.0] - 2026-09-16
+
+### Added
+
+- `cookie-banner list-gvl-catalog`, `list-gvl-vendors`, `get-gvl-catalog`,
+  `add-gvl-vendor`, and `remove-gvl-vendor` manage which IAB Global Vendor
+  List vendors a TCF-capable banner discloses
+- `cookie-banner published-version` shows a banner's published version,
+  including its GVL vendor count
+- `risk list`/`view`/`create`/`update` show the org-scoped `RSK-001`
+  reference ID; `risk list` gains a `REFERENCE` column and accepts
+  `--order-by REFERENCE_ID`
+
+### Removed
+
+- `soa create --owner` and `soa update --owner`: statements of
+  applicability no longer carry an owner
+
+## [0.229.0] - 2026-09-15
+
+### Added
+
+- `compliance-portal access create` (alias `visitor`) adds a portal visitor by member or email; `compliance-portal access deactivate`/`activate` toggle access without revoking grants
+- `access-review source create` accepts `--azure-tenant-id`, `--azure-client-id`, `--azure-subscription-id`, and `--azure-environment` to connect an Azure workload-identity subscription
+- `task create`/`update` accept `--recurrence-interval` (an ISO-8601 duration, requires `--deadline`); completing a recurring task clones the next occurrence
+
+## [0.228.0] - 2026-09-14
+
+### Added
+
+- `task activity list` and `task activity view`, listing a task's
+  field-level changes newest-first
+
+## [0.227.0] - 2026-09-10
+
+### Added
+
+- `device view` and `device list` show each posture's schema version and observing agent version
+
+## [0.226.0] - 2026-09-07
+
+### Added
+
+- `access-review source setup-gcp` returns the GCP connector setup values (issuer, audience, subject, suggested service account name, and Terraform snippet) needed to create the workload-identity role
+
+### Changed
+
+- `task comment create`/`update` and `task create`/`update` use `--content` instead of `--description`, accepting the same rich text formatting as documents
+- `access-review source create --gcp-service-account-email` and `--gcp-workload-identity-provider` accept Sovereign Cloud de Confiance (S3NS) service accounts and dial `*.s3nsapis.fr` instead of public GCP
+
+## [0.225.0] - 2026-09-04
+
+### Added
+
+- `audit create` and `audit update` accept `--firm` to record the firm running the engagement; an empty value on update clears it
+- `audit` accepts the new `TO_BOOK` and `AUDIT_BOOKED` states, which sort ahead of `NOT_STARTED`
+
+## [0.224.1] - 2026-09-03
+
+### Fixed
+
+- `access-review entry list` no longer supports `--incremental-tag` filtering (campaigns are independent snapshots now)
+
+## [0.224.0] - 2026-09-02
+
+### Added
+
+- `task comment create`, `list`, `view`, `update`, and `delete` manage description-only comments on a task, owned by a membership profile (the author by default)
+
+## [0.223.0] - 2026-09-01
+
+### Added
+
+- `access-review source setup-aws` returns the AWS connector setup values (issuer, audience, subject, suggested role name, Terraform snippet, and CloudFormation quick-create URL) needed to create the audit role
+- `--aws-role-arn` on `access-review source create` creates an AWS workload-identity connector and the access source in one call, deleting the connector again if source creation fails
+
+### Changed
+
+- `access-review source view` shows the connector's connection status
+
+## [0.222.0] - 2026-09-01
+
+### Added
+
+- `--as-of` on `risk-analysis view` and `treatment-plan list` reconstructs matrix cells and plans as of an RFC3339 instant; on `treatment-plan list` it requires `--risk-analysis`, and omitting it keeps reading live tables
+- `--state` on `task create`, and `task create` / `task update` now validate the state against the server enum, which gained `BACKLOG`, `CANCELED`, and `DUPLICATE`
+
+### Changed
+
+- `treatment-plan list` and `treatment-plan view` report the plan's own category, falling back to the risk category when the plan has none
+
+## [0.221.0] - 2026-08-31
+
+### Added
+
+- `risk-analysis fork <id>` copies a risk analysis's diagrams, treatment plans, and their relations into a new analysis for a later period
+
+### Changed
+
+- `access-review source create` reports when the source already exists for the connector instead of always claiming a fresh creation
+
+## [0.220.0] - 2026-08-26
+
+### Added
+
+- `treatment-plan` command group (`create`, `list`, `view`, `update`, `delete`) for plans that hold scores, treatment, and owner per (risk, analysis)
+- `measure link-treatment-plan` / `unlink-treatment-plan` to attach measures that drive plan progress
+- `prb risk list --risk-analysis` lists unplanned scenario-linked risks on an analysis
+
+### Changed
+
+- `prb risk-analysis update` no longer accepts `--matrix-rows` / `--matrix-cols`; matrix size is fixed at create
+
+## [0.219.0] - 2026-08-25
+
+### Added
+
+- `tracker-pattern list` / `view` show the catalog attribution (vendor name, first-party, or still-identifying) inherited from the linked catalog entry, for patterns with no vendor of their own
+
+## [0.218.0] - 2026-08-24
+
+### Changed
+
+- `prb access-review entry list --auth-method` now accepts `OAUTH2` and `SSH`, matching GitHub credential rows (OAuth app tokens and deploy keys) that were previously indistinguishable from API keys or service accounts
+
+## [0.217.0] - 2026-08-14
+
+### Added
+
+- `--matrix-rows` / `--matrix-cols` flags (required, 3, 4, or 5) on `prb risk-analysis create` and `update`, shown as a column on `list` and `view`, so the likelihood/impact matrix size is explicit per analysis
+
+## [0.216.0] - 2026-08-13
+
+### Added
+
+- `COMPLIANCE_PORTAL_MANAGER` and `COMPLIANCE_PORTAL_ACCESS_MANAGER` membership roles, filterable via `prb user list --role`, for delegating full compliance portal management or just visitor access approval without broader admin access
+- `prb aisystem` command group (`create`, `list`, `view`, `update`, `delete`, `publish`), for managing an organization's AI Systems register
+- `--period-start` and `--period-end` flags on `prb risk-analysis create` and `update`, shown as columns on `list` and `view`
+- `--resource-reporting-enabled` flag on `prb cookie-banner update`, to enable or disable resource detection on the banner
+
+## [0.215.0] - 2026-08-11
+
+### Changed
+
+- `prb access-review entry list` prints the admin column as `yes`, `no`, or `unknown`, so an account the source does not report on is no longer indistinguishable from a confirmed non-admin
+
+## [0.214.0] - 2026-08-10
+
+### Changed
+
+- Risk analysis scopes are now referred to as diagrams across the CLI
+
+## [0.213.0] - 2026-08-07
+
+### Changed
+
+- Compliance portal document, audit, and subprocessor selection is reversed: the console now lists the organization's own documents, audits, and subprocessors with checkboxes for inline portal membership, replacing the portal-only rows plus separate add dialogs
+- Risk assessments are now named risk analyses across the CLI and MCP API
+
+## [0.212.0] - 2026-08-06
+
+### Added
+
+- `--rights-requests-enabled` flag on `prb compliance-portal update`, to enable or disable the public Requests surface on the compliance portal
+
+## [0.211.0] - 2026-08-05
+
+### Added
+
+- `SUBDIVISION` column on `prb consent-record list` and the subdivision code on `prb consent-record view`, showing the ISO 3166-2 state or province detected for each consent record
+
+## [0.210.0] - 2026-08-05
+
+### Added
+
+- `prb businessfunction` commands: `create`, `update`, `delete`, `list`, `view`, and `publish`, for tracking DORA Critical ICT Functions
+
+## [0.209.0] - 2026-08-03
+
+### Added
+
+- `prb compliance-portal` commands: `create`, `update`, `delete`, `list`, and `view`, plus `audit`, `document`, and `third-party` `update`/`delete` subcommands, and portal-scoped `file list` / `reference create`/`list`
+- `--administrator-id` flag on `prb thirdparty create`/`update`, and administrators shown on `prb thirdparty view`
+
+## [0.208.0] - 2026-07-31
+
+### Added
+
+- `prb device list`, `view`, `create`, `revoke`, `delete`, and `set-owner` commands to manage ITAM devices
+
+## [0.207.1] - 2026-07-30
+
+### Added
+
+- `prb login` now requests the `v1:itam`/`v1:itam:read` OAuth2 scopes, in anticipation of upcoming ITAM commands in the CLI
+
+## [0.207.0] - 2026-07-30
+
+### Changed
+
+- `prb user list --state` now accepts multiple values (repeat the flag or comma-separate) and filters by `PENDING`, `ACTIVE`, or `DEACTIVATED` instead of `ACTIVE`/`INACTIVE`
+- `prb user archive` renamed to `prb user deactivate`
+- `prb audit-log export` and `prb scim event export` now emit CSV instead of JSONL
+
+## [0.206.0] - 2026-07-29
+
+### Added
+
+- `prb audit-log export` and `prb scim event export` commands to request CSV exports of audit log entries and SCIM events
+
+## [0.205.0] - 2026-07-28
+
+### Added
+
+- `prb audit create`/`update` gained `--audit-start-date` and `--audit-end-date` flags, and `prb audit list`/`view` show the new AUDIT START/AUDIT END columns
+- `prb audit list --sort` now accepts `AUDIT_START_DATE` and `AUDIT_END_DATE`
+
+## [0.204.0] - 2026-07-27
+
+### Added
+
+- `prb user list` gained `--filter` (search by name/email), `--role`, and `--kind` flags, with the default page size raised to 100
+
+## [0.203.0] - 2026-07-22
+
+### Changed
+
+- `prb compliance-portal update` renamed the `--title` flag to `--entity-name`, matching the compliance portal's short entity-name field
+
+## [0.202.0] - 2026-07-21
+
+### Added
+
+- `prb compliance-portal update` gained `--title`, `--description`, `--website-url`, `--email`, and `--headquarter-address` flags to manage the compliance page profile
+- `prb webhook` event choices now include `RIGHT_REQUEST_CREATED`, `RIGHT_REQUEST_UPDATED`, and `RIGHT_REQUEST_DELETED`
+
+### Changed
+
+- Renamed the `prb trust-center` command tree to `prb compliance-portal` to match the product and GraphQL rename
+
+## [0.201.0] - 2026-07-20
+
+### Added
+
+- `prb trust-center commitment` and `prb trust-center commitment-group` commands to create, list, update, and delete compliance portal commitments and their groups
+
+## [0.200.0] - 2026-07-20
+
+### Changed
+
+- Renamed the risk overview's "Inherent" label to "Initial" in command help text, for consistency with the console
+
+## [0.199.0] - 2026-07-02
+
+### Added
+
+- `prb webhook` event choices now cover the full document lifecycle: `document.created`/`updated`/`archived`/`unarchived`/`deleted`, the `document.version.*` events, and their `signature.*` and `approval.*` sub-events
+
+### Changed
+
+- `prb auth login` defaults and region prompts now use `eu.probo.com` and `us.probo.com` instead of `*.console.getprobo.com`
+
+### Removed
+
+- `MEETING_*` webhook event choices removed from `prb webhook` create/update; they were never valid backend event types and only produced API rejections
+
 ## [0.198.0] - 2026-06-30
 
 ### Removed

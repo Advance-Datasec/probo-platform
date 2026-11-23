@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package checks
 
@@ -72,11 +78,11 @@ func darwinScreenLock(ctx context.Context) Result {
 				ev["seconds"] = seconds
 			}
 
-			if mode == "immediate" {
-				return pass(ev)
+			if darwinScreenLockModeStatus(mode) == StatusFail {
+				return fail(ev)
 			}
 
-			return fail(ev)
+			return pass(ev)
 		}
 
 		if status.Err != nil {
@@ -300,7 +306,8 @@ func darwinDefaultsMissing(out CmdResult) bool {
 
 	return strings.Contains(lower, "does not exist") ||
 		strings.Contains(lower, "could not find") ||
-		strings.Contains(lower, "does not exist in domain")
+		strings.Contains(lower, "does not exist in domain") ||
+		(strings.Contains(lower, "domain") && strings.Contains(lower, "not found"))
 }
 
 func darwinConsoleUser(ctx context.Context) string {
@@ -370,54 +377,154 @@ func darwinOSVersion(ctx context.Context) Result {
 	return pass(ev)
 }
 
+const (
+	darwinSoftwareUpdateManagedDomain = "/Library/Managed Preferences/com.apple.SoftwareUpdate"
+	darwinSoftwareUpdateSystemDomain  = "/Library/Preferences/com.apple.SoftwareUpdate"
+
+	darwinPrefSourceManaged = "managed"
+	darwinPrefSourceSystem  = "system"
+	darwinPrefSourceDefault = "default"
+)
+
+// darwinSoftwareUpdateKeys must all stay enabled for AUTO_UPDATE to pass. They
+// map to the System Settings toggles for checking, downloading and installing
+// macOS updates, security responses and system data files. App Store app
+// updates are out of scope, matching the Windows and Linux implementations.
+var darwinSoftwareUpdateKeys = []string{
+	"AutomaticCheckEnabled",
+	"AutomaticDownload",
+	"AutomaticallyInstallMacOSUpdates",
+	"CriticalUpdateInstall",
+	"ConfigDataInstall",
+}
+
+// darwinSoftwareUpdatePref is one Software Update preference resolved across
+// the CFPreferences layers. An empty value with source default means macOS
+// falls back to its own default, which is enabled for every key we read.
+type darwinSoftwareUpdatePref struct {
+	value  string
+	source string
+	err    string
+	stderr string
+}
+
 func darwinAutoUpdate(ctx context.Context) Result {
-	primary := RunCommand(
+	prefs := make(map[string]darwinSoftwareUpdatePref, len(darwinSoftwareUpdateKeys))
+	for _, key := range darwinSoftwareUpdateKeys {
+		prefs[key] = darwinReadSoftwareUpdatePref(ctx, key)
+	}
+
+	return darwinSoftwareUpdateResult(prefs)
+}
+
+// darwinReadSoftwareUpdatePref resolves one key with MDM precedence: a value
+// forced by a configuration profile wins over the local system preference
+// because the user cannot override it.
+func darwinReadSoftwareUpdatePref(ctx context.Context, key string) darwinSoftwareUpdatePref {
+	managed := RunCommand(
 		ctx,
 		"defaults",
 		"read",
-		"/Library/Preferences/com.apple.SoftwareUpdate",
-		"AutomaticCheckEnabled",
+		darwinSoftwareUpdateManagedDomain,
+		key,
 	)
-	if primary.Err == nil {
-		ev := map[string]any{
-			"backend":                 "defaults",
-			"automatic_check_enabled": primary.Stdout,
+	if managed.Err == nil {
+		return darwinSoftwareUpdatePref{
+			value:  strings.TrimSpace(managed.Stdout),
+			source: darwinPrefSourceManaged,
 		}
-		if strings.TrimSpace(primary.Stdout) == "1" {
-			return pass(ev)
+	}
+
+	if !darwinDefaultsMissing(managed) {
+		return darwinSoftwareUpdatePref{
+			source: darwinPrefSourceManaged,
+			err:    errString(managed.Err),
+			stderr: managed.Stderr,
 		}
+	}
+
+	system := RunCommand(
+		ctx,
+		"defaults",
+		"read",
+		darwinSoftwareUpdateSystemDomain,
+		key,
+	)
+	if system.Err == nil {
+		return darwinSoftwareUpdatePref{
+			value:  strings.TrimSpace(system.Stdout),
+			source: darwinPrefSourceSystem,
+		}
+	}
+
+	if darwinDefaultsMissing(system) {
+		return darwinSoftwareUpdatePref{source: darwinPrefSourceDefault}
+	}
+
+	return darwinSoftwareUpdatePref{
+		source: darwinPrefSourceSystem,
+		err:    errString(system.Err),
+		stderr: system.Stderr,
+	}
+}
+
+func darwinSoftwareUpdateResult(prefs map[string]darwinSoftwareUpdatePref) Result {
+	ev := map[string]any{"backend": "defaults"}
+
+	var disabled, indeterminate []string
+
+	for _, key := range darwinSoftwareUpdateKeys {
+		pref := prefs[key]
+
+		entry := map[string]any{"source": pref.source}
+		if pref.value != "" {
+			entry["value"] = pref.value
+		}
+
+		switch {
+		case pref.err != "":
+			entry["error"] = pref.err
+			if pref.stderr != "" {
+				entry["stderr"] = truncate(pref.stderr, 256)
+			}
+
+			indeterminate = append(indeterminate, key)
+		case pref.source == darwinPrefSourceDefault:
+			entry["enabled"] = true
+		default:
+			enabled := darwinPrefIndicatesEnabled(pref.value)
+			entry["enabled"] = enabled
+
+			if !enabled {
+				disabled = append(disabled, key)
+			}
+		}
+
+		ev[key] = entry
+	}
+
+	if len(disabled) > 0 {
+		ev["disabled_keys"] = disabled
 
 		return fail(ev)
 	}
 
-	fallback := RunCommand(ctx, "softwareupdate", "--schedule")
-
-	ev := map[string]any{
-		"backend":         "softwareupdate",
-		"raw":             fallback.Stdout,
-		"defaults_error":  errString(primary.Err),
-		"defaults_stderr": primary.Stderr,
-	}
-	if fallback.Err != nil ||
-		needsAdmin(fallback.Stdout) ||
-		needsAdmin(fallback.Stderr) {
-		ev["error"] = errString(fallback.Err)
-		ev["stderr"] = fallback.Stderr
+	if len(indeterminate) > 0 {
+		ev["indeterminate_keys"] = indeterminate
 
 		return unknown(ev)
 	}
 
-	lower := strings.ToLower(fallback.Stdout)
-	switch {
-	case strings.Contains(lower, "is turned on"),
-		strings.Contains(lower, "automatic check is on"):
-		return pass(ev)
-	case strings.Contains(lower, "is turned off"),
-		strings.Contains(lower, "automatic check is off"):
-		return fail(ev)
+	return pass(ev)
+}
+
+func darwinPrefIndicatesEnabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes":
+		return true
 	}
 
-	return unknown(ev)
+	return false
 }
 
 func darwinPasswordPolicy(ctx context.Context) Result {

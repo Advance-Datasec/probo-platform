@@ -4,6 +4,241 @@ All notable changes to the Probo Helm chart will be documented in this file.
 
 ## Unreleased
 
+## [0.33.0] - 2026-11-19
+
+### Added
+
+- `probo.feedbackUrl` sets `PROBOD_FEEDBACK_URL` from a Secret. Empty
+  hides the MCP `submit_feedback` tool
+- `probo.graphql.rateLimit` sets `PROBOD_API_GRAPHQL_RATE_LIMIT`, which
+  overrides the default or per-mutation limit and window for the
+  Connect `@rateLimit` directive
+
+### Changed
+
+- Default `appVersion` is now `0.352.0`
+
+## [0.32.0] - 2026-11-04
+
+### Added
+
+- `probo.notificationWeekly.weekday` and `probo.notificationWeekly.hour`
+  set `PROBOD_NOTIFICATION_WEEKLY_WEEKDAY` and
+  `PROBOD_NOTIFICATION_WEEKLY_HOUR`, which choose when the weekly
+  notification digest is sent. Weekday uses Go's `time.Weekday` (0 is
+  Sunday); hour is UTC. Defaults to Monday, 16:00
+
+### Changed
+
+- Default `appVersion` is now `0.339.0`
+
+## [0.31.0] - 2026-10-30
+
+### Added
+
+- `probo.openai.baseUrl` and `probo.anthropic.baseUrl` set
+  `PROBOD_OPENAI_BASE_URL` and `PROBOD_ANTHROPIC_BASE_URL`. Empty
+  keeps api.openai.com and api.anthropic.com. Use them for Azure
+  OpenAI or another compatible gateway.
+
+### Changed
+
+- Default `appVersion` is now `0.334.0`
+
+## [0.30.0] - 2026-10-29
+
+### Added
+
+- `extraEnv` and `extraEnvFrom` values add environment variables (including
+  `valueFrom` references to Secrets) to the `probod` container. This allows
+  configuring any `PROBOD_*` setting the chart has no dedicated value for, such
+  as the Google Workspace, Vercel, and Sentry connectors, without forking the
+  chart. `extraEnv` entries must not repeat a variable the chart already sets
+  (Kubernetes rejects duplicate names under server-side apply), and rendering
+  fails if `extraEnv` lists the same name twice. `extraEnvFrom` has the lowest
+  precedence.
+
+### Changed
+
+- Default `appVersion` is now `0.333.0`
+
+## [0.29.0] - 2026-10-28
+
+### Added
+
+- `probo.faro.enabled`, `probo.faro.collectorUrl`, and
+  `probo.faro.apiKey` turn on Grafana Faro browser telemetry. The API
+  key is stored in the chart secret
+
+### Changed
+
+- Default `appVersion` is now `0.332.0`
+
+## [0.28.0] - 2026-10-23
+
+### Changed
+
+- Default `appVersion` is now `0.326.0`
+- Bundled demo PostgreSQL image is now `18.6`
+
+## [0.27.0] - 2026-10-20
+
+### Changed
+
+- Default `appVersion` is now `0.318.1`
+- `s3.accessKeyId` and `s3.secretAccessKey` are no longer unconditionally
+  required when `seaweedfs.enabled=false` and `s3.endpoint` is empty. Leave
+  both blank to authenticate via the AWS SDK default credential chain (EKS
+  Pod Identity, IRSA, instance role). Setting exactly one of the two still
+  fails at render time. A non-empty `s3.endpoint` still requires both keys;
+  an empty pair fails at render time. `seaweedfs.enabled=true` (the default)
+  keeps using bundled SeaweedFS and does not read these values.
+
+## [0.26.0] - 2026-10-06
+
+### Added
+
+- `probo.taskRecurrence.interval` sets `PROBOD_TASK_RECURRENCE_INTERVAL`,
+  how often the recurring-task worker scans. Defaults to 300 seconds
+
+### Changed
+
+- Default `appVersion` is now `0.304.0`
+
+## [0.25.0] - 2026-09-24
+
+### Added
+
+- `linear` and `linear-sync` example OAuth2 connector configs
+  (`clientId`, `clientSecret`, and `linear-sync`'s webhook-signing
+  `webhookSecret`) documented for Linear task sync
+- `probo.cookieBanner.tcfCmpId` sets the IAB TCF CMP ID; self-hosted
+  instances that register their own CMP with IAB Europe set this to
+  that ID
+
+### Changed
+
+- Default `appVersion` is now `0.296.0`
+
+## [0.24.0] - 2026-09-16
+
+### Changed
+
+- Default `appVersion` is now `0.290.0`
+
+## [0.23.0] - 2026-09-16
+
+### Removed
+
+- Tracker-pattern to org-third-party linking (the mapping worker, import,
+  policy, and console no longer write or display the org third party;
+  catalog identification is now the sole vendor path)
+
+## [0.22.0] - 2026-09-15
+
+### Added
+
+- `probo.identityFederation.azureTerraformModuleSource` Helm value, used to
+  build the Azure connector install snippet
+- `probo.identityFederation.cloudformationTemplateUrl`,
+  `probo.identityFederation.terraformModuleSource`, and
+  `probo.identityFederation.gcpTerraformModuleSource` documented on the
+  production values example and the Helm README
+
+## [0.21.0] - 2026-09-03
+
+### Added
+
+- `probo.identityFederation.gcpTerraformModuleSource` Helm value, used to
+  build the GCP connector install snippet
+
+## [0.20.0] - 2026-09-01
+
+### Added
+
+- `probo.identityFederation.cloudformationTemplateUrl` and `probo.identityFederation.terraformModuleSource` Helm values, used to build the AWS connector's quick-create link and install snippet
+
+## [0.19.0] - 2026-08-24
+
+### Added
+
+- Example Helm values for connecting a GitHub App connector (`appId`, `clientId`, `clientSecret`, `slug`, `privateKey`), and Secret wiring for the app's private key and client secret
+
+### Changed
+
+- Default `appVersion` updated to `probod v0.265.0`
+
+## [0.18.0] - 2026-08-21
+
+### Added
+
+- Helm values for the per-organization cloud identity issuer: signing key, key id, retired-key rotation, and issuer base URL
+- Helm values for outbound webhook delivery tuning: sender interval, request timeout, cache TTL, stale-after threshold, retry base/max, and max concurrency
+
+### Changed
+
+- Default `appVersion` updated to `probod v0.264.0`
+
+## [0.17.0] - 2026-08-18
+
+### Added
+
+- Helm values for deploying the Probot Slack bot: Slack OAuth, signing
+  secret, and durable delivery worker wiring, plus the Anthropic API key
+  required when the Slackbot's LLM provider is set to Anthropic
+
+### Changed
+
+- Default `appVersion` updated to `probod v0.262.0`
+
+## [0.16.0] - 2026-08-17
+
+### Added
+
+- Support for externally terminated portal TLS: skips ACME environment variables and account-key secret, and disables the HAProxy TCP map, when a chart deployment runs in external TLS mode
+
+## [0.15.0] - 2026-08-10
+
+### Changed
+
+- Default `appVersion` updated to `probod v0.254.0`, which restricts console access to users with an active organization membership.
+
+## [0.14.0] - 2026-08-07
+
+### Added
+
+- Helm value `probo.geolocation.subdivisionProvider` to enable IP-to-subdivision lookups for resolving state/province privacy regulations and jurisdiction on consent records
+
+## [0.13.0] - 2026-07-29
+
+### Added
+
+- `probo.auth.cookieSameSite` Helm value to configure the auth cookie's `SameSite` attribute (`lax`, `strict`, or `none`; default: `lax`)
+
+### Changed
+
+- Default `appVersion` updated to `probod v0.240.0`
+
+## [0.12.0] - 2026-07-28
+
+### Added
+
+- `probo.auth.emailConfirmationTokenValidity` Helm value to configure the email-confirmation token lifetime (default: 3600 seconds / 1 hour)
+
+### Changed
+
+- Default `appVersion` updated to `probod v0.238.0`
+
+## [0.11.0] - 2026-07-25
+
+### Added
+
+- `probo.itam.deviceEnrollmentTokenValidity` Helm value to configure the device enrollment token lifetime (default: 604800 seconds / 7 days)
+
+### Changed
+
+- Default `appVersion` updated to `probod v0.235.0`
+
 ## [0.10.0] - 2026-06-30
 
 ### Added

@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package create
 
@@ -25,13 +31,12 @@ import (
 )
 
 const createMutation = `
-mutation($input: CreateTrackerPatternInput!) {
+mutation TrackerPatternCreate($input: CreateTrackerPatternInput!) {
   createTrackerPattern(input: $input) {
     trackerPatternEdge {
       node {
         id
         pattern
-        displayName
       }
     }
     cookieBanner {
@@ -45,9 +50,8 @@ type createResponse struct {
 	CreateTrackerPattern struct {
 		TrackerPatternEdge struct {
 			Node struct {
-				ID          string `json:"id"`
-				Pattern     string `json:"pattern"`
-				DisplayName string `json:"displayName"`
+				ID      string `json:"id"`
+				Pattern string `json:"pattern"`
 			} `json:"node"`
 		} `json:"trackerPatternEdge"`
 	} `json:"createTrackerPattern"`
@@ -58,7 +62,6 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 		flagCategoryID  string
 		flagPattern     string
 		flagMatchType   string
-		flagDisplayName string
 		flagDescription string
 		flagMaxAge      int
 	)
@@ -103,12 +106,6 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 						return err
 					}
 				}
-
-				if flagDisplayName == "" {
-					if err := huh.NewInput().Title("Display name").Value(&flagDisplayName).Run(); err != nil {
-						return err
-					}
-				}
 			}
 
 			if flagPattern == "" {
@@ -119,15 +116,10 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("match-type is required; pass --match-type or run interactively")
 			}
 
-			if flagDisplayName == "" {
-				return fmt.Errorf("display-name is required; pass --display-name or run interactively")
-			}
-
 			input := map[string]any{
 				"cookieCategoryId": flagCategoryID,
 				"pattern":          flagPattern,
 				"matchType":        flagMatchType,
-				"displayName":      flagDisplayName,
 			}
 			if flagDescription != "" {
 				input["description"] = flagDescription
@@ -148,7 +140,7 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 			}
 
 			p := resp.CreateTrackerPattern.TrackerPatternEdge.Node
-			_, _ = fmt.Fprintf(f.IOStreams.Out, "Created tracker pattern %s (%s)\n", p.ID, p.DisplayName)
+			_, _ = fmt.Fprintf(f.IOStreams.Out, "Created tracker pattern %s (%s)\n", p.ID, p.Pattern)
 
 			return nil
 		},
@@ -158,7 +150,6 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 	_ = cmd.MarkFlagRequired("category-id")
 	cmd.Flags().StringVar(&flagPattern, "pattern", "", "Tracker pattern (required)")
 	cmd.Flags().StringVar(&flagMatchType, "match-type", "", "Match type: EXACT or GLOB (required)")
-	cmd.Flags().StringVar(&flagDisplayName, "display-name", "", "Display name (required)")
 	cmd.Flags().StringVar(&flagDescription, "description", "", "Description")
 	cmd.Flags().IntVar(&flagMaxAge, "max-age-seconds", 0, "Maximum age in seconds")
 

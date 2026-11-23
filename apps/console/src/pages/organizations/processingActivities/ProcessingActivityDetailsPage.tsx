@@ -1,26 +1,30 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatError, type GraphQLError } from "@probo/helpers";
 import {
   formatDatetime,
   toDateInput,
 } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   ActionDropdown,
-  Breadcrumb,
   Button,
   Card,
   Checkbox,
@@ -33,22 +37,23 @@ import {
   TabItem,
   Tabs,
   Textarea,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { useEffect, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import {
   ConnectionHandler,
   type PreloadedQuery,
   usePreloadedQuery,
 } from "react-relay";
-import { z } from "zod";
 
 import type { ProcessingActivityGraphNodeQuery } from "#/__generated__/core/ProcessingActivityGraphNodeQuery.graphql";
 import { PeopleSelectField } from "#/components/form/PeopleSelectField";
 import { ThirdPartiesMultiSelectField } from "#/components/form/ThirdPartiesMultiSelectField";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
 import { useOrganizationId } from "#/hooks/useOrganizationId";
+import { z } from "#/lib/zod";
 
 import {
   DataProtectionImpactAssessmentOptions,
@@ -72,39 +77,6 @@ import {
   useUpdateTransferImpactAssessment,
 } from "../../../hooks/graph/ProcessingActivityGraph";
 
-const updateProcessingActivitySchema = z.object({
-  name: z.string().min(1, "Name is required"),
-  purpose: z.string().optional(),
-  dataSubjectCategory: z.string().optional(),
-  personalDataCategory: z.string().optional(),
-  specialOrCriminalData: z.enum(["YES", "NO", "POSSIBLE"] as const),
-  consentEvidenceLink: z.string().optional(),
-  lawfulBasis: z.enum([
-    "CONSENT",
-    "CONTRACTUAL_NECESSITY",
-    "LEGAL_OBLIGATION",
-    "LEGITIMATE_INTEREST",
-    "PUBLIC_TASK",
-    "VITAL_INTERESTS",
-  ] as const),
-  recipients: z.string().optional(),
-  location: z.string().optional(),
-  internationalTransfers: z.boolean(),
-  transferSafeguards: z.string(),
-  retentionPeriod: z.string().optional(),
-  securityMeasures: z.string().optional(),
-  dataProtectionImpactAssessmentNeeded: z.enum([
-    "NEEDED",
-    "NOT_NEEDED",
-  ] as const),
-  transferImpactAssessmentNeeded: z.enum(["NEEDED", "NOT_NEEDED"] as const),
-  lastReviewDate: z.string().optional(),
-  nextReviewDate: z.string().optional(),
-  role: z.enum(["CONTROLLER", "PROCESSOR"] as const),
-  dataProtectionOfficerId: z.string().optional(),
-  thirdPartyIds: z.array(z.string()).optional(),
-});
-
 type Props = {
   queryRef: PreloadedQuery<ProcessingActivityGraphNodeQuery>;
 };
@@ -115,9 +87,31 @@ export default function ProcessingActivityDetailsPage(props: Props) {
       processingActivityNodeQuery,
       props.queryRef,
     );
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
   const organizationId = useOrganizationId();
+  const updateProcessingActivitySchema = z.object({
+    name: z.string().min(1, t("processingActivityDetailsPage.validation.nameRequired")),
+    purpose: z.string().optional(),
+    dataSubjectCategory: z.string().optional(),
+    personalDataCategory: z.string().optional(),
+    specialOrCriminalData: z.enum(["YES", "NO", "POSSIBLE"] as const),
+    consentEvidenceLink: z.string().optional(),
+    lawfulBasis: z.enum(["CONSENT", "CONTRACTUAL_NECESSITY", "LEGAL_OBLIGATION", "LEGITIMATE_INTEREST", "PUBLIC_TASK", "VITAL_INTERESTS"] as const),
+    recipients: z.string().optional(),
+    location: z.string().optional(),
+    internationalTransfers: z.boolean(),
+    transferSafeguards: z.string(),
+    retentionPeriod: z.string().optional(),
+    securityMeasures: z.string().optional(),
+    dataProtectionImpactAssessmentNeeded: z.enum(["NEEDED", "NOT_NEEDED"] as const),
+    transferImpactAssessmentNeeded: z.enum(["NEEDED", "NOT_NEEDED"] as const),
+    lastReviewDate: z.string().optional(),
+    nextReviewDate: z.string().optional(),
+    role: z.enum(["CONTROLLER", "PROCESSOR"] as const),
+    dataProtectionOfficerId: z.string().optional(),
+    thirdPartyIds: z.array(z.string()).optional(),
+  });
 
   // Get initial tab from URL hash
   const getInitialTab = (): "overview" | "dpia" | "tia" => {
@@ -290,19 +284,19 @@ export default function ProcessingActivityDetailsPage(props: Props) {
         thirdPartyIds: formData.thirdPartyIds,
       });
 
-      toast({
-        title: __("Success"),
-        description: __("Processing activity updated successfully"),
-        variant: "success",
+      toast.add({
+        title: t("processingActivityDetailsPage.messages.success"),
+        description: t("processingActivityDetailsPage.messages.activityUpdated"),
+        type: "success",
       });
     } catch (error) {
-      toast({
-        title: __("Error"),
+      toast.add({
+        title: t("processingActivityDetailsPage.messages.error"),
         description: formatError(
-          __("Failed to update processing activity"),
+          t("processingActivityDetailsPage.errors.updateActivity"),
           error as GraphQLError,
         ),
-        variant: "error",
+        type: "error",
       });
     }
   });
@@ -325,10 +319,10 @@ export default function ProcessingActivityDetailsPage(props: Props) {
             (formData.residualRisk as ProcessingActivityDPIAResidualRisk)
             || undefined,
         });
-        toast({
-          title: __("Success"),
-          description: __("DPIA updated successfully"),
-          variant: "success",
+        toast.add({
+          title: t("processingActivityDetailsPage.messages.success"),
+          description: t("processingActivityDetailsPage.messages.dpiaUpdated"),
+          type: "success",
         });
       } else {
         // Create new DPIA
@@ -345,20 +339,20 @@ export default function ProcessingActivityDetailsPage(props: Props) {
         });
         setDpiaDeleted(false);
         setShowDpiaForm(true);
-        toast({
-          title: __("Success"),
-          description: __("DPIA created successfully"),
-          variant: "success",
+        toast.add({
+          title: t("processingActivityDetailsPage.messages.success"),
+          description: t("processingActivityDetailsPage.messages.dpiaCreated"),
+          type: "success",
         });
       }
     } catch (error) {
-      toast({
-        title: __("Error"),
+      toast.add({
+        title: t("processingActivityDetailsPage.messages.error"),
         description: formatError(
-          __("Failed to save DPIA"),
+          t("processingActivityDetailsPage.errors.saveDpia"),
           error as GraphQLError,
         ),
-        variant: "error",
+        type: "error",
       });
     } finally {
       setDpiaSubmitting(false);
@@ -379,10 +373,10 @@ export default function ProcessingActivityDetailsPage(props: Props) {
           localLawRisk: formData.localLawRisk || undefined,
           supplementaryMeasures: formData.supplementaryMeasures || undefined,
         });
-        toast({
-          title: __("Success"),
-          description: __("TIA updated successfully"),
-          variant: "success",
+        toast.add({
+          title: t("processingActivityDetailsPage.messages.success"),
+          description: t("processingActivityDetailsPage.messages.tiaUpdated"),
+          type: "success",
         });
       } else {
         // Create new TIA
@@ -396,49 +390,37 @@ export default function ProcessingActivityDetailsPage(props: Props) {
         });
         setTiaDeleted(false);
         setShowTiaForm(true);
-        toast({
-          title: __("Success"),
-          description: __("TIA created successfully"),
-          variant: "success",
+        toast.add({
+          title: t("processingActivityDetailsPage.messages.success"),
+          description: t("processingActivityDetailsPage.messages.tiaCreated"),
+          type: "success",
         });
       }
     } catch (error) {
-      toast({
-        title: __("Error"),
+      toast.add({
+        title: t("processingActivityDetailsPage.messages.error"),
         description: formatError(
-          __("Failed to save TIA"),
+          t("processingActivityDetailsPage.errors.saveTia"),
           error as GraphQLError,
         ),
-        variant: "error",
+        type: "error",
       });
     } finally {
       setTiaSubmitting(false);
     }
   });
 
-  const breadcrumbProcessingActivitiesUrl
-    = `/organizations/${organizationId}/processing-activities`;
-
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <Breadcrumb
-          items={[
-            {
-              label: __("Processing Activities"),
-              to: breadcrumbProcessingActivitiesUrl,
-            },
-            { label: activity.name! },
-          ]}
-        />
-        {activity.canDelete && (
+      {activity.canDelete && (
+        <div className="flex items-center justify-end">
           <ActionDropdown>
             <DropdownItem onClick={deleteActivity} variant="danger">
-              {__("Delete")}
+              {t("processingActivityDetailsPage.actions.delete")}
             </DropdownItem>
           </ActionDropdown>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="mb-6">
         <h1 className="text-2xl font-bold">{activity.name}</h1>
@@ -449,19 +431,19 @@ export default function ProcessingActivityDetailsPage(props: Props) {
           active={activeTab === "overview"}
           onClick={() => setActiveTab("overview")}
         >
-          {__("Overview")}
+          {t("processingActivityDetailsPage.tabs.overview")}
         </TabItem>
         <TabItem
           active={activeTab === "dpia"}
           onClick={() => setActiveTab("dpia")}
         >
-          {__("Data Protection Impact Assessment")}
+          {t("processingActivityDetailsPage.tabs.dpia")}
         </TabItem>
         <TabItem
           active={activeTab === "tia"}
           onClick={() => setActiveTab("tia")}
         >
-          {__("Transfer Impact Assessment")}
+          {t("processingActivityDetailsPage.tabs.tia")}
         </TabItem>
       </Tabs>
 
@@ -472,7 +454,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div className="space-y-4">
                   <Field
-                    label={__("Name")}
+                    label={t("processingActivityDetailsPage.fields.name")}
                     {...register("name")}
                     error={formState.errors.name?.message}
                     required
@@ -481,7 +463,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
 
                   <div>
                     <Label htmlFor="role">
-                      {__("Role")}
+                      {t("processingActivityDetailsPage.fields.role")}
                       {" "}
                       *
                     </Label>
@@ -491,7 +473,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                       render={({ field }) => (
                         <Select
                           id="role"
-                          placeholder={__("Select role")}
+                          placeholder={t("processingActivityDetailsPage.placeholders.role")}
                           onValueChange={field.onChange}
                           value={field.value}
                           className="w-full"
@@ -509,32 +491,32 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                   </div>
 
                   <div>
-                    <Label>{__("Purpose")}</Label>
+                    <Label>{t("processingActivityDetailsPage.fields.purpose")}</Label>
                     <Textarea
                       {...register("purpose")}
-                      placeholder={__("Describe the purpose of processing")}
+                      placeholder={t("processingActivityDetailsPage.placeholders.purpose")}
                       rows={3}
                       disabled={!activity.canUpdate}
                     />
                   </div>
 
                   <Field
-                    label={__("Data Subject Category")}
+                    label={t("processingActivityDetailsPage.fields.dataSubjectCategory")}
                     {...register("dataSubjectCategory")}
-                    placeholder={__("e.g., employees, customers, prospects")}
+                    placeholder={t("processingActivityDetailsPage.placeholders.dataSubjectCategory")}
                     disabled={!activity.canUpdate}
                   />
 
                   <Field
-                    label={__("Personal Data Category")}
+                    label={t("processingActivityDetailsPage.fields.personalDataCategory")}
                     {...register("personalDataCategory")}
-                    placeholder={__("e.g., contact details, financial data")}
+                    placeholder={t("processingActivityDetailsPage.placeholders.personalDataCategory")}
                     disabled={!activity.canUpdate}
                   />
 
                   <div>
                     <Label htmlFor="specialOrCriminalData">
-                      {__("Special or Criminal Data")}
+                      {t("processingActivityDetailsPage.fields.specialOrCriminalData")}
                       {" "}
                       *
                     </Label>
@@ -544,9 +526,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                       render={({ field }) => (
                         <Select
                           id="specialOrCriminalData"
-                          placeholder={__(
-                            "Select special or criminal data status",
-                          )}
+                          placeholder={t("processingActivityDetailsPage.placeholders.specialOrCriminalData")}
                           onValueChange={field.onChange}
                           value={field.value}
                           className="w-full"
@@ -564,15 +544,15 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                   </div>
 
                   <Field
-                    label={__("Consent Evidence Link")}
+                    label={t("processingActivityDetailsPage.fields.consentEvidenceLink")}
                     {...register("consentEvidenceLink")}
-                    placeholder={__("Link to consent evidence if applicable")}
+                    placeholder={t("processingActivityDetailsPage.placeholders.consentEvidenceLink")}
                     disabled={!activity.canUpdate}
                   />
 
                   <div>
                     <Label htmlFor="lawfulBasis">
-                      {__("Lawful Basis")}
+                      {t("processingActivityDetailsPage.fields.lawfulBasis")}
                       {" "}
                       *
                     </Label>
@@ -582,7 +562,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                       render={({ field }) => (
                         <Select
                           id="lawfulBasis"
-                          placeholder={__("Select lawful basis for processing")}
+                          placeholder={t("processingActivityDetailsPage.placeholders.lawfulBasis")}
                           onValueChange={field.onChange}
                           value={field.value}
                           className="w-full"
@@ -601,7 +581,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
 
                   <div className="space-y-2">
                     <Label htmlFor="lastReviewDate">
-                      {__("Last Review Date")}
+                      {t("processingActivityDetailsPage.fields.lastReviewDate")}
                     </Label>
                     <Input
                       id="lastReviewDate"
@@ -613,7 +593,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
 
                   <div className="space-y-2">
                     <Label htmlFor="nextReviewDate">
-                      {__("Next Review Date")}
+                      {t("processingActivityDetailsPage.fields.nextReviewDate")}
                     </Label>
                     <Input
                       id="nextReviewDate"
@@ -627,23 +607,23 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                     organizationId={organizationId}
                     control={control}
                     name="dataProtectionOfficerId"
-                    label={__("Data Protection Officer")}
+                    label={t("processingActivityDetailsPage.fields.dataProtectionOfficer")}
                     disabled={!activity.canUpdate}
                   />
                 </div>
 
                 <div className="space-y-4">
                   <Field
-                    label={__("Recipients")}
+                    label={t("processingActivityDetailsPage.fields.recipients")}
                     {...register("recipients")}
-                    placeholder={__("Who receives the data")}
+                    placeholder={t("processingActivityDetailsPage.placeholders.recipients")}
                     disabled={!activity.canUpdate}
                   />
 
                   <Field
-                    label={__("Location")}
+                    label={t("processingActivityDetailsPage.fields.location")}
                     {...register("location")}
-                    placeholder={__("Where is the data processed")}
+                    placeholder={t("processingActivityDetailsPage.placeholders.location")}
                     disabled={!activity.canUpdate}
                   />
 
@@ -652,7 +632,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                     name="internationalTransfers"
                     render={({ field }) => (
                       <div>
-                        <Label>{__("International Transfers")}</Label>
+                        <Label>{t("processingActivityDetailsPage.fields.internationalTransfers")}</Label>
                         <div className="mt-2 flex items-center gap-2">
                           <Checkbox
                             checked={field.value ?? false}
@@ -660,7 +640,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                             disabled={!activity.canUpdate}
                           />
                           <span>
-                            {__("Data is transferred internationally")}
+                            {t("processingActivityDetailsPage.fields.internationalTransfersDescription")}
                           </span>
                         </div>
                       </div>
@@ -669,7 +649,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
 
                   <div>
                     <Label htmlFor="transferSafeguards">
-                      {__("Transfer Safeguards")}
+                      {t("processingActivityDetailsPage.fields.transferSafeguards")}
                     </Label>
                     <Controller
                       control={control}
@@ -677,7 +657,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                       render={({ field }) => (
                         <Select
                           id="transferSafeguards"
-                          placeholder={__("Select transfer safeguards")}
+                          placeholder={t("processingActivityDetailsPage.placeholders.transferSafeguards")}
                           onValueChange={field.onChange}
                           value={field.value}
                           className="w-full"
@@ -695,17 +675,17 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                   </div>
 
                   <Field
-                    label={__("Retention Period")}
+                    label={t("processingActivityDetailsPage.fields.retentionPeriod")}
                     {...register("retentionPeriod")}
-                    placeholder={__("How long is data retained")}
+                    placeholder={t("processingActivityDetailsPage.placeholders.retentionPeriod")}
                     disabled={!activity.canUpdate}
                   />
 
                   <div>
-                    <Label>{__("Security Measures")}</Label>
+                    <Label>{t("processingActivityDetailsPage.fields.securityMeasures")}</Label>
                     <Textarea
                       {...register("securityMeasures")}
-                      placeholder={__("Technical and organizational measures")}
+                      placeholder={t("processingActivityDetailsPage.placeholders.securityMeasures")}
                       rows={3}
                       disabled={!activity.canUpdate}
                     />
@@ -713,7 +693,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
 
                   <div>
                     <Label htmlFor="dataProtectionImpactAssessmentNeeded">
-                      {__("Data Protection Impact Assessment")}
+                      {t("processingActivityDetailsPage.fields.dpiaNeeded")}
                       {" "}
                       *
                     </Label>
@@ -723,7 +703,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                       render={({ field }) => (
                         <Select
                           id="dataProtectionImpactAssessmentNeeded"
-                          placeholder={__("Is DPIA needed?")}
+                          placeholder={t("processingActivityDetailsPage.placeholders.dpiaNeeded")}
                           onValueChange={field.onChange}
                           value={field.value}
                           className="w-full"
@@ -745,7 +725,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
 
                   <div>
                     <Label htmlFor="transferImpactAssessmentNeeded">
-                      {__("Transfer Impact Assessment")}
+                      {t("processingActivityDetailsPage.fields.tiaNeeded")}
                       {" "}
                       *
                     </Label>
@@ -755,7 +735,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                       render={({ field }) => (
                         <Select
                           id="transferImpactAssessmentNeeded"
-                          placeholder={__("Is TIA needed?")}
+                          placeholder={t("processingActivityDetailsPage.placeholders.tiaNeeded")}
                           onValueChange={field.onChange}
                           value={field.value}
                           className="w-full"
@@ -782,7 +762,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                 control={control}
                 name="thirdPartyIds"
                 selectedThirdParties={thirdParties}
-                label={__("Third parties")}
+                label={t("processingActivityDetailsPage.fields.thirdParties")}
                 disabled={!activity.canUpdate}
               />
 
@@ -794,8 +774,8 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                     disabled={formState.isSubmitting}
                   >
                     {formState.isSubmitting
-                      ? __("Saving...")
-                      : __("Save Changes")}
+                      ? t("processingActivityDetailsPage.actions.saving")
+                      : t("processingActivityDetailsPage.actions.save")}
                   </Button>
                 )}
               </div>
@@ -812,14 +792,14 @@ export default function ProcessingActivityDetailsPage(props: Props) {
               ? (
                   <div className="flex flex-col items-center justify-center py-16 w-full">
                     <h2 className="text-xl font-semibold mb-6 text-center">
-                      {__("Data Protection Impact Assessment")}
+                      {t("processingActivityDetailsPage.tabs.dpia")}
                     </h2>
                     {activity.canCreateDPIA && (
                       <Button
                         variant="primary"
                         onClick={() => setShowDpiaForm(true)}
                       >
-                        {__("Create DPIA")}
+                        {t("processingActivityDetailsPage.actions.createDpia")}
                       </Button>
                     )}
                   </div>
@@ -828,13 +808,13 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                   <>
                     <div className="flex items-center justify-between mb-6">
                       <h2 className="text-xl font-semibold">
-                        {__("Data Protection Impact Assessment")}
+                        {t("processingActivityDetailsPage.tabs.dpia")}
                       </h2>
                       {activity?.dataProtectionImpactAssessment?.id
                         && !dpiaDeleted
                         && activity.dataProtectionImpactAssessment.canDelete && (
                         <Button variant="danger" onClick={deleteDPIA}>
-                          {__("Delete DPIA")}
+                          {t("processingActivityDetailsPage.actions.deleteDpia")}
                         </Button>
                       )}
                     </div>
@@ -842,14 +822,12 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                     <form onSubmit={e => void onDPIASubmit(e)} className="space-y-6">
                       <div>
                         <Label htmlFor="dpia-description">
-                          {__("Description")}
+                          {t("processingActivityDetailsPage.fields.dpiaDescription")}
                         </Label>
                         <Textarea
                           id="dpia-description"
                           {...dpiaForm.register("description")}
-                          placeholder={__(
-                            "Describe the processing activity and its purpose",
-                          )}
+                          placeholder={t("processingActivityDetailsPage.placeholders.dpiaDescription")}
                           rows={4}
                           disabled={!canCreateOrUpdateDPIA}
                         />
@@ -857,14 +835,12 @@ export default function ProcessingActivityDetailsPage(props: Props) {
 
                       <div>
                         <Label htmlFor="dpia-necessity">
-                          {__("Necessity and Proportionality")}
+                          {t("processingActivityDetailsPage.fields.necessityAndProportionality")}
                         </Label>
                         <Textarea
                           id="dpia-necessity"
                           {...dpiaForm.register("necessityAndProportionality")}
-                          placeholder={__(
-                            "Explain why the processing is necessary and proportionate",
-                          )}
+                          placeholder={t("processingActivityDetailsPage.placeholders.necessityAndProportionality")}
                           rows={4}
                           disabled={!canCreateOrUpdateDPIA}
                         />
@@ -872,14 +848,12 @@ export default function ProcessingActivityDetailsPage(props: Props) {
 
                       <div>
                         <Label htmlFor="dpia-potential-risk">
-                          {__("Potential Risk")}
+                          {t("processingActivityDetailsPage.fields.potentialRisk")}
                         </Label>
                         <Textarea
                           id="dpia-potential-risk"
                           {...dpiaForm.register("potentialRisk")}
-                          placeholder={__(
-                            "Describe the potential risks to data subjects",
-                          )}
+                          placeholder={t("processingActivityDetailsPage.placeholders.potentialRisk")}
                           rows={4}
                           disabled={!canCreateOrUpdateDPIA}
                         />
@@ -887,14 +861,12 @@ export default function ProcessingActivityDetailsPage(props: Props) {
 
                       <div>
                         <Label htmlFor="dpia-mitigations">
-                          {__("Mitigations")}
+                          {t("processingActivityDetailsPage.fields.mitigations")}
                         </Label>
                         <Textarea
                           id="dpia-mitigations"
                           {...dpiaForm.register("mitigations")}
-                          placeholder={__(
-                            "Describe measures to mitigate the identified risks",
-                          )}
+                          placeholder={t("processingActivityDetailsPage.placeholders.mitigations")}
                           rows={4}
                           disabled={!canCreateOrUpdateDPIA}
                         />
@@ -902,7 +874,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
 
                       <div>
                         <Label htmlFor="dpia-residual-risk">
-                          {__("Residual Risk")}
+                          {t("processingActivityDetailsPage.fields.residualRisk")}
                         </Label>
                         <Controller
                           control={dpiaForm.control}
@@ -910,15 +882,15 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                           render={({ field }) => (
                             <Select
                               id="dpia-residual-risk"
-                              placeholder={__("Select residual risk level")}
+                              placeholder={t("processingActivityDetailsPage.placeholders.residualRisk")}
                               onValueChange={field.onChange}
                               value={field.value}
                               className="w-full"
                               disabled={!canCreateOrUpdateDPIA}
                             >
-                              <Option value="LOW">{__("Low")}</Option>
-                              <Option value="MEDIUM">{__("Medium")}</Option>
-                              <Option value="HIGH">{__("High")}</Option>
+                              <Option value="LOW">{t("processingActivityDetailsPage.residualRisk.low")}</Option>
+                              <Option value="MEDIUM">{t("processingActivityDetailsPage.residualRisk.medium")}</Option>
+                              <Option value="HIGH">{t("processingActivityDetailsPage.residualRisk.high")}</Option>
                             </Select>
                           )}
                         />
@@ -932,7 +904,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                             variant="secondary"
                             onClick={() => setShowDpiaForm(false)}
                           >
-                            {__("Cancel")}
+                            {t("processingActivityDetailsPage.actions.cancel")}
                           </Button>
                         )}
                         {(activity?.dataProtectionImpactAssessment?.id
@@ -945,11 +917,11 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                             disabled={dpiaSubmitting}
                           >
                             {dpiaSubmitting
-                              ? __("Saving...")
+                              ? t("processingActivityDetailsPage.actions.saving")
                               : activity?.dataProtectionImpactAssessment?.id
                                 && !dpiaDeleted
-                                ? __("Update DPIA")
-                                : __("Create DPIA")}
+                                ? t("processingActivityDetailsPage.actions.updateDpia")
+                                : t("processingActivityDetailsPage.actions.createDpia")}
                           </Button>
                         )}
                       </div>
@@ -968,14 +940,14 @@ export default function ProcessingActivityDetailsPage(props: Props) {
               ? (
                   <div className="flex flex-col items-center justify-center py-16 w-full">
                     <h2 className="text-xl font-semibold mb-6 text-center">
-                      {__("Transfer Impact Assessment")}
+                      {t("processingActivityDetailsPage.tabs.tia")}
                     </h2>
                     {activity.canCreateTIA && (
                       <Button
                         variant="primary"
                         onClick={() => setShowTiaForm(true)}
                       >
-                        {__("Create TIA")}
+                        {t("processingActivityDetailsPage.actions.createTia")}
                       </Button>
                     )}
                   </div>
@@ -984,13 +956,13 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                   <>
                     <div className="flex items-center justify-between mb-6">
                       <h2 className="text-xl font-semibold">
-                        {__("Transfer Impact Assessment")}
+                        {t("processingActivityDetailsPage.tabs.tia")}
                       </h2>
                       {activity?.transferImpactAssessment?.id
                         && !tiaDeleted
                         && activity.transferImpactAssessment.canDelete && (
                         <Button variant="danger" onClick={deleteTIA}>
-                          {__("Delete TIA")}
+                          {t("processingActivityDetailsPage.actions.deleteTia")}
                         </Button>
                       )}
                     </div>
@@ -998,14 +970,12 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                     <form onSubmit={e => void onTIASubmit(e)} className="space-y-6">
                       <div>
                         <Label htmlFor="tia-data-subjects">
-                          {__("Data Subjects")}
+                          {t("processingActivityDetailsPage.fields.dataSubjects")}
                         </Label>
                         <Textarea
                           id="tia-data-subjects"
                           {...tiaForm.register("dataSubjects")}
-                          placeholder={__(
-                            "Describe the data subjects involved in the transfer",
-                          )}
+                          placeholder={t("processingActivityDetailsPage.placeholders.dataSubjects")}
                           rows={4}
                           disabled={!canCreateOrUpdateTIA}
                         />
@@ -1013,27 +983,23 @@ export default function ProcessingActivityDetailsPage(props: Props) {
 
                       <div>
                         <Label htmlFor="tia-legal-mechanism">
-                          {__("Legal Mechanism")}
+                          {t("processingActivityDetailsPage.fields.legalMechanism")}
                         </Label>
                         <Textarea
                           id="tia-legal-mechanism"
                           {...tiaForm.register("legalMechanism")}
-                          placeholder={__(
-                            "Describe the legal mechanism for the transfer (e.g., SCCs, BCRs, adequacy decision)",
-                          )}
+                          placeholder={t("processingActivityDetailsPage.placeholders.legalMechanism")}
                           rows={4}
                           disabled={!canCreateOrUpdateTIA}
                         />
                       </div>
 
                       <div>
-                        <Label htmlFor="tia-transfer">{__("Transfer")}</Label>
+                        <Label htmlFor="tia-transfer">{t("processingActivityDetailsPage.fields.transfer")}</Label>
                         <Textarea
                           id="tia-transfer"
                           {...tiaForm.register("transfer")}
-                          placeholder={__(
-                            "Describe the nature and details of the data transfer",
-                          )}
+                          placeholder={t("processingActivityDetailsPage.placeholders.transfer")}
                           rows={4}
                           disabled={!canCreateOrUpdateTIA}
                         />
@@ -1041,14 +1007,12 @@ export default function ProcessingActivityDetailsPage(props: Props) {
 
                       <div>
                         <Label htmlFor="tia-local-law-risk">
-                          {__("Local Law Risk")}
+                          {t("processingActivityDetailsPage.fields.localLawRisk")}
                         </Label>
                         <Textarea
                           id="tia-local-law-risk"
                           {...tiaForm.register("localLawRisk")}
-                          placeholder={__(
-                            "Assess the risks related to the local laws of the destination country",
-                          )}
+                          placeholder={t("processingActivityDetailsPage.placeholders.localLawRisk")}
                           rows={4}
                           disabled={!canCreateOrUpdateTIA}
                         />
@@ -1056,14 +1020,12 @@ export default function ProcessingActivityDetailsPage(props: Props) {
 
                       <div>
                         <Label htmlFor="tia-supplementary-measures">
-                          {__("Supplementary Measures")}
+                          {t("processingActivityDetailsPage.fields.supplementaryMeasures")}
                         </Label>
                         <Textarea
                           id="tia-supplementary-measures"
                           {...tiaForm.register("supplementaryMeasures")}
-                          placeholder={__(
-                            "Describe any supplementary measures taken to ensure adequate protection",
-                          )}
+                          placeholder={t("processingActivityDetailsPage.placeholders.supplementaryMeasures")}
                           rows={4}
                           disabled={!canCreateOrUpdateTIA}
                         />
@@ -1077,7 +1039,7 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                             variant="secondary"
                             onClick={() => setShowTiaForm(false)}
                           >
-                            {__("Cancel")}
+                            {t("processingActivityDetailsPage.actions.cancel")}
                           </Button>
                         )}
                         {(activity?.transferImpactAssessment?.id && !tiaDeleted
@@ -1089,11 +1051,11 @@ export default function ProcessingActivityDetailsPage(props: Props) {
                             disabled={tiaSubmitting}
                           >
                             {tiaSubmitting
-                              ? __("Saving...")
+                              ? t("processingActivityDetailsPage.actions.saving")
                               : activity?.transferImpactAssessment?.id
                                 && !tiaDeleted
-                                ? __("Update TIA")
-                                : __("Create TIA")}
+                                ? t("processingActivityDetailsPage.actions.updateTia")
+                                : t("processingActivityDetailsPage.actions.createTia")}
                           </Button>
                         )}
                       </div>

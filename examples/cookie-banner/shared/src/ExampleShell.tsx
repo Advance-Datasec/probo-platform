@@ -1,0 +1,112 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import type { ReactNode } from "react";
+
+interface ExampleShellProps {
+  title: string;
+  description: ReactNode;
+  siblingHref?: string | null;
+  children: ReactNode;
+}
+
+function siblingHost(href: string): string {
+  try {
+    return new URL(href).host;
+  } catch {
+    return href;
+  }
+}
+
+export function ExampleShell({ title, description, siblingHref, children }: ExampleShellProps) {
+  return (
+    <div
+      style={{
+        fontFamily: "system-ui, sans-serif",
+        maxWidth: 900,
+        margin: "0 auto",
+        padding: 24,
+      }}
+    >
+      <header
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 16,
+          marginBottom: 24,
+        }}
+      >
+        <div>
+          <h1 style={{ margin: "0 0 4px" }}>{title}</h1>
+          <p style={{ color: "#666", margin: 0 }}>{description}</p>
+          {siblingHref != null && siblingHref !== "" && (
+            <p style={{ margin: "8px 0 0" }}>
+              <a href={siblingHref}>Sibling site ({siblingHost(siblingHref)})</a>
+            </p>
+          )}
+        </div>
+        <probo-settings-link
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            flexShrink: 0,
+            padding: "8px 14px",
+            background: "#111",
+            color: "#fff",
+            borderRadius: 6,
+            fontWeight: 600,
+            fontSize: 14,
+            lineHeight: 1.2,
+          }}
+        >
+          Cookie settings
+        </probo-settings-link>
+      </header>
+
+      <div
+        style={{
+          position: "relative",
+          marginBottom: 24,
+          paddingBottom: "56.25%",
+          height: 0,
+        }}
+      >
+        <iframe
+          data-cookie-consent="advertising"
+          data-src="https://www.youtube.com/embed/4kHl4FoK1Ys"
+          title="Modern Talking - You're My Heart, You're My Soul"
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            border: 0,
+          }}
+          allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+        />
+      </div>
+
+      {children}
+    </div>
+  );
+}

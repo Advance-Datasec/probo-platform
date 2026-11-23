@@ -1,29 +1,40 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { Link } from "@probo/ui/src/v2/Button/Link";
+import { ButtonLink } from "@probo/ui/src/v2/Button/ButtonLink";
+import { ErrorBoundary } from "@probo/ui/src/v2/ErrorBoundary/ErrorBoundary";
 import { useTranslation } from "react-i18next";
 import { graphql, useFragment } from "react-relay";
 
+import { InlineErrorCard } from "#/components/errors/InlineErrorCard";
 import { HomeSection } from "#/components/HomeSection/HomeSection";
+import { MailingListUpdateListItem } from "#/components/MailingListUpdateListItem/MailingListUpdateListItem";
 import { dotPatternStyle } from "#/components/MediaTile/variants";
+import { useLocalizedPath } from "#/lib/i18n/useLocale";
 
-import type { RecentUpdatesSection_trustCenter$key } from "./__generated__/RecentUpdatesSection_trustCenter.graphql";
-import { MailingListUpdateListItem } from "./MailingListUpdateListItem";
+import type { RecentUpdatesSection_compliancePortal$key } from "./__generated__/RecentUpdatesSection_compliancePortal.graphql";
 
+// @throwOnFieldError surfaces a field error at the read below so the section
+// ErrorBoundary contains it. See contrib/claude/error-handling.md.
 const recentUpdatesSectionFragment = graphql`
-  fragment RecentUpdatesSection_trustCenter on TrustCenter {
+  fragment RecentUpdatesSection_compliancePortal on CompliancePortal @throwOnFieldError {
     updates(first: 5) {
       edges {
         node {
@@ -36,14 +47,33 @@ const recentUpdatesSectionFragment = graphql`
 `;
 
 interface RecentUpdatesSectionProps {
-  trustCenterKey: RecentUpdatesSection_trustCenter$key;
+  compliancePortalKey: RecentUpdatesSection_compliancePortal$key;
 }
 
 // "Recent updates" section: the latest mailing-list updates as a list, with a
-// link to the full updates page.
-export function RecentUpdatesSection({ trustCenterKey }: RecentUpdatesSectionProps) {
+// link to the full updates page. A load failure degrades to an inline error.
+export function RecentUpdatesSection({ compliancePortalKey }: RecentUpdatesSectionProps) {
   const { t } = useTranslation();
-  const data = useFragment(recentUpdatesSectionFragment, trustCenterKey);
+
+  return (
+    <ErrorBoundary
+      fallback={(
+        // The data comes from the preloaded HomePageQuery, so there is no local
+        // refetch to clear a field error — reload the page to recover.
+        <HomeSection title={t("home.sections.recentUpdates")}>
+          <InlineErrorCard onRetry={() => window.location.reload()} />
+        </HomeSection>
+      )}
+    >
+      <RecentUpdatesSectionContent compliancePortalKey={compliancePortalKey} />
+    </ErrorBoundary>
+  );
+}
+
+function RecentUpdatesSectionContent({ compliancePortalKey }: RecentUpdatesSectionProps) {
+  const { t } = useTranslation();
+  const localizedPath = useLocalizedPath();
+  const data = useFragment(recentUpdatesSectionFragment, compliancePortalKey);
   const updates = data.updates.edges.map(edge => edge.node);
 
   if (updates.length === 0) {
@@ -54,16 +84,19 @@ export function RecentUpdatesSection({ trustCenterKey }: RecentUpdatesSectionPro
     <HomeSection
       title={t("home.sections.recentUpdates")}
       action={(
-        <Link to="/updates" variant="ghost" color="neutral" size={2}>
+        <ButtonLink to={localizedPath("/updates")} variant="ghost" color="neutral" size={2}>
           {t("home.recentUpdates.viewAll")}
-        </Link>
+        </ButtonLink>
       )}
     >
       <div className="relative overflow-hidden rounded-5 border border-sand-3 bg-sand-1">
         <div aria-hidden className="pointer-events-none absolute inset-0" style={dotPatternStyle} />
-        <div aria-hidden className="pointer-events-none absolute inset-0 bg-linear-to-r from-sand-1/0 to-sand-1 to-[96px]" />
-        <div className="relative">
+        <div aria-hidden className="pointer-events-none absolute inset-0 bg-linear-to-r from-sand-1/0 to-sand-1 to-[96px] max-sm:to-[48px]" />
+        <div className="relative divide-y divide-sand-a2">
           {updates.map(update => (
+            // Rows share fate (one connection query), so a row's field error
+            // bubbles to the section boundary above rather than degrading a
+            // single, unrecoverable row.
             <MailingListUpdateListItem key={update.id} updateKey={update} />
           ))}
         </div>

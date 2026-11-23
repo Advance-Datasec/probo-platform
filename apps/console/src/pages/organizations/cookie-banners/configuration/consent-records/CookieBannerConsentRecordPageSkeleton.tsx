@@ -1,42 +1,58 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import { CardSkeleton } from "@probo/ui/src/v2/Card/CardSkeleton";
+import { TextSkeleton } from "@probo/ui/src/v2/typography/TextSkeleton";
+
+import { CookieBannerPageHeaderSkeleton } from "../../_components/CookieBannerPageHeaderSkeleton";
+import { consentRecordPage } from "../../variants";
 
 export function CookieBannerConsentRecordPageSkeleton() {
+  const {
+    root,
+    header,
+    body,
+    column,
+    actionCard,
+    locationCard,
+    requestCard,
+    tcfCard,
+    categoriesCard,
+  } = consentRecordPage();
+
   return (
-    <div className="space-y-6 animate-pulse">
-      <div className="rounded-2xl border border-border-low p-6 space-y-4">
-        {Array.from({ length: 7 }).map((_, i) => (
-          <div key={i} className="flex items-center justify-between py-3 border-b border-border-low last:border-b-0">
-            <div className="h-4 w-28 rounded bg-bg-subtle" />
-            <div className="h-4 w-48 rounded bg-bg-subtle" />
-          </div>
-        ))}
+    <div className={root()}>
+      <div className={header()}>
+        <TextSkeleton size={2} className="w-16" />
+        <CookieBannerPageHeaderSkeleton titleClassName="w-40" />
       </div>
-      <div className="rounded-2xl border border-border-low p-6 space-y-4">
-        <div className="h-5 w-32 rounded bg-bg-subtle" />
-        {Array.from({ length: 3 }).map((_, i) => (
-          <div key={i} className="space-y-2 py-3 border-b border-border-low last:border-b-0">
-            <div className="flex items-center justify-between">
-              <div className="h-4 w-32 rounded bg-bg-subtle" />
-              <div className="h-5 w-16 rounded bg-bg-subtle" />
-            </div>
-            <div className="ml-4 space-y-1">
-              <div className="h-3 w-40 rounded bg-bg-subtle" />
-              <div className="h-3 w-36 rounded bg-bg-subtle" />
-            </div>
-          </div>
-        ))}
+      <div className={body()}>
+        <div className={column()}>
+          <CardSkeleton size={2} className={actionCard({ className: "h-56" })} />
+          <CardSkeleton size={2} className={requestCard({ className: "h-64" })} />
+          <CardSkeleton size={2} className={tcfCard({ className: "h-72" })} />
+        </div>
+        <div className={column()}>
+          <CardSkeleton size={2} className={categoriesCard({ className: "h-40" })} />
+          <CardSkeleton size={2} className={locationCard({ className: "h-56" })} />
+        </div>
       </div>
     </div>
   );

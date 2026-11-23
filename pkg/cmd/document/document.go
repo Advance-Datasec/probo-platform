@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package document
 
@@ -18,19 +24,24 @@ import (
 	"github.com/spf13/cobra"
 	"go.probo.inc/probo/pkg/cmd/cmdutil"
 	"go.probo.inc/probo/pkg/cmd/document/archive"
+	"go.probo.inc/probo/pkg/cmd/document/change"
+	"go.probo.inc/probo/pkg/cmd/document/comment"
 	"go.probo.inc/probo/pkg/cmd/document/create"
 	"go.probo.inc/probo/pkg/cmd/document/delete"
-	deletedraft "go.probo.inc/probo/pkg/cmd/document/delete-draft"
 	"go.probo.inc/probo/pkg/cmd/document/list"
 	listapprovaldecisions "go.probo.inc/probo/pkg/cmd/document/list-approval-decisions"
 	listapprovalquorums "go.probo.inc/probo/pkg/cmd/document/list-approval-quorums"
+	listhistory "go.probo.inc/probo/pkg/cmd/document/list-history"
 	listversions "go.probo.inc/probo/pkg/cmd/document/list-versions"
 	"go.probo.inc/probo/pkg/cmd/document/publish"
+	restorehistory "go.probo.inc/probo/pkg/cmd/document/restore-history"
+	"go.probo.inc/probo/pkg/cmd/document/suggestion"
 	"go.probo.inc/probo/pkg/cmd/document/unarchive"
 	"go.probo.inc/probo/pkg/cmd/document/update"
 	"go.probo.inc/probo/pkg/cmd/document/view"
 	viewapprovaldecision "go.probo.inc/probo/pkg/cmd/document/view-approval-decision"
 	viewapprovalquorum "go.probo.inc/probo/pkg/cmd/document/view-approval-quorum"
+	viewhistorysnapshot "go.probo.inc/probo/pkg/cmd/document/view-history-snapshot"
 	viewversion "go.probo.inc/probo/pkg/cmd/document/view-version"
 )
 
@@ -48,13 +59,18 @@ func NewCmdDocument(f *cmdutil.Factory) *cobra.Command {
 	cmd.AddCommand(archive.NewCmdArchive(f))
 	cmd.AddCommand(unarchive.NewCmdUnarchive(f))
 	cmd.AddCommand(listversions.NewCmdListVersions(f))
+	cmd.AddCommand(listhistory.NewCmdListHistory(f))
 	cmd.AddCommand(viewversion.NewCmdViewVersion(f))
-	cmd.AddCommand(deletedraft.NewCmdDeleteDraft(f))
+	cmd.AddCommand(viewhistorysnapshot.NewCmdViewHistorySnapshot(f))
+	cmd.AddCommand(restorehistory.NewCmdRestoreHistory(f))
 	cmd.AddCommand(publish.NewCmdPublish(f))
 	cmd.AddCommand(listapprovalquorums.NewCmdListApprovalQuorums(f))
 	cmd.AddCommand(viewapprovalquorum.NewCmdViewApprovalQuorum(f))
 	cmd.AddCommand(listapprovaldecisions.NewCmdListApprovalDecisions(f))
 	cmd.AddCommand(viewapprovaldecision.NewCmdViewApprovalDecision(f))
+	cmd.AddCommand(comment.NewCmdComment(f))
+	cmd.AddCommand(suggestion.NewCmdSuggestion(f))
+	cmd.AddCommand(change.NewCmdChange(f))
 
 	return cmd
 }

@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_test
 
@@ -46,7 +52,6 @@ func TestTrackerPattern_Create(t *testing.T) {
 							pattern
 							matchType
 							trackerType
-							displayName
 							maxAgeSeconds
 							description
 							commonTrackerPatternId
@@ -69,7 +74,6 @@ func TestTrackerPattern_Create(t *testing.T) {
 						Pattern                string  `json:"pattern"`
 						MatchType              string  `json:"matchType"`
 						TrackerType            string  `json:"trackerType"`
-						DisplayName            string  `json:"displayName"`
 						MaxAgeSeconds          *int    `json:"maxAgeSeconds"`
 						Description            string  `json:"description"`
 						CommonTrackerPatternID *string `json:"commonTrackerPatternId"`
@@ -90,7 +94,6 @@ func TestTrackerPattern_Create(t *testing.T) {
 				"pattern":          "_ga",
 				"matchType":        "EXACT",
 				"trackerType":      "LOCAL_STORAGE",
-				"displayName":      "Google Analytics",
 				"maxAgeSeconds":    maxAge,
 				"description":      "Google Analytics tracking cookie",
 			},
@@ -103,7 +106,6 @@ func TestTrackerPattern_Create(t *testing.T) {
 		assert.Equal(t, "_ga", node.Pattern)
 		assert.Equal(t, "EXACT", node.MatchType)
 		assert.Equal(t, "LOCAL_STORAGE", node.TrackerType)
-		assert.Equal(t, "Google Analytics", node.DisplayName)
 		require.NotNil(t, node.MaxAgeSeconds)
 		assert.Equal(t, maxAge, *node.MaxAgeSeconds)
 		assert.Equal(t, "Google Analytics tracking cookie", node.Description)
@@ -126,7 +128,6 @@ func TestTrackerPattern_Create(t *testing.T) {
 							id
 							pattern
 							matchType
-							displayName
 							maxAgeSeconds
 						}
 					}
@@ -141,7 +142,6 @@ func TestTrackerPattern_Create(t *testing.T) {
 						ID            string `json:"id"`
 						Pattern       string `json:"pattern"`
 						MatchType     string `json:"matchType"`
-						DisplayName   string `json:"displayName"`
 						MaxAgeSeconds *int   `json:"maxAgeSeconds"`
 					} `json:"node"`
 				} `json:"trackerPatternEdge"`
@@ -153,7 +153,6 @@ func TestTrackerPattern_Create(t *testing.T) {
 				"cookieCategoryId": categoryID,
 				"pattern":          "_gat_*",
 				"matchType":        "GLOB",
-				"displayName":      "GA Throttle",
 				"description":      "Google Analytics rate limiting",
 			},
 		}, &result)
@@ -174,8 +173,7 @@ func TestTrackerPattern_Create(t *testing.T) {
 		categoryID := factory.CreateCookieCategory(owner, bannerID)
 
 		factory.CreateTrackerPattern(owner, categoryID, factory.Attrs{
-			"pattern":     "duplicate_cookie",
-			"displayName": "First",
+			"pattern": "duplicate_cookie",
 		})
 
 		_, err := owner.Do(`
@@ -190,7 +188,6 @@ func TestTrackerPattern_Create(t *testing.T) {
 				"cookieCategoryId": categoryID,
 				"pattern":          "duplicate_cookie",
 				"matchType":        "EXACT",
-				"displayName":      "Second",
 				"description":      "Duplicate",
 			},
 		})
@@ -208,7 +205,6 @@ func TestTrackerPattern_Update(t *testing.T) {
 		bannerID := factory.CreateCookieBanner(owner)
 		categoryID := factory.CreateCookieCategory(owner, bannerID)
 		patternID := factory.CreateTrackerPattern(owner, categoryID, factory.Attrs{
-			"displayName": "Original Name",
 			"description": "Original description",
 		})
 
@@ -217,7 +213,6 @@ func TestTrackerPattern_Update(t *testing.T) {
 				updateTrackerPattern(input: $input) {
 					trackerPattern {
 						id
-						displayName
 						description
 					}
 					cookieBanner {
@@ -231,7 +226,6 @@ func TestTrackerPattern_Update(t *testing.T) {
 			UpdateTrackerPattern struct {
 				TrackerPattern struct {
 					ID          string `json:"id"`
-					DisplayName string `json:"displayName"`
 					Description string `json:"description"`
 				} `json:"trackerPattern"`
 				CookieBanner struct {
@@ -249,7 +243,6 @@ func TestTrackerPattern_Update(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, patternID, result.UpdateTrackerPattern.TrackerPattern.ID)
-		assert.Equal(t, "Original Name", result.UpdateTrackerPattern.TrackerPattern.DisplayName)
 		assert.Equal(t, "Updated description", result.UpdateTrackerPattern.TrackerPattern.Description)
 		assert.Equal(t, bannerID, result.UpdateTrackerPattern.CookieBanner.ID)
 	})
@@ -334,7 +327,6 @@ func TestTrackerPattern_Excluded(t *testing.T) {
 				"cookieCategoryId": categoryID,
 				"pattern":          "test_excluded_default",
 				"matchType":        "EXACT",
-				"displayName":      "Test Excluded Default",
 				"description":      "Should default to not excluded",
 			},
 		}, &result)
@@ -575,7 +567,6 @@ func TestTrackerPattern_List(t *testing.T) {
 								node {
 									id
 									pattern
-									displayName
 								}
 							}
 							pageInfo {
@@ -594,9 +585,8 @@ func TestTrackerPattern_List(t *testing.T) {
 					TotalCount int `json:"totalCount"`
 					Edges      []struct {
 						Node struct {
-							ID          string `json:"id"`
-							Pattern     string `json:"pattern"`
-							DisplayName string `json:"displayName"`
+							ID      string `json:"id"`
+							Pattern string `json:"pattern"`
 						} `json:"node"`
 					} `json:"edges"`
 					PageInfo struct {
@@ -611,6 +601,73 @@ func TestTrackerPattern_List(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 2, result.Node.TrackerPatterns.TotalCount)
 		assert.Len(t, result.Node.TrackerPatterns.Edges, 2)
+	})
+}
+
+func TestTrackerPattern_Attribution(t *testing.T) {
+	t.Parallel()
+
+	t.Run("is null without a catalog link", func(t *testing.T) {
+		t.Parallel()
+		owner := testutil.NewClient(t, testutil.RoleOwner)
+
+		bannerID := factory.CreateCookieBanner(owner)
+		categoryID := factory.CreateCookieCategory(owner, bannerID)
+		patternID := factory.CreateTrackerPattern(owner, categoryID)
+
+		const query = `
+			query($id: ID!) {
+				node(id: $id) {
+					... on TrackerPattern {
+						id
+						attribution
+					}
+				}
+			}
+		`
+
+		var result struct {
+			Node struct {
+				ID          string  `json:"id"`
+				Attribution *string `json:"attribution"`
+			} `json:"node"`
+		}
+
+		require.NoError(t, owner.Execute(query, map[string]any{"id": patternID}, &result))
+		assert.Nil(t, result.Node.Attribution, "a freshly created pattern has no catalog verdict")
+	})
+
+	t.Run("inherits the catalog verdict", func(t *testing.T) {
+		t.Parallel()
+		owner := testutil.NewClient(t, testutil.RoleOwner)
+
+		bannerID := factory.CreateCookieBanner(owner)
+		categoryID := factory.CreateCookieCategory(owner, bannerID)
+		patternID := factory.CreateTrackerPattern(owner, categoryID)
+		commonID := seedCommonTrackerPatternWithAttribution(t, coredata.CommonTrackerPatternAttributionFirstParty)
+		linkTrackerPatternToCommon(t, patternID, commonID)
+
+		const query = `
+			query($id: ID!) {
+				node(id: $id) {
+					... on TrackerPattern {
+						id
+						attribution
+					}
+				}
+			}
+		`
+
+		var result struct {
+			Node struct {
+				ID          string  `json:"id"`
+				Attribution *string `json:"attribution"`
+			} `json:"node"`
+		}
+
+		require.NoError(t, owner.Execute(query, map[string]any{"id": patternID}, &result))
+		require.NotNil(t, result.Node.Attribution, "a catalog-linked pattern must expose the inherited verdict")
+		assert.Equal(t, string(coredata.CommonTrackerPatternAttributionFirstParty), *result.Node.Attribution)
 	})
 }
 
@@ -655,7 +712,367 @@ func TestTrackerPattern_CommonTrackerPatternID(t *testing.T) {
 	})
 }
 
+func TestTrackerPattern_ObservedBy(t *testing.T) {
+	t.Parallel()
+
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	bannerID := factory.CreateCookieBanner(owner)
+	categoryID := factory.CreateCookieCategory(owner, bannerID)
+
+	bothID := factory.CreateTrackerPattern(owner, categoryID, factory.Attrs{"pattern": "both"})
+	scanID := factory.CreateTrackerPattern(owner, categoryID, factory.Attrs{"pattern": "scan"})
+	sdkID := factory.CreateTrackerPattern(owner, categoryID, factory.Attrs{"pattern": "sdk"})
+	factory.CreateTrackerPattern(owner, categoryID, factory.Attrs{"pattern": "unseen"})
+
+	scanCookie := &detectedTrackerCookie{
+		valueSize:   24,
+		httpOnly:    true,
+		secure:      true,
+		sameSite:    "LAX",
+		partitioned: true,
+		setByURL:    "https://tracker.example/set",
+	}
+
+	seedDetectedTracker(t, bannerID, bothID, "both", coredata.DetectedTrackerObserverSDK, nil)
+	seedDetectedTracker(t, bannerID, bothID, "both", coredata.DetectedTrackerObserverScanner, scanCookie)
+	seedDetectedTracker(t, bannerID, scanID, "scan", coredata.DetectedTrackerObserverScanner, scanCookie)
+	seedDetectedTracker(t, bannerID, sdkID, "sdk", coredata.DetectedTrackerObserverSDK, nil)
+
+	const listQuery = `
+		query($id: ID!, $filter: TrackerPatternFilter) {
+			node(id: $id) {
+				... on CookieBanner {
+					trackerPatterns(
+						first: 10
+						filter: $filter
+						orderBy: { field: NAME, direction: ASC }
+					) {
+						edges {
+							node {
+								pattern
+								observedBy
+							}
+						}
+					}
+				}
+			}
+		}
+	`
+
+	type listedPattern struct {
+		Pattern    string   `json:"pattern"`
+		ObservedBy []string `json:"observedBy"`
+	}
+
+	var listed struct {
+		Node struct {
+			TrackerPatterns struct {
+				Edges []struct {
+					Node listedPattern `json:"node"`
+				} `json:"edges"`
+			} `json:"trackerPatterns"`
+		} `json:"node"`
+	}
+
+	load := func(t *testing.T, observedBy []string) []listedPattern {
+		t.Helper()
+
+		require.NoError(t, owner.Execute(
+			listQuery,
+			map[string]any{
+				"id": bannerID,
+				"filter": map[string]any{
+					"observedBy": observedBy,
+				},
+			},
+			&listed,
+		))
+
+		patterns := make([]listedPattern, 0, len(listed.Node.TrackerPatterns.Edges))
+		for _, edge := range listed.Node.TrackerPatterns.Edges {
+			patterns = append(patterns, edge.Node)
+		}
+
+		return patterns
+	}
+
+	assert.Equal(t, []listedPattern{
+		{Pattern: "both", ObservedBy: []string{"SCANNER", "SDK"}},
+		{Pattern: "sdk", ObservedBy: []string{"SDK"}},
+	}, load(t, []string{"SDK"}))
+	assert.Equal(t, []listedPattern{
+		{Pattern: "both", ObservedBy: []string{"SCANNER", "SDK"}},
+		{Pattern: "scan", ObservedBy: []string{"SCANNER"}},
+	}, load(t, []string{"SCANNER"}))
+	assert.Equal(t, []listedPattern{
+		{Pattern: "both", ObservedBy: []string{"SCANNER", "SDK"}},
+		{Pattern: "scan", ObservedBy: []string{"SCANNER"}},
+		{Pattern: "sdk", ObservedBy: []string{"SDK"}},
+	}, load(t, []string{"SDK", "SCANNER"}))
+
+	const detectionQuery = `
+		query($id: ID!) {
+			node(id: $id) {
+				... on TrackerPattern {
+					detectedTrackers(first: 10) {
+						edges {
+							node {
+								identifier
+								observedBy
+								valueSize
+								httpOnly
+								secure
+								sameSite
+								partitioned
+								setByUrl
+							}
+						}
+					}
+				}
+			}
+		}
+	`
+
+	var detection struct {
+		Node struct {
+			DetectedTrackers struct {
+				Edges []struct {
+					Node struct {
+						Identifier  string  `json:"identifier"`
+						ObservedBy  string  `json:"observedBy"`
+						ValueSize   *int    `json:"valueSize"`
+						HTTPOnly    *bool   `json:"httpOnly"`
+						Secure      *bool   `json:"secure"`
+						SameSite    *string `json:"sameSite"`
+						Partitioned *bool   `json:"partitioned"`
+						SetByURL    *string `json:"setByUrl"`
+					} `json:"node"`
+				} `json:"edges"`
+			} `json:"detectedTrackers"`
+		} `json:"node"`
+	}
+
+	require.NoError(t, owner.Execute(detectionQuery, map[string]any{"id": scanID}, &detection))
+	require.Len(t, detection.Node.DetectedTrackers.Edges, 1)
+
+	got := detection.Node.DetectedTrackers.Edges[0].Node
+	assert.Equal(t, "scan", got.Identifier)
+	assert.Equal(t, "SCANNER", got.ObservedBy)
+	require.NotNil(t, got.ValueSize)
+	assert.Equal(t, 24, *got.ValueSize)
+	require.NotNil(t, got.HTTPOnly)
+	assert.True(t, *got.HTTPOnly)
+	require.NotNil(t, got.Secure)
+	assert.True(t, *got.Secure)
+	require.NotNil(t, got.SameSite)
+	assert.Equal(t, "LAX", *got.SameSite)
+	require.NotNil(t, got.Partitioned)
+	assert.True(t, *got.Partitioned)
+	require.NotNil(t, got.SetByURL)
+	assert.Equal(t, "https://tracker.example/set", *got.SetByURL)
+}
+
+type detectedTrackerCookie struct {
+	valueSize   int
+	httpOnly    bool
+	secure      bool
+	sameSite    string
+	partitioned bool
+	setByURL    string
+}
+
+func seedDetectedTracker(
+	t *testing.T,
+	bannerID string,
+	patternID string,
+	identifier string,
+	observedBy coredata.DetectedTrackerObserver,
+	cookie *detectedTrackerCookie,
+) {
+	t.Helper()
+
+	patternGID, err := gid.ParseGID(patternID)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	conn := dialTestPg(t, ctx)
+	t.Cleanup(func() { _ = conn.Close(ctx) })
+
+	id := gid.New(patternGID.TenantID(), coredata.DetectedTrackerEntityType)
+	now := time.Now().UTC()
+
+	var (
+		valueSize   *int
+		httpOnly    *bool
+		secure      *bool
+		sameSite    *string
+		partitioned *bool
+		setByURL    *string
+		source      = string(coredata.CookieSourceScript)
+	)
+
+	if cookie != nil {
+		source = string(coredata.CookieSourceHTTP)
+		valueSize = &cookie.valueSize
+		httpOnly = &cookie.httpOnly
+		secure = &cookie.secure
+		sameSite = &cookie.sameSite
+		partitioned = &cookie.partitioned
+		setByURL = &cookie.setByURL
+	}
+
+	_, err = conn.Exec(
+		ctx,
+		`
+		INSERT INTO detected_trackers (
+			id, tenant_id, cookie_banner_id, tracker_pattern_id, tracker_type,
+			identifier, source, observed_by, value_size, http_only, secure,
+			same_site, partitioned, set_by_url, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, 'COOKIE',
+			$5, $6, $7, $8, $9, $10,
+			$11, $12, $13, $14, $15
+		)
+	`,
+		id,
+		patternGID.TenantID(),
+		bannerID,
+		patternID,
+		identifier,
+		source,
+		observedBy,
+		valueSize,
+		httpOnly,
+		secure,
+		sameSite,
+		partitioned,
+		setByURL,
+		now,
+		now,
+	)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		cleanupConn := dialTestPg(t, cleanupCtx)
+
+		defer func() { _ = cleanupConn.Close(cleanupCtx) }()
+
+		_, err := cleanupConn.Exec(cleanupCtx, `DELETE FROM detected_trackers WHERE id = $1`, id)
+		assert.NoError(t, err, "cleanup: cannot delete seeded detected tracker %s", id)
+	})
+}
+
+func TestTrackerPattern_SourceCookieBanner(t *testing.T) {
+	t.Parallel()
+
+	const query = `
+		query TrackerPatternSourceBanner($id: ID!) {
+			node(id: $id) {
+				__typename
+				... on TrackerPattern {
+					source
+					sourceCookieBanner { id }
+				}
+			}
+		}
+	`
+
+	t.Run("null when the source was observed on this banner", func(t *testing.T) {
+		t.Parallel()
+		owner := testutil.NewClient(t, testutil.RoleOwner)
+
+		bannerID := factory.CreateCookieBanner(owner)
+		categoryID := factory.CreateCookieCategory(owner, bannerID)
+		patternID := factory.CreateTrackerPattern(owner, categoryID)
+		setTrackerPatternSource(t, patternID, coredata.CookieSourceScript)
+
+		var result struct {
+			Node struct {
+				Source             *string `json:"source"`
+				SourceCookieBanner *struct {
+					ID string `json:"id"`
+				} `json:"sourceCookieBanner"`
+			} `json:"node"`
+		}
+
+		err := owner.Execute(query, map[string]any{"id": patternID}, &result)
+		require.NoError(t, err)
+		require.NotNil(t, result.Node.Source)
+		assert.Equal(t, string(coredata.CookieSourceScript), *result.Node.Source)
+		assert.Nil(t, result.Node.SourceCookieBanner)
+	})
+
+	t.Run("the sibling banner that promoted the source", func(t *testing.T) {
+		t.Parallel()
+		owner := testutil.NewClient(t, testutil.RoleOwner)
+
+		bannerID := factory.CreateCookieBanner(owner)
+		siblingID := factory.CreateCookieBanner(owner, factory.Attrs{
+			"origin": "https://sibling.example.com",
+		})
+		categoryID := factory.CreateCookieCategory(owner, bannerID)
+		patternID := factory.CreateTrackerPattern(owner, categoryID)
+		setSourceCookieBanner(t, patternID, siblingID)
+
+		var result struct {
+			Node struct {
+				SourceCookieBanner *struct {
+					ID string `json:"id"`
+				} `json:"sourceCookieBanner"`
+			} `json:"node"`
+		}
+
+		err := owner.Execute(query, map[string]any{"id": patternID}, &result)
+		require.NoError(t, err)
+		require.NotNil(t, result.Node.SourceCookieBanner)
+		assert.Equal(t, siblingID, result.Node.SourceCookieBanner.ID)
+	})
+}
+
+func setTrackerPatternSource(t *testing.T, patternID string, source coredata.CookieSource) {
+	t.Helper()
+
+	ctx := context.Background()
+	conn := dialTestPg(t, ctx)
+	t.Cleanup(func() { _ = conn.Close(ctx) })
+
+	_, err := conn.Exec(ctx, `
+		UPDATE tracker_patterns
+		SET source = $1
+		WHERE id = $2
+		  AND source_cookie_banner_id IS NULL
+	`, source, patternID)
+	require.NoError(t, err)
+}
+
+func setSourceCookieBanner(t *testing.T, patternID string, bannerID string) {
+	t.Helper()
+
+	ctx := context.Background()
+	conn := dialTestPg(t, ctx)
+	t.Cleanup(func() { _ = conn.Close(ctx) })
+
+	_, err := conn.Exec(ctx, `
+		UPDATE tracker_patterns
+		SET source_cookie_banner_id = $1
+		WHERE id = $2
+	`, bannerID, patternID)
+	require.NoError(t, err)
+}
+
 func seedCommonTrackerPattern(t *testing.T) gid.GID {
+	t.Helper()
+
+	return seedCommonTrackerPatternWithAttribution(t, coredata.CommonTrackerPatternAttributionUndetermined)
+}
+
+func seedCommonTrackerPatternWithAttribution(
+	t *testing.T,
+	attribution coredata.CommonTrackerPatternAttribution,
+) gid.GID {
 	t.Helper()
 
 	ctx := context.Background()
@@ -671,7 +1088,7 @@ func seedCommonTrackerPattern(t *testing.T) gid.GID {
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 		)
-	`, id, "COOKIE", "e2e_common_"+id.String(), "EXACT", "Seeded catalog description", 1.0, coredata.CommonTrackerPatternAttributionUndetermined, 0, now, now)
+	`, id, "COOKIE", "e2e_common_"+id.String(), "EXACT", "Seeded catalog description", 1.0, attribution, 0, now, now)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -700,108 +1117,4 @@ func linkTrackerPatternToCommon(t *testing.T, patternID string, commonID gid.GID
 		UPDATE tracker_patterns SET common_tracker_pattern_id = $1 WHERE id = $2
 	`, commonID, patternID)
 	require.NoError(t, err)
-}
-
-func TestTrackerPattern_RBAC(t *testing.T) {
-	t.Parallel()
-
-	t.Run("viewer cannot create pattern", func(t *testing.T) {
-		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
-		viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
-
-		bannerID := factory.CreateCookieBanner(owner)
-		categoryID := factory.CreateCookieCategory(owner, bannerID)
-
-		_, err := viewer.Do(`
-			mutation CreateTrackerPattern($input: CreateTrackerPatternInput!) {
-				createTrackerPattern(input: $input) {
-					trackerPatternEdge { node { id } }
-					cookieBanner { id }
-				}
-			}
-		`, map[string]any{
-			"input": map[string]any{
-				"cookieCategoryId": categoryID,
-				"pattern":          "test_viewer",
-				"matchType":        "EXACT",
-				"displayName":      "Test Viewer Pattern",
-				"description":      "Should fail",
-			},
-		})
-		testutil.RequireForbiddenError(t, err, "viewer should not be able to create tracker pattern")
-	})
-
-	t.Run("viewer cannot update pattern", func(t *testing.T) {
-		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
-		viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
-
-		bannerID := factory.CreateCookieBanner(owner)
-		categoryID := factory.CreateCookieCategory(owner, bannerID)
-		patternID := factory.CreateTrackerPattern(owner, categoryID)
-
-		_, err := viewer.Do(`
-			mutation UpdateTrackerPattern($input: UpdateTrackerPatternInput!) {
-				updateTrackerPattern(input: $input) {
-					trackerPattern { id }
-					cookieBanner { id }
-				}
-			}
-		`, map[string]any{
-			"input": map[string]any{
-				"trackerPatternId": patternID,
-				"description":      "Updated by Viewer",
-			},
-		})
-		testutil.RequireForbiddenError(t, err, "viewer should not be able to update tracker pattern")
-	})
-
-	t.Run("viewer cannot delete pattern", func(t *testing.T) {
-		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
-		viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
-
-		bannerID := factory.CreateCookieBanner(owner)
-		categoryID := factory.CreateCookieCategory(owner, bannerID)
-		patternID := factory.CreateTrackerPattern(owner, categoryID)
-
-		_, err := viewer.Do(`
-			mutation DeleteTrackerPattern($input: DeleteTrackerPatternInput!) {
-				deleteTrackerPattern(input: $input) {
-					deletedTrackerPatternId
-					cookieBanner { id }
-				}
-			}
-		`, map[string]any{
-			"input": map[string]any{"trackerPatternId": patternID},
-		})
-		testutil.RequireForbiddenError(t, err, "viewer should not be able to delete tracker pattern")
-	})
-
-	t.Run("viewer cannot move pattern", func(t *testing.T) {
-		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
-		viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
-
-		bannerID := factory.CreateCookieBanner(owner)
-		categoryA := factory.CreateCookieCategory(owner, bannerID, factory.Attrs{"slug": "rbac-move-a"})
-		categoryB := factory.CreateCookieCategory(owner, bannerID, factory.Attrs{"slug": "rbac-move-b"})
-		patternID := factory.CreateTrackerPattern(owner, categoryA)
-
-		_, err := viewer.Do(`
-			mutation MoveTrackerPatternToCategory($input: MoveTrackerPatternToCategoryInput!) {
-				moveTrackerPatternToCategory(input: $input) {
-					trackerPattern { id }
-					cookieBanner { id }
-				}
-			}
-		`, map[string]any{
-			"input": map[string]any{
-				"trackerPatternId":       patternID,
-				"targetCookieCategoryId": categoryB,
-			},
-		})
-		testutil.RequireForbiddenError(t, err, "viewer should not be able to move tracker pattern")
-	})
 }

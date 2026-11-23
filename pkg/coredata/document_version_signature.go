@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -52,6 +58,11 @@ type (
 	}
 
 	DocumentVersionSignaturesWithPeople []*DocumentVersionSignatureWithPeople
+
+	SignatureRequestRecipient struct {
+		OrganizationID gid.GID `db:"organization_id"`
+		SignedBy       gid.GID `db:"signed_by_profile_id"`
+	}
 )
 
 func (pvs DocumentVersionSignature) CursorKey(orderBy DocumentVersionSignatureOrderField) page.CursorKey {
@@ -297,8 +308,7 @@ INSERT INTO document_version_signatures (
 	requested_at,
 	electronic_signature_id,
 	created_at,
-	updated_at,
-	notification_count
+	updated_at
 ) VALUES (
  	@id,
 	@tenant_id,
@@ -310,8 +320,7 @@ INSERT INTO document_version_signatures (
 	@requested_at,
 	@electronic_signature_id,
 	@created_at,
-	@updated_at,
-	@notification_count
+	@updated_at
 )
 `
 
@@ -327,7 +336,6 @@ INSERT INTO document_version_signatures (
 		"electronic_signature_id": pvs.ElectronicSignatureID,
 		"created_at":              pvs.CreatedAt,
 		"updated_at":              pvs.UpdatedAt,
-		"notification_count":      0,
 	}
 
 	_, err := conn.Exec(ctx, q, args)
@@ -400,238 +408,6 @@ WHERE
 	*pvss = documentVersionSignatures
 
 	return nil
-}
-
-// documentNotificationMaxCount caps how many emails a signature/approval
-// request gets: the first notice plus three reminders. A request is due for its
-// next email once it is past its scheduled offset — the first email after the
-// debounce delay, then reminders at 1x, 2x and 3x the reminder interval after
-// the previous email — and stops once it reaches this cap.
-const documentNotificationMaxCount = 4
-
-func remainingNotificationIDs(all []gid.GID, claimed []gid.GID) []gid.GID {
-	claimedSet := make(map[gid.GID]struct{}, len(claimed))
-	for _, id := range claimed {
-		claimedSet[id] = struct{}{}
-	}
-
-	rest := make([]gid.GID, 0, len(all))
-	for _, id := range all {
-		if _, ok := claimedSet[id]; ok {
-			continue
-		}
-
-		rest = append(rest, id)
-	}
-
-	return rest
-}
-
-// LoadNextDueGroupForNotification loads every still-REQUESTED signature for the
-// next (organization, signatory) group that has at least one request due for a
-// notification, so the whole group can be emailed together. A request is due
-// once it is past its scheduled offset (see documentNotificationMaxCount) and
-// has not reached the cap. The receiver is left empty when no group is due.
-func (pvss *DocumentVersionSignatures) LoadNextDueGroupForNotification(
-	ctx context.Context,
-	conn pg.Querier,
-	now time.Time,
-	debounceBefore time.Time,
-	reminderInterval time.Duration,
-) error {
-	q := `
-WITH next_group AS (
-	SELECT
-		organization_id,
-		signed_by_profile_id
-	FROM
-		document_version_signatures
-	WHERE
-		state = @state
-		AND notification_count < @max_notifications
-		AND (
-			(notification_count = 0 AND requested_at < @debounce_before)
-			OR (notification_count > 0 AND last_notified_at < @now::timestamptz - make_interval(secs => @reminder_interval_seconds * notification_count))
-		)
-		AND EXISTS (
-			SELECT 1
-			FROM document_versions dv
-			JOIN documents doc ON doc.id = dv.document_id
-			WHERE dv.id = document_version_signatures.document_version_id
-				AND doc.deleted_at IS NULL
-				AND doc.archived_at IS NULL
-		)
-		AND EXISTS (
-			SELECT 1
-			FROM iam_membership_profiles p
-			WHERE p.id = document_version_signatures.signed_by_profile_id
-				AND p.state = @recipient_state::membership_state
-				AND (p.contract_end_date IS NULL OR p.contract_end_date >= @now::date)
-		)
-	GROUP BY
-		organization_id,
-		signed_by_profile_id
-	ORDER BY
-		organization_id,
-		signed_by_profile_id
-	LIMIT 1
-)
-SELECT
-	s.id,
-	s.organization_id,
-	s.document_version_id,
-	s.state,
-	s.signed_by_profile_id,
-	s.signed_at,
-	s.requested_at,
-	s.electronic_signature_id,
-	s.created_at,
-	s.updated_at
-FROM
-	document_version_signatures s
-INNER JOIN next_group g
-	ON g.organization_id = s.organization_id
-	AND g.signed_by_profile_id = s.signed_by_profile_id
-WHERE
-	s.state = @state
-	AND s.notification_count < @max_notifications
-	AND EXISTS (
-		SELECT 1
-		FROM document_versions dv
-		JOIN documents doc ON doc.id = dv.document_id
-		WHERE dv.id = s.document_version_id
-			AND doc.deleted_at IS NULL
-			AND doc.archived_at IS NULL
-	)
-ORDER BY
-	s.document_version_id
-`
-
-	args := pgx.StrictNamedArgs{
-		"state":                     DocumentVersionSignatureStateRequested,
-		"recipient_state":           ProfileStateActive,
-		"max_notifications":         documentNotificationMaxCount,
-		"now":                       now,
-		"debounce_before":           debounceBefore,
-		"reminder_interval_seconds": reminderInterval.Seconds(),
-	}
-
-	rows, err := conn.Query(ctx, q, args)
-	if err != nil {
-		return fmt.Errorf("cannot query due signatures for notification: %w", err)
-	}
-
-	signatures, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[DocumentVersionSignature])
-	if err != nil {
-		return fmt.Errorf("cannot collect due signatures for notification: %w", err)
-	}
-
-	*pvss = signatures
-
-	return nil
-}
-
-// ClaimForNotification claims the receiver's signatures that are individually
-// due for a notification and returns their ids. The conditional update doubles
-// as the claim, so concurrent workers never email the same group twice. Callers
-// advance the rest of the group with BumpRemainingForNotification in the same
-// transaction.
-func (pvss DocumentVersionSignatures) ClaimForNotification(
-	ctx context.Context,
-	conn pg.Tx,
-	now time.Time,
-	debounceBefore time.Time,
-	reminderInterval time.Duration,
-) ([]gid.GID, error) {
-	ids := make([]gid.GID, len(pvss))
-	for i, signature := range pvss {
-		ids[i] = signature.ID
-	}
-
-	q := `
-UPDATE document_version_signatures
-SET
-	notification_count = notification_count + 1,
-	last_notified_at = @now
-WHERE
-	id = ANY(@ids::text[])
-	AND state = @state
-	AND notification_count < @max_notifications
-	AND (
-		(notification_count = 0 AND requested_at < @debounce_before)
-		OR (notification_count > 0 AND last_notified_at < @now::timestamptz - make_interval(secs => @reminder_interval_seconds * notification_count))
-	)
-RETURNING id
-`
-
-	rows, err := conn.Query(ctx, q, pgx.StrictNamedArgs{
-		"ids":                       ids,
-		"state":                     DocumentVersionSignatureStateRequested,
-		"max_notifications":         documentNotificationMaxCount,
-		"now":                       now,
-		"debounce_before":           debounceBefore,
-		"reminder_interval_seconds": reminderInterval.Seconds(),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("cannot claim due signatures for notification: %w", err)
-	}
-
-	claimed, err := pgx.CollectRows(rows, pgx.RowTo[gid.GID])
-	if err != nil {
-		return nil, fmt.Errorf("cannot collect claimed signatures for notification: %w", err)
-	}
-
-	return claimed, nil
-}
-
-// BumpRemainingForNotification advances the notification schedule for the
-// still-pending signatures in the group that were not individually claimed, so
-// the whole emailed list moves forward together. It must run in the same
-// transaction as ClaimForNotification.
-func (pvss DocumentVersionSignatures) BumpRemainingForNotification(
-	ctx context.Context,
-	conn pg.Tx,
-	claimed []gid.GID,
-	now time.Time,
-) ([]gid.GID, error) {
-	ids := make([]gid.GID, len(pvss))
-	for i, signature := range pvss {
-		ids[i] = signature.ID
-	}
-
-	rest := remainingNotificationIDs(ids, claimed)
-	if len(rest) == 0 {
-		return nil, nil
-	}
-
-	q := `
-UPDATE document_version_signatures
-SET
-	notification_count = notification_count + 1,
-	last_notified_at = @now
-WHERE
-	id = ANY(@ids::text[])
-	AND state = @state
-	AND notification_count < @max_notifications
-RETURNING id
-`
-
-	rows, err := conn.Query(ctx, q, pgx.StrictNamedArgs{
-		"ids":               rest,
-		"state":             DocumentVersionSignatureStateRequested,
-		"max_notifications": documentNotificationMaxCount,
-		"now":               now,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("cannot bump remaining signatures for notification: %w", err)
-	}
-
-	bumped, err := pgx.CollectRows(rows, pgx.RowTo[gid.GID])
-	if err != nil {
-		return nil, fmt.Errorf("cannot collect bumped signatures for notification: %w", err)
-	}
-
-	return bumped, nil
 }
 
 func (pvs *DocumentVersionSignature) Update(
@@ -775,7 +551,7 @@ func (pvss *DocumentVersionSignatures) DeleteRequestedByDocumentIDBelowMajor(
 	scope Scoper,
 	documentID gid.GID,
 	major int,
-) error {
+) ([]SignatureRequestRecipient, error) {
 	q := `
 DELETE FROM document_version_signatures
 WHERE
@@ -787,6 +563,9 @@ WHERE
 		WHERE document_id = @document_id
 			AND major < @major
 	)
+RETURNING
+	organization_id,
+	signed_by_profile_id
 `
 
 	q = fmt.Sprintf(q, scope.SQLFragment())
@@ -798,8 +577,100 @@ WHERE
 	}
 	maps.Copy(args, scope.SQLArguments())
 
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return nil, fmt.Errorf("cannot delete requested document version signatures from previous major versions: %w", err)
+	}
+
+	deleted, err := pgx.CollectRows(rows, pgx.RowToStructByName[SignatureRequestRecipient])
+	if err != nil {
+		return nil, fmt.Errorf("cannot collect cancelled signature requests: %w", err)
+	}
+
+	return deleted, nil
+}
+
+func (pvss *DocumentVersionSignatures) LoadRequestedByDocumentID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	documentID gid.GID,
+) error {
+	q := `
+SELECT
+	document_version_signatures.id,
+	document_version_signatures.organization_id,
+	document_version_signatures.document_version_id,
+	document_version_signatures.state,
+	document_version_signatures.signed_by_profile_id,
+	document_version_signatures.signed_at,
+	document_version_signatures.requested_at,
+	document_version_signatures.electronic_signature_id,
+	document_version_signatures.created_at,
+	document_version_signatures.updated_at
+FROM
+	document_version_signatures
+WHERE
+	%s
+	AND state = @state
+	AND document_version_id IN (
+		SELECT id
+		FROM document_versions
+		WHERE document_id = @document_id
+	)
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"document_id": documentID,
+		"state":       DocumentVersionSignatureStateRequested,
+	}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query requested document version signatures: %w", err)
+	}
+
+	documentVersionSignatures, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[DocumentVersionSignature])
+	if err != nil {
+		return fmt.Errorf("cannot collect requested document version signatures: %w", err)
+	}
+
+	*pvss = documentVersionSignatures
+
+	return nil
+}
+
+func (pvss *DocumentVersionSignatures) DeleteRequestedByDocumentID(
+	ctx context.Context,
+	conn pg.Tx,
+	scope Scoper,
+	documentID gid.GID,
+) error {
+	q := `
+DELETE FROM document_version_signatures
+WHERE
+	%s
+	AND state = @state
+	AND document_version_id IN (
+		SELECT id
+		FROM document_versions
+		WHERE document_id = @document_id
+	)
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"document_id": documentID,
+		"state":       DocumentVersionSignatureStateRequested,
+	}
+	maps.Copy(args, scope.SQLArguments())
+
 	if _, err := conn.Exec(ctx, q, args); err != nil {
-		return fmt.Errorf("cannot delete requested document version signatures from previous major versions: %w", err)
+		return fmt.Errorf("cannot delete requested document version signatures: %w", err)
 	}
 
 	return nil
@@ -985,4 +856,88 @@ WHERE
 	}
 
 	return count, nil
+}
+
+func (c *DocumentVersionSignatures) DeleteByOrganizationID(
+	ctx context.Context,
+	conn pg.Tx,
+	scope Scoper,
+	organizationID gid.GID,
+) error {
+	q := `
+DELETE FROM document_version_signatures
+WHERE
+	%s
+	AND organization_id = @organization_id
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"organization_id": organizationID}
+	maps.Copy(args, scope.SQLArguments())
+
+	_, err := conn.Exec(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot delete document version signatures: %w", err)
+	}
+
+	return nil
+}
+
+func (pvss *DocumentVersionSignatures) LoadByStateAndSignatory(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	signatoryID gid.GID,
+	states []DocumentVersionSignatureState,
+	cursor *page.Cursor[DocumentVersionSignatureOrderField],
+) error {
+	q := `
+SELECT
+	id,
+	organization_id,
+	document_version_id,
+	state,
+	signed_by_profile_id,
+	signed_at,
+	requested_at,
+	electronic_signature_id,
+	created_at,
+	updated_at
+FROM
+	document_version_signatures
+WHERE
+	%s
+	AND signed_by_profile_id = @signatory_id
+	AND state::text = ANY(@states::text[])
+	AND %s
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment(), cursor.SQLFragment())
+
+	stateValues := make([]string, len(states))
+	for i, state := range states {
+		stateValues[i] = state.String()
+	}
+
+	args := pgx.StrictNamedArgs{
+		"signatory_id": signatoryID,
+		"states":       stateValues,
+	}
+	maps.Copy(args, scope.SQLArguments())
+	maps.Copy(args, cursor.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query document version signatures by state and signatory: %w", err)
+	}
+
+	signatures, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[DocumentVersionSignature])
+	if err != nil {
+		return fmt.Errorf("cannot collect document version signatures by state and signatory: %w", err)
+	}
+
+	*pvss = signatures
+
+	return nil
 }

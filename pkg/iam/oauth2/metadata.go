@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package oauth2
 
@@ -23,27 +29,28 @@ type (
 	// ServerMetadata represents the OpenID Connect Discovery 1.0 / RFC 8414
 	// authorization server metadata document.
 	ServerMetadata struct {
-		Issuer                                    uri.URI                                        `json:"issuer"`
-		AuthorizationEndpoint                     uri.URI                                        `json:"authorization_endpoint"`
-		TokenEndpoint                             uri.URI                                        `json:"token_endpoint"`
-		UserinfoEndpoint                          uri.URI                                        `json:"userinfo_endpoint"`
-		JwksURI                                   uri.URI                                        `json:"jwks_uri"`
-		RegistrationEndpoint                      uri.URI                                        `json:"registration_endpoint"`
-		IntrospectionEndpoint                     uri.URI                                        `json:"introspection_endpoint"`
-		RevocationEndpoint                        uri.URI                                        `json:"revocation_endpoint"`
-		DeviceAuthorizationEndpoint               uri.URI                                        `json:"device_authorization_endpoint"`
-		ScopesSupported                           []coredata.OAuth2Scope                         `json:"scopes_supported"`
-		ProtectedResources                        []uri.URI                                      `json:"protected_resources,omitempty"`
-		ResponseTypesSupported                    []coredata.OAuth2ResponseType                  `json:"response_types_supported"`
-		GrantTypesSupported                       []coredata.OAuth2GrantType                     `json:"grant_types_supported"`
-		TokenEndpointAuthMethodsSupported         []coredata.OAuth2ClientTokenEndpointAuthMethod `json:"token_endpoint_auth_methods_supported"`
-		RevocationEndpointAuthMethodsSupported    []coredata.OAuth2ClientTokenEndpointAuthMethod `json:"revocation_endpoint_auth_methods_supported"`
-		IntrospectionEndpointAuthMethodsSupported []coredata.OAuth2ClientTokenEndpointAuthMethod `json:"introspection_endpoint_auth_methods_supported"`
-		SubjectTypesSupported                     []coredata.OAuth2SubjectType                   `json:"subject_types_supported"`
-		IDTokenSigningAlgValuesSupported          []coredata.OAuth2SigningAlgorithm              `json:"id_token_signing_alg_values_supported"`
-		CodeChallengeMethodsSupported             []coredata.OAuth2CodeChallengeMethod           `json:"code_challenge_methods_supported"`
-		ClaimsSupported                           []coredata.OAuth2Claim                         `json:"claims_supported"`
-		ClientIDMetadataDocumentSupported         bool                                           `json:"client_id_metadata_document_supported"`
+		Issuer                                        uri.URI                                        `json:"issuer"`
+		AuthorizationEndpoint                         uri.URI                                        `json:"authorization_endpoint"`
+		TokenEndpoint                                 uri.URI                                        `json:"token_endpoint"`
+		UserinfoEndpoint                              uri.URI                                        `json:"userinfo_endpoint"`
+		JwksURI                                       uri.URI                                        `json:"jwks_uri"`
+		RegistrationEndpoint                          uri.URI                                        `json:"registration_endpoint"`
+		IntrospectionEndpoint                         uri.URI                                        `json:"introspection_endpoint"`
+		RevocationEndpoint                            uri.URI                                        `json:"revocation_endpoint"`
+		DeviceAuthorizationEndpoint                   uri.URI                                        `json:"device_authorization_endpoint"`
+		ScopesSupported                               []coredata.OAuth2Scope                         `json:"scopes_supported"`
+		ProtectedResources                            []uri.URI                                      `json:"protected_resources,omitempty"`
+		ResponseTypesSupported                        []coredata.OAuth2ResponseType                  `json:"response_types_supported"`
+		GrantTypesSupported                           []coredata.OAuth2GrantType                     `json:"grant_types_supported"`
+		TokenEndpointAuthMethodsSupported             []coredata.OAuth2ClientTokenEndpointAuthMethod `json:"token_endpoint_auth_methods_supported"`
+		RevocationEndpointAuthMethodsSupported        []coredata.OAuth2ClientTokenEndpointAuthMethod `json:"revocation_endpoint_auth_methods_supported"`
+		IntrospectionEndpointAuthMethodsSupported     []coredata.OAuth2ClientTokenEndpointAuthMethod `json:"introspection_endpoint_auth_methods_supported"`
+		SubjectTypesSupported                         []coredata.OAuth2SubjectType                   `json:"subject_types_supported"`
+		IDTokenSigningAlgValuesSupported              []coredata.OAuth2SigningAlgorithm              `json:"id_token_signing_alg_values_supported"`
+		CodeChallengeMethodsSupported                 []coredata.OAuth2CodeChallengeMethod           `json:"code_challenge_methods_supported"`
+		ClaimsSupported                               []coredata.OAuth2Claim                         `json:"claims_supported"`
+		ClientIDMetadataDocumentSupported             bool                                           `json:"client_id_metadata_document_supported"`
+		AuthorizationResponseIssuerParameterSupported bool                                           `json:"authorization_response_iss_parameter_supported"`
 	}
 
 	// Endpoints holds the endpoint URLs for the OIDC discovery document.
@@ -117,6 +124,7 @@ func NewMetadata(issuer uri.URI, endpoints Endpoints, registeredScopes []coredat
 			coredata.OAuth2ClaimEmailVerified,
 			coredata.OAuth2ClaimName,
 		},
-		ClientIDMetadataDocumentSupported: true,
+		ClientIDMetadataDocumentSupported:             true,
+		AuthorizationResponseIssuerParameterSupported: true,
 	}
 }

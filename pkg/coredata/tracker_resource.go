@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -31,19 +37,19 @@ import (
 
 type (
 	TrackerResource struct {
-		ID               gid.GID             `db:"id"`
-		OrganizationID   gid.GID             `db:"organization_id"`
-		CookieBannerID   gid.GID             `db:"cookie_banner_id"`
-		CookieCategoryID gid.GID             `db:"cookie_category_id"`
-		ResourceType     TrackerResourceType `db:"resource_type"`
-		Origin           string              `db:"origin"`
-		Path             string              `db:"path"`
-		DisplayName      string              `db:"display_name"`
-		Description      string              `db:"description"`
-		Excluded         bool                `db:"excluded"`
-		LastDetectedAt   *time.Time          `db:"last_detected_at"`
-		CreatedAt        time.Time           `db:"created_at"`
-		UpdatedAt        time.Time           `db:"updated_at"`
+		ID                 gid.GID             `db:"id"`
+		OrganizationID     gid.GID             `db:"organization_id"`
+		CookieBannerID     gid.GID             `db:"cookie_banner_id"`
+		CookieCategoryID   gid.GID             `db:"cookie_category_id"`
+		ResourceType       TrackerResourceType `db:"resource_type"`
+		Origin             string              `db:"origin"`
+		Path               string              `db:"path"`
+		DisplayName        string              `db:"display_name"`
+		Description        string              `db:"description"`
+		Excluded           bool                `db:"excluded"`
+		CookieBannerScanID *gid.GID            `db:"cookie_banner_scan_id"`
+		CreatedAt          time.Time           `db:"created_at"`
+		UpdatedAt          time.Time           `db:"updated_at"`
 	}
 
 	TrackerResources []*TrackerResource
@@ -53,12 +59,6 @@ func (tr *TrackerResource) CursorKey(field TrackerResourceOrderField) page.Curso
 	switch field {
 	case TrackerResourceOrderFieldCreatedAt:
 		return page.NewCursorKey(tr.ID, tr.CreatedAt)
-	case TrackerResourceOrderFieldLastDetectedAt:
-		if tr.LastDetectedAt == nil {
-			return page.NewCursorKey(tr.ID, time.Time{})
-		}
-
-		return page.NewCursorKey(tr.ID, *tr.LastDetectedAt)
 	case TrackerResourceOrderFieldOrigin:
 		return page.NewCursorKey(tr.ID, tr.Origin)
 	case TrackerResourceOrderFieldUpdatedAt:
@@ -125,7 +125,7 @@ SELECT
 	display_name,
 	description,
 	excluded,
-	last_detected_at,
+	cookie_banner_scan_id,
 	created_at,
 	updated_at
 FROM
@@ -181,7 +181,7 @@ SELECT
 	display_name,
 	description,
 	excluded,
-	last_detected_at,
+	cookie_banner_scan_id,
 	created_at,
 	updated_at
 FROM
@@ -242,7 +242,7 @@ INSERT INTO tracker_resources (
 	display_name,
 	description,
 	excluded,
-	last_detected_at,
+	cookie_banner_scan_id,
 	created_at,
 	updated_at
 ) VALUES (
@@ -257,27 +257,27 @@ INSERT INTO tracker_resources (
 	@display_name,
 	@description,
 	@excluded,
-	@last_detected_at,
+	@cookie_banner_scan_id,
 	@created_at,
 	@updated_at
 )
 `
 
 	args := pgx.StrictNamedArgs{
-		"id":                 tr.ID,
-		"tenant_id":          scope.GetTenantID(),
-		"organization_id":    tr.OrganizationID,
-		"cookie_banner_id":   tr.CookieBannerID,
-		"cookie_category_id": tr.CookieCategoryID,
-		"resource_type":      tr.ResourceType,
-		"origin":             tr.Origin,
-		"path":               tr.Path,
-		"display_name":       tr.DisplayName,
-		"description":        tr.Description,
-		"excluded":           tr.Excluded,
-		"last_detected_at":   tr.LastDetectedAt,
-		"created_at":         tr.CreatedAt,
-		"updated_at":         tr.UpdatedAt,
+		"id":                    tr.ID,
+		"tenant_id":             scope.GetTenantID(),
+		"organization_id":       tr.OrganizationID,
+		"cookie_banner_id":      tr.CookieBannerID,
+		"cookie_category_id":    tr.CookieCategoryID,
+		"resource_type":         tr.ResourceType,
+		"origin":                tr.Origin,
+		"path":                  tr.Path,
+		"display_name":          tr.DisplayName,
+		"description":           tr.Description,
+		"excluded":              tr.Excluded,
+		"cookie_banner_scan_id": tr.CookieBannerScanID,
+		"created_at":            tr.CreatedAt,
+		"updated_at":            tr.UpdatedAt,
 	}
 
 	_, err := tx.Exec(ctx, q, args)
@@ -294,8 +294,9 @@ INSERT INTO tracker_resources (
 	return nil
 }
 
-// Upsert inserts a new tracker resource or bumps last_detected_at on the
-// existing row matching (cookie_banner_id, resource_type, origin, path).
+// Upsert inserts a new tracker resource. Repeat reports of the same
+// (cookie_banner_id, resource_type, origin, path) are a no-op, except
+// that a non-nil CookieBannerScanID is stamped on the existing row.
 // Returns true when a new row was inserted.
 func (tr *TrackerResource) Upsert(
 	ctx context.Context,
@@ -315,7 +316,7 @@ INSERT INTO tracker_resources (
 	display_name,
 	description,
 	excluded,
-	last_detected_at,
+	cookie_banner_scan_id,
 	created_at,
 	updated_at
 ) VALUES (
@@ -330,13 +331,15 @@ INSERT INTO tracker_resources (
 	@display_name,
 	@description,
 	@excluded,
-	@last_detected_at,
+	@cookie_banner_scan_id,
 	@created_at,
 	@updated_at
 )
-ON CONFLICT (cookie_banner_id, resource_type, origin, path) DO UPDATE SET
-	last_detected_at = GREATEST(tracker_resources.last_detected_at, EXCLUDED.last_detected_at),
-	updated_at = EXCLUDED.updated_at
+ON CONFLICT (cookie_banner_id, resource_type, origin, path) DO UPDATE
+	SET
+		cookie_banner_scan_id = EXCLUDED.cookie_banner_scan_id,
+		updated_at = EXCLUDED.updated_at
+	WHERE EXCLUDED.cookie_banner_scan_id IS NOT NULL
 RETURNING
 	id,
 	organization_id,
@@ -348,7 +351,7 @@ RETURNING
 	display_name,
 	description,
 	excluded,
-	last_detected_at,
+	cookie_banner_scan_id,
 	created_at,
 	updated_at
 `
@@ -356,20 +359,20 @@ RETURNING
 	originalID := tr.ID
 
 	args := pgx.StrictNamedArgs{
-		"id":                 tr.ID,
-		"tenant_id":          scope.GetTenantID(),
-		"organization_id":    tr.OrganizationID,
-		"cookie_banner_id":   tr.CookieBannerID,
-		"cookie_category_id": tr.CookieCategoryID,
-		"resource_type":      tr.ResourceType,
-		"origin":             tr.Origin,
-		"path":               tr.Path,
-		"display_name":       tr.DisplayName,
-		"description":        tr.Description,
-		"excluded":           tr.Excluded,
-		"last_detected_at":   tr.LastDetectedAt,
-		"created_at":         tr.CreatedAt,
-		"updated_at":         tr.UpdatedAt,
+		"id":                    tr.ID,
+		"tenant_id":             scope.GetTenantID(),
+		"organization_id":       tr.OrganizationID,
+		"cookie_banner_id":      tr.CookieBannerID,
+		"cookie_category_id":    tr.CookieCategoryID,
+		"resource_type":         tr.ResourceType,
+		"origin":                tr.Origin,
+		"path":                  tr.Path,
+		"display_name":          tr.DisplayName,
+		"description":           tr.Description,
+		"excluded":              tr.Excluded,
+		"cookie_banner_scan_id": tr.CookieBannerScanID,
+		"created_at":            tr.CreatedAt,
+		"updated_at":            tr.UpdatedAt,
 	}
 
 	rows, err := tx.Query(ctx, q, args)
@@ -380,6 +383,10 @@ RETURNING
 
 	row, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[TrackerResource])
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+
 		return false, fmt.Errorf("cannot collect upsert result: %w", err)
 	}
 
@@ -400,7 +407,6 @@ SET
 	display_name = @display_name,
 	description = @description,
 	excluded = @excluded,
-	last_detected_at = @last_detected_at,
 	updated_at = @updated_at
 WHERE
 	%s
@@ -415,7 +421,6 @@ WHERE
 		"display_name":       tr.DisplayName,
 		"description":        tr.Description,
 		"excluded":           tr.Excluded,
-		"last_detected_at":   tr.LastDetectedAt,
 		"updated_at":         tr.UpdatedAt,
 	}
 	maps.Copy(args, scope.SQLArguments())
@@ -477,7 +482,7 @@ SELECT
 	display_name,
 	description,
 	excluded,
-	last_detected_at,
+	cookie_banner_scan_id,
 	created_at,
 	updated_at
 FROM
@@ -514,6 +519,97 @@ WHERE
 	resources, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[TrackerResource])
 	if err != nil {
 		return fmt.Errorf("cannot collect uncategorised tracker resources: %w", err)
+	}
+
+	*trs = resources
+
+	return nil
+}
+
+// CountByCookieBannerScanID counts resources the scan stamped, skipping
+// excluded rows so a hidden resource does not inflate the scan total.
+func (trs *TrackerResources) CountByCookieBannerScanID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	scanID gid.GID,
+) (int, error) {
+	q := `
+SELECT
+	COUNT(id)
+FROM
+	tracker_resources
+WHERE
+	%s
+	AND cookie_banner_scan_id = @cookie_banner_scan_id
+	AND excluded = FALSE
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"cookie_banner_scan_id": scanID,
+	}
+	maps.Copy(args, scope.SQLArguments())
+
+	var count int
+	if err := conn.QueryRow(ctx, q, args).Scan(&count); err != nil {
+		return 0, fmt.Errorf("cannot count tracker resources by scan: %w", err)
+	}
+
+	return count, nil
+}
+
+// LoadByCookieBannerScanID lists resources the scan stamped, skipping
+// excluded rows. The cursor fragment ends in ORDER BY and LIMIT, so it
+// stays last.
+func (trs *TrackerResources) LoadByCookieBannerScanID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	scanID gid.GID,
+	cursor *page.Cursor[TrackerResourceOrderField],
+) error {
+	q := `
+SELECT
+	id,
+	organization_id,
+	cookie_banner_id,
+	cookie_category_id,
+	resource_type,
+	origin,
+	path,
+	display_name,
+	description,
+	excluded,
+	cookie_banner_scan_id,
+	created_at,
+	updated_at
+FROM
+	tracker_resources
+WHERE
+	%s
+	AND cookie_banner_scan_id = @cookie_banner_scan_id
+	AND excluded = FALSE
+	AND %s
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment(), cursor.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"cookie_banner_scan_id": scanID,
+	}
+	maps.Copy(args, scope.SQLArguments())
+	maps.Copy(args, cursor.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query tracker resources by scan: %w", err)
+	}
+
+	resources, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[TrackerResource])
+	if err != nil {
+		return fmt.Errorf("cannot collect tracker resources by scan: %w", err)
 	}
 
 	*trs = resources
@@ -584,7 +680,7 @@ SELECT
 	display_name,
 	description,
 	excluded,
-	last_detected_at,
+	cookie_banner_scan_id,
 	created_at,
 	updated_at
 FROM

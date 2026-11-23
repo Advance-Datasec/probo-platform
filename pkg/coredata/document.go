@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -29,22 +35,26 @@ import (
 	"go.probo.inc/probo/pkg/page"
 )
 
+var (
+	_ Searchable = (*Document)(nil)
+)
+
 type (
 	Document struct {
-		ID                    gid.GID               `db:"id"`
-		OrganizationID        gid.GID               `db:"organization_id"`
-		CurrentPublishedMajor *int                  `db:"current_published_major"`
-		CurrentPublishedMinor *int                  `db:"current_published_minor"`
-		TrustCenterVisibility TrustCenterVisibility `db:"trust_center_visibility"`
-		WriteMode             DocumentWriteMode     `db:"write_mode"`
-		Status                DocumentStatus        `db:"status"`
-		ArchivedAt            *time.Time            `db:"archived_at"`
-		CreatedAt             time.Time             `db:"created_at"`
-		UpdatedAt             time.Time             `db:"updated_at"`
-
-		// ordering only
-		Title        string       `db:"title"`
-		DocumentType DocumentType `db:"document_type"`
+		ID                    gid.GID                    `db:"id"`
+		OrganizationID        gid.GID                    `db:"organization_id"`
+		CurrentPublishedMajor *int                       `db:"current_published_major"`
+		CurrentPublishedMinor *int                       `db:"current_published_minor"`
+		WriteMode             DocumentWriteMode          `db:"write_mode"`
+		Status                DocumentStatus             `db:"status"`
+		Title                 string                     `db:"title"`
+		Classification        DocumentClassification     `db:"classification"`
+		DocumentType          DocumentType               `db:"document_type"`
+		Orientation           DocumentVersionOrientation `db:"orientation"`
+		Content               string                     `db:"content"`
+		CreatedAt             time.Time                  `db:"created_at"`
+		UpdatedAt             time.Time                  `db:"updated_at"`
+		ArchivedAt            *time.Time                 `db:"archived_at"`
 	}
 
 	Documents []*Document
@@ -63,6 +73,15 @@ func (p Document) CursorKey(orderBy DocumentOrderField) page.CursorKey {
 	}
 
 	panic(fmt.Sprintf("unsupported order by: %s", orderBy))
+}
+
+// ReadOnly reports whether collaborators must not change the document.
+func (d Document) ReadOnly() bool {
+	return d.ArchivedAt != nil || d.WriteMode == DocumentWriteModeGenerated
+}
+
+func (p Document) SearchText() []string {
+	return []string{p.Title}
 }
 
 // AuthorizationAttributes returns the authorization attributes for policy evaluation.
@@ -112,27 +131,23 @@ func (p *Document) LoadByID(
 	documentID gid.GID,
 ) error {
 	q := `
-WITH latest_versions AS (
-    SELECT DISTINCT ON (document_id) document_id, title, document_type
-    FROM document_versions
-    ORDER BY document_id, major DESC, minor DESC
-)
 SELECT
     documents.id,
     documents.organization_id,
     documents.current_published_major,
     documents.current_published_minor,
     documents.write_mode,
-    documents.trust_center_visibility,
     documents.status,
     documents.archived_at,
     documents.created_at,
     documents.updated_at,
-    COALESCE(lv.title, '') AS title,
-    COALESCE(lv.document_type, 'OTHER') AS document_type
+    documents.title,
+    documents.classification,
+    documents.document_type,
+    documents.orientation,
+    documents.content
 FROM
     documents
-LEFT JOIN latest_versions lv ON lv.document_id = documents.id
 WHERE
     %s
     AND documents.deleted_at IS NULL
@@ -172,27 +187,23 @@ func (p *Document) LoadByIDWithFilter(
 	filter *DocumentFilter,
 ) error {
 	q := `
-WITH latest_versions AS (
-    SELECT DISTINCT ON (document_id) document_id, title, document_type
-    FROM document_versions
-    ORDER BY document_id, major DESC, minor DESC
-)
 SELECT
     documents.id,
     documents.organization_id,
     documents.current_published_major,
     documents.current_published_minor,
     documents.write_mode,
-    documents.trust_center_visibility,
     documents.status,
     documents.archived_at,
     documents.created_at,
     documents.updated_at,
-    COALESCE(lv.title, '') AS title,
-    COALESCE(lv.document_type, 'OTHER') AS document_type
+    documents.title,
+    documents.classification,
+    documents.document_type,
+    documents.orientation,
+    documents.content
 FROM
     documents
-LEFT JOIN latest_versions lv ON lv.document_id = documents.id
 WHERE
     %s
     AND documents.deleted_at IS NULL
@@ -233,27 +244,23 @@ func (p *Documents) LoadByIDs(
 	documentIDs []gid.GID,
 ) error {
 	q := `
-WITH latest_versions AS (
-    SELECT DISTINCT ON (document_id) document_id, title, document_type
-    FROM document_versions
-    ORDER BY document_id, major DESC, minor DESC
-)
 SELECT
     documents.id,
     documents.organization_id,
     documents.current_published_major,
     documents.current_published_minor,
     documents.write_mode,
-    documents.trust_center_visibility,
     documents.status,
     documents.archived_at,
     documents.created_at,
     documents.updated_at,
-    COALESCE(lv.title, '') AS title,
-    COALESCE(lv.document_type, 'OTHER') AS document_type
+    documents.title,
+    documents.classification,
+    documents.document_type,
+    documents.orientation,
+    documents.content
 FROM
     documents
-LEFT JOIN latest_versions lv ON lv.document_id = documents.id
 WHERE
     %s
     AND documents.deleted_at IS NULL
@@ -276,6 +283,10 @@ WHERE
 	}
 
 	*p = documents
+
+	if len(documents) != len(gid.NewSet(documentIDs...)) {
+		return ErrResourceNotFound
+	}
 
 	return nil
 }
@@ -324,28 +335,24 @@ func (p *Documents) LoadByOrganizationID(
 	filter *DocumentFilter,
 ) error {
 	q := `
-WITH latest_versions AS (
-    SELECT DISTINCT ON (document_id) document_id, title, document_type
-    FROM document_versions
-    ORDER BY document_id, major DESC, minor DESC
-),
-base AS (
+WITH base AS (
     SELECT
         documents.id,
         documents.organization_id,
         documents.current_published_major,
         documents.current_published_minor,
         documents.write_mode,
-        documents.trust_center_visibility,
         documents.status,
         documents.archived_at,
         documents.created_at,
         documents.updated_at,
-        COALESCE(lv.title, '') AS title,
-        COALESCE(lv.document_type, 'OTHER') AS document_type
+        documents.title,
+        documents.classification,
+        documents.document_type,
+        documents.orientation,
+        documents.content
     FROM
         documents
-    LEFT JOIN latest_versions lv ON lv.document_id = documents.id
     WHERE
         %s
         AND documents.deleted_at IS NULL
@@ -377,30 +384,49 @@ SELECT * FROM base WHERE %s
 	return nil
 }
 
-func (p *Documents) LoadPublishedByOrganizationID(
+func (p *Documents) LoadPublishedByCompliancePortalID(
 	ctx context.Context,
 	conn pg.Querier,
 	scope Scoper,
+	compliancePortalID gid.GID,
+	organizationID gid.GID,
+	cursor *page.Cursor[DocumentOrderField],
+	filter *DocumentFilter,
+) error {
+	if filter == nil {
+		filter = NewDocumentCompliancePortalFilter()
+	}
+
+	filter = filter.WithCompliancePortalID(compliancePortalID)
+
+	return p.loadPublished(ctx, conn, scope, compliancePortalID, organizationID, cursor, filter)
+}
+
+func (p *Documents) loadPublished(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	compliancePortalID gid.GID,
 	organizationID gid.GID,
 	cursor *page.Cursor[DocumentOrderField],
 	filter *DocumentFilter,
 ) error {
 	q := `
-WITH latest_versions AS (
-	SELECT DISTINCT ON (document_id) document_id, title, document_type
-	FROM document_versions
-	ORDER BY document_id, major DESC, minor DESC
-),
-published_versions AS (
+WITH published_versions AS (
 	SELECT
 		dv.document_id,
-		dv.title AS published_title
+		dv.title,
+		dv.classification,
+		dv.document_type,
+		dv.orientation,
+		dv.content
 	FROM
 		document_versions dv
 		INNER JOIN documents d
 			ON dv.document_id = d.id
 			AND dv.major = d.current_published_major
 			AND dv.minor = d.current_published_minor
+			AND dv.status = @published_status
 	WHERE
 		d.deleted_at IS NULL
 		AND d.organization_id = @organization_id
@@ -412,17 +438,18 @@ base AS (
 		documents.current_published_major,
 		documents.current_published_minor,
 		documents.write_mode,
-		documents.trust_center_visibility,
 		documents.status,
 		documents.archived_at,
 		documents.created_at,
 		documents.updated_at,
-		COALESCE(pv.published_title, lv.title, '') AS title,
-		COALESCE(lv.document_type, 'OTHER') AS document_type
+		pv.title,
+		pv.classification,
+		pv.document_type,
+		pv.orientation,
+		pv.content
 	FROM
 		documents
-	LEFT JOIN latest_versions lv ON lv.document_id = documents.id
-	LEFT JOIN published_versions pv ON pv.document_id = documents.id
+		INNER JOIN published_versions pv ON pv.document_id = documents.id
 	WHERE
 		%s
 		AND documents.deleted_at IS NULL
@@ -433,7 +460,10 @@ SELECT * FROM base WHERE %s
 `
 	q = fmt.Sprintf(q, scope.SQLFragment(), filter.SQLFragment(), cursor.SQLFragment())
 
-	args := pgx.NamedArgs{"organization_id": organizationID}
+	args := pgx.NamedArgs{
+		"organization_id":  organizationID,
+		"published_status": DocumentVersionStatusPublished,
+	}
 	maps.Copy(args, scope.SQLArguments())
 	maps.Copy(args, filter.SQLArguments())
 	maps.Copy(args, cursor.SQLArguments())
@@ -453,6 +483,85 @@ SELECT * FROM base WHERE %s
 	return nil
 }
 
+// LoadPublishedByID loads the document and replaces the live title,
+// classification, type, orientation, and content with the published snapshot.
+func (p *Document) LoadPublishedByID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	documentID gid.GID,
+) error {
+	q := `
+SELECT
+	documents.id,
+	documents.organization_id,
+	documents.current_published_major,
+	documents.current_published_minor,
+	documents.write_mode,
+	documents.status,
+	documents.archived_at,
+	documents.created_at,
+	documents.updated_at,
+	dv.title,
+	dv.classification,
+	dv.document_type,
+	dv.orientation,
+	dv.content
+FROM
+	(
+		SELECT
+			id,
+			tenant_id,
+			organization_id,
+			current_published_major,
+			current_published_minor,
+			write_mode,
+			status,
+			archived_at,
+			created_at,
+			updated_at
+		FROM
+			documents
+		WHERE
+			%s
+			AND deleted_at IS NULL
+			AND id = @document_id
+	) documents
+	INNER JOIN document_versions dv
+		ON dv.document_id = documents.id
+		AND dv.tenant_id = documents.tenant_id
+		AND dv.major = documents.current_published_major
+		AND dv.minor = documents.current_published_minor
+		AND dv.status = @published_status
+LIMIT 1
+`
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"document_id":      documentID,
+		"published_status": DocumentVersionStatusPublished,
+	}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query published document: %w", err)
+	}
+
+	document, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Document])
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrResourceNotFound
+		}
+
+		return fmt.Errorf("cannot collect published document: %w", err)
+	}
+
+	*p = document
+
+	return nil
+}
+
 func (p Document) Insert(
 	ctx context.Context,
 	conn pg.Tx,
@@ -467,9 +576,13 @@ INSERT INTO
 		current_published_major,
 		current_published_minor,
 		write_mode,
-		trust_center_visibility,
 		status,
 		archived_at,
+		title,
+		classification,
+		document_type,
+		orientation,
+		content,
 		created_at,
 		updated_at
     )
@@ -480,13 +593,32 @@ VALUES (
     @current_published_major,
     @current_published_minor,
     @write_mode,
-    @trust_center_visibility,
     @status,
     @archived_at,
+    @title,
+    @classification,
+    @document_type,
+    @orientation,
+    @content,
     @created_at,
     @updated_at
 );
 `
+
+	classification := p.Classification
+	if classification == "" {
+		classification = DocumentClassificationConfidential
+	}
+
+	documentType := p.DocumentType
+	if documentType == "" {
+		documentType = DocumentTypeOther
+	}
+
+	orientation := p.Orientation
+	if orientation == "" {
+		orientation = DocumentVersionOrientationPortrait
+	}
 
 	args := pgx.StrictNamedArgs{
 		"tenant_id":               scope.GetTenantID(),
@@ -495,9 +627,13 @@ VALUES (
 		"current_published_major": p.CurrentPublishedMajor,
 		"current_published_minor": p.CurrentPublishedMinor,
 		"write_mode":              p.WriteMode,
-		"trust_center_visibility": p.TrustCenterVisibility,
 		"status":                  p.Status,
 		"archived_at":             p.ArchivedAt,
+		"title":                   p.Title,
+		"classification":          classification,
+		"document_type":           documentType,
+		"orientation":             orientation,
+		"content":                 p.Content,
 		"created_at":              p.CreatedAt,
 		"updated_at":              p.UpdatedAt,
 	}
@@ -525,26 +661,6 @@ UPDATE documents SET deleted_at = @deleted_at WHERE %s AND id = @document_id
 	return err
 }
 
-func (p Document) DeleteByOrganizationID(
-	ctx context.Context,
-	conn pg.Tx,
-	scope Scoper,
-	organizationID gid.GID,
-) error {
-	q := `
-DELETE FROM documents WHERE %s AND organization_id = @organization_id
-`
-
-	q = fmt.Sprintf(q, scope.SQLFragment())
-
-	args := pgx.StrictNamedArgs{"organization_id": organizationID}
-	maps.Copy(args, scope.SQLArguments())
-
-	_, err := conn.Exec(ctx, q, args)
-
-	return err
-}
-
 func (p *Document) Update(
 	ctx context.Context,
 	conn pg.Tx,
@@ -556,9 +672,12 @@ UPDATE
 SET
 	current_published_major = @current_published_major,
 	current_published_minor = @current_published_minor,
-	trust_center_visibility = @trust_center_visibility,
 	status = @status,
 	archived_at = @archived_at,
+	title = @title,
+	classification = @classification,
+	document_type = @document_type,
+	orientation = @orientation,
 	updated_at = @updated_at
 WHERE
 	%s
@@ -572,15 +691,59 @@ WHERE
 		"updated_at":              time.Now(),
 		"current_published_major": p.CurrentPublishedMajor,
 		"current_published_minor": p.CurrentPublishedMinor,
-		"trust_center_visibility": p.TrustCenterVisibility,
 		"status":                  p.Status,
 		"archived_at":             p.ArchivedAt,
+		"title":                   p.Title,
+		"classification":          p.Classification,
+		"document_type":           p.DocumentType,
+		"orientation":             p.Orientation,
 	}
 	maps.Copy(args, scope.SQLArguments())
 
 	_, err := conn.Exec(ctx, q, args)
 	if err != nil {
 		return fmt.Errorf("cannot update document: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateContent writes the live projection and leaves metadata, publication
+// pointers, and archived_at untouched. An archive that landed after the
+// caller read the row stays archived.
+func (p *Document) UpdateContent(
+	ctx context.Context,
+	conn pg.Tx,
+	scope Scoper,
+) error {
+	q := `
+UPDATE
+	documents
+SET
+	content = @content,
+	updated_at = @updated_at
+WHERE
+	%s
+	AND id = @document_id
+	AND deleted_at IS NULL
+	AND archived_at IS NULL
+`
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"document_id": p.ID,
+		"content":     p.Content,
+		"updated_at":  time.Now(),
+	}
+	maps.Copy(args, scope.SQLArguments())
+
+	result, err := conn.Exec(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot update document content: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return ErrResourceNotFound
 	}
 
 	return nil
@@ -632,12 +795,7 @@ func (p *Documents) LoadByControlID(
 	filter *DocumentFilter,
 ) error {
 	q := `
-WITH latest_versions AS (
-	SELECT DISTINCT ON (document_id) document_id, title, document_type
-	FROM document_versions
-	ORDER BY document_id, major DESC, minor DESC
-),
-scoped_documents AS (
+WITH scoped_documents AS (
 	SELECT *
 	FROM documents
 	WHERE %s
@@ -650,17 +808,18 @@ base AS (
 		sd.organization_id,
 		sd.current_published_major,
 		sd.current_published_minor,
-		sd.trust_center_visibility,
 		sd.write_mode,
 		sd.status,
 		sd.archived_at,
 		sd.created_at,
 		sd.updated_at,
-		COALESCE(lv.title, '') AS title,
-		COALESCE(lv.document_type, 'OTHER') AS document_type
+		sd.title,
+		sd.classification,
+		sd.document_type,
+		sd.orientation,
+		sd.content
 	FROM scoped_documents sd
 	INNER JOIN controls_documents cp ON sd.id = cp.document_id
-	LEFT JOIN latest_versions lv ON lv.document_id = sd.id
 	WHERE cp.control_id = @control_id
 )
 SELECT * FROM base WHERE %s
@@ -733,12 +892,7 @@ func (p *Documents) LoadByRiskID(
 	filter *DocumentFilter,
 ) error {
 	q := `
-WITH latest_versions AS (
-	SELECT DISTINCT ON (document_id) document_id, title, document_type
-	FROM document_versions
-	ORDER BY document_id, major DESC, minor DESC
-),
-scoped_documents AS (
+WITH scoped_documents AS (
 	SELECT *
 	FROM documents
 	WHERE %s
@@ -751,17 +905,18 @@ base AS (
 		sd.organization_id,
 		sd.current_published_major,
 		sd.current_published_minor,
-		sd.trust_center_visibility,
 		sd.write_mode,
 		sd.status,
 		sd.archived_at,
 		sd.created_at,
 		sd.updated_at,
-		COALESCE(lv.title, '') AS title,
-		COALESCE(lv.document_type, 'OTHER') AS document_type
+		sd.title,
+		sd.classification,
+		sd.document_type,
+		sd.orientation,
+		sd.content
 	FROM scoped_documents sd
 	INNER JOIN risks_documents rp ON sd.id = rp.document_id
-	LEFT JOIN latest_versions lv ON lv.document_id = sd.id
 	WHERE rp.risk_id = @risk_id
 )
 SELECT * FROM base WHERE %s
@@ -788,11 +943,11 @@ SELECT * FROM base WHERE %s
 	return nil
 }
 
-func (p *Documents) CountByMeasureID(
+func (p *Documents) CountByInternalControlID(
 	ctx context.Context,
 	conn pg.Querier,
 	scope Scoper,
-	measureID gid.GID,
+	internalControlID gid.GID,
 	filter *DocumentFilter,
 ) (int, error) {
 	q := `
@@ -805,13 +960,13 @@ WITH scoped_documents AS (
 )
 SELECT COUNT(scoped_documents.id)
 FROM scoped_documents
-INNER JOIN measures_documents md ON scoped_documents.id = md.document_id
-WHERE md.measure_id = @measure_id
+INNER JOIN internal_controls_documents md ON scoped_documents.id = md.document_id
+WHERE md.internal_control_id = @internal_control_id
 `
 
 	q = fmt.Sprintf(q, scope.SQLFragment(), filter.SQLFragment())
 
-	args := pgx.NamedArgs{"measure_id": measureID}
+	args := pgx.NamedArgs{"internal_control_id": internalControlID}
 	maps.Copy(args, scope.SQLArguments())
 	maps.Copy(args, filter.SQLArguments())
 
@@ -825,21 +980,16 @@ WHERE md.measure_id = @measure_id
 	return count, nil
 }
 
-func (p *Documents) LoadByMeasureID(
+func (p *Documents) LoadByInternalControlID(
 	ctx context.Context,
 	conn pg.Querier,
 	scope Scoper,
-	measureID gid.GID,
+	internalControlID gid.GID,
 	cursor *page.Cursor[DocumentOrderField],
 	filter *DocumentFilter,
 ) error {
 	q := `
-WITH latest_versions AS (
-	SELECT DISTINCT ON (document_id) document_id, title, document_type
-	FROM document_versions
-	ORDER BY document_id, major DESC, minor DESC
-),
-scoped_documents AS (
+WITH scoped_documents AS (
 	SELECT *
 	FROM documents
 	WHERE %s
@@ -852,24 +1002,25 @@ base AS (
 		sd.organization_id,
 		sd.current_published_major,
 		sd.current_published_minor,
-		sd.trust_center_visibility,
 		sd.write_mode,
 		sd.status,
 		sd.archived_at,
 		sd.created_at,
 		sd.updated_at,
-		COALESCE(lv.title, '') AS title,
-		COALESCE(lv.document_type, 'OTHER') AS document_type
+		sd.title,
+		sd.classification,
+		sd.document_type,
+		sd.orientation,
+		sd.content
 	FROM scoped_documents sd
-	INNER JOIN measures_documents md ON sd.id = md.document_id
-	LEFT JOIN latest_versions lv ON lv.document_id = sd.id
-	WHERE md.measure_id = @measure_id
+	INNER JOIN internal_controls_documents md ON sd.id = md.document_id
+	WHERE md.internal_control_id = @internal_control_id
 )
 SELECT * FROM base WHERE %s
 `
 	q = fmt.Sprintf(q, scope.SQLFragment(), filter.SQLFragment(), cursor.SQLFragment())
 
-	args := pgx.NamedArgs{"measure_id": measureID}
+	args := pgx.NamedArgs{"internal_control_id": internalControlID}
 	maps.Copy(args, scope.SQLArguments())
 	maps.Copy(args, filter.SQLArguments())
 	maps.Copy(args, cursor.SQLArguments())
@@ -921,7 +1072,7 @@ func (p *Documents) BulkArchive(
 ) error {
 	q := `
 UPDATE documents
-SET status = 'ARCHIVED', archived_at = @archived_at, trust_center_visibility = 'NONE', updated_at = @updated_at
+SET status = 'ARCHIVED', archived_at = @archived_at, updated_at = @updated_at
 WHERE %s AND id = ANY(@document_ids)
 `
 	q = fmt.Sprintf(q, scope.SQLFragment())

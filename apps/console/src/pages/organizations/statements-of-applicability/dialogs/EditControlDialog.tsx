@@ -1,18 +1,23 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
 import {
   Badge,
   Breadcrumb,
@@ -27,11 +32,12 @@ import {
   useDialogRef,
 } from "@probo/ui";
 import { forwardRef, useImperativeHandle, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { graphql } from "react-relay";
-import { z } from "zod";
 
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
 import { useMutationWithToasts } from "#/hooks/useMutationWithToasts";
+import { z } from "#/lib/zod";
 
 const updateApplicabilityStatementMutation = graphql`
     mutation EditControlDialogUpdateMutation($input: UpdateApplicabilityStatementInput!) {
@@ -62,7 +68,7 @@ const schema = z.object({
 });
 
 export const EditControlDialog = forwardRef<EditControlDialogRef>((_props, ref) => {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const dialogRef = useDialogRef();
   const [control, setControl] = useState<{
     applicabilityStatementId: string;
@@ -76,8 +82,8 @@ export const EditControlDialog = forwardRef<EditControlDialogRef>((_props, ref) 
   const [updateApplicabilityStatement, isUpdating] = useMutationWithToasts(
     updateApplicabilityStatementMutation,
     {
-      successMessage: __("Statement updated successfully."),
-      errorMessage: __("Failed to update statement"),
+      successMessage: t("editApplicabilityStatementDialog.messages.updated"),
+      errorMessage: t("editApplicabilityStatementDialog.errors.update"),
     },
   );
 
@@ -121,7 +127,7 @@ export const EditControlDialog = forwardRef<EditControlDialogRef>((_props, ref) 
       ref={dialogRef}
       className="max-w-lg"
       title={
-        <Breadcrumb items={[__("Statements of Applicability"), __("Edit Statement")]} />
+        <Breadcrumb items={[t("editApplicabilityStatementDialog.breadcrumb.statementsOfApplicability"), t("editApplicabilityStatementDialog.breadcrumb.editStatement")]} />
       }
     >
       {control
@@ -140,23 +146,23 @@ export const EditControlDialog = forwardRef<EditControlDialogRef>((_props, ref) 
                   </div>
                 </div>
 
-                <Field label={__("Applicability")}>
+                <Field label={t("editApplicabilityStatementDialog.fields.applicability")}>
                   <Select
                     variant="editor"
                     value={applicability ? "yes" : "no"}
                     onValueChange={value =>
                       setValue("applicability", value === "yes")}
                   >
-                    <Option value="yes">{__("Yes")}</Option>
-                    <Option value="no">{__("No")}</Option>
+                    <Option value="yes">{t("editApplicabilityStatementDialog.options.yes")}</Option>
+                    <Option value="no">{t("editApplicabilityStatementDialog.options.no")}</Option>
                   </Select>
                 </Field>
 
                 {!applicability && (
-                  <Field label={__("Justification")}>
+                  <Field label={t("editApplicabilityStatementDialog.fields.justification")}>
                     <Textarea
                       {...register("justification")}
-                      placeholder={__("Reason for non-applicability")}
+                      placeholder={t("editApplicabilityStatementDialog.placeholders.justification")}
                       autogrow
                     />
                   </Field>
@@ -164,7 +170,7 @@ export const EditControlDialog = forwardRef<EditControlDialogRef>((_props, ref) 
               </DialogContent>
               <DialogFooter>
                 <Button type="submit" disabled={isUpdating}>
-                  {__("Save")}
+                  {t("editApplicabilityStatementDialog.actions.save")}
                 </Button>
               </DialogFooter>
             </form>

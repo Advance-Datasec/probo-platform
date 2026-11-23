@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -20,13 +26,35 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"time"
+	"strconv"
+	"strings"
 
 	"go.probo.inc/probo/pkg/coredata"
 )
 
+// 1Password serves each region from its own host, and the OAuth token
+// endpoint sits on the same host as the Users API: a token one region issues
+// is refused by the others.
+const (
+	onePasswordRegionUS  = "US"
+	onePasswordRegionCA  = "CA"
+	onePasswordRegionEU  = "EU"
+	onePasswordRegionENT = "ENT"
+
+	onePasswordUSHost  = "api.1password.com"
+	onePasswordCAHost  = "api.1password.ca"
+	onePasswordEUHost  = "api.1password.eu"
+	onePasswordENTHost = "api.ent.1password.com"
+
+	onePasswordTokenPath = "/v1/oauth/token"
+
+	// onePasswordUsersPageSize is the largest page the Users API serves; every
+	// page counts against its limit of 100 requests a minute per account.
+	onePasswordUsersPageSize = 1000
+)
+
 // OnePasswordUsersAPIDriver fetches user accounts from the 1Password
-// Users API (v1beta1). This is distinct from the SCIM-based
+// Users API (v1). This is distinct from the SCIM-based
 // OnePasswordDriver and uses the native 1Password API with
 // token-based pagination.
 type OnePasswordUsersAPIDriver struct {
@@ -38,7 +66,7 @@ type OnePasswordUsersAPIDriver struct {
 var _ Driver = (*OnePasswordUsersAPIDriver)(nil)
 
 type onePasswordUsersAPIResponse struct {
-	Users         []onePasswordUsersAPIUser `json:"users"`
+	Users         []onePasswordUsersAPIUser `json:"results"`
 	NextPageToken string                    `json:"next_page_token"`
 }
 
@@ -48,25 +76,112 @@ type onePasswordUsersAPIUser struct {
 	DisplayName string `json:"display_name"`
 	State       string `json:"state"`
 	CreateTime  string `json:"create_time"`
-	Path        string `json:"path"`
 }
 
-func NewOnePasswordUsersAPIDriver(httpClient *http.Client, accountID string, region string) *OnePasswordUsersAPIDriver {
+// NewOnePasswordUsersAPIDriver builds a driver against baseURL, the Users API
+// root of the connector's region (OnePasswordUsersAPIBaseURL).
+func NewOnePasswordUsersAPIDriver(httpClient *http.Client, baseURL string, accountID string) *OnePasswordUsersAPIDriver {
+	client := *httpClient
+	client.Transport = &retryRoundTripper{
+		next:       httpClient.Transport,
+		maxRetries: 3,
+	}
+
 	return &OnePasswordUsersAPIDriver{
-		httpClient: httpClient,
-		baseURL:    onePasswordBaseURL(region),
+		httpClient: &client,
+		baseURL:    baseURL,
 		accountID:  accountID,
 	}
 }
 
-func onePasswordBaseURL(region string) string {
+// IsOnePasswordRegion reports whether region names one of 1Password's hosts,
+// in the form the connector stores it.
+func IsOnePasswordRegion(region string) bool {
+	_, ok := onePasswordRegionHost(region)
+
+	return ok
+}
+
+// IsOnePasswordAccountID reports whether id has the shape of a 1Password
+// account ID: 26 uppercase letters and digits. The Users API answers a
+// malformed one with 400.
+func IsOnePasswordAccountID(id string) bool {
+	if len(id) != 26 {
+		return false
+	}
+
+	for _, r := range id {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return false
+		}
+	}
+
+	return true
+}
+
+// OnePasswordUsersAPIBaseURL returns the Users API root of region.
+func OnePasswordUsersAPIBaseURL(region string) string {
+	u := url.URL{Scheme: "https", Host: onePasswordHost(region)}
+
+	return u.String()
+}
+
+// OnePasswordTokenURL returns the OAuth token endpoint of region.
+func OnePasswordTokenURL(region string) string {
+	u := url.URL{Scheme: "https", Host: onePasswordHost(region), Path: onePasswordTokenPath}
+
+	return u.String()
+}
+
+// OnePasswordUsersURL returns the list-users endpoint of accountID under
+// baseURL: the request both the driver and the connection check make.
+func OnePasswordUsersURL(baseURL string, accountID string) (*url.URL, error) {
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse 1password users api base url: %w", err)
+	}
+
+	return base.JoinPath("v1", "accounts", url.PathEscape(accountID), "users"), nil
+}
+
+// onePasswordHost maps the connector's Region setting to its host. The region
+// was free text before it became a fixed choice, and those rows have always
+// reached the US host, so anything unrecognised still does.
+func onePasswordHost(region string) string {
+	if host, ok := onePasswordRegionHost(strings.ToUpper(strings.TrimSpace(region))); ok {
+		return host
+	}
+
+	return onePasswordUSHost
+}
+
+// onePasswordRegionHost returns the host of a region in its stored form.
+func onePasswordRegionHost(region string) (string, bool) {
 	switch region {
-	case "CA", "ca":
-		return "https://api.1password.ca"
-	case "EU", "eu":
-		return "https://api.1password.eu"
+	case onePasswordRegionUS:
+		return onePasswordUSHost, true
+	case onePasswordRegionCA:
+		return onePasswordCAHost, true
+	case onePasswordRegionEU:
+		return onePasswordEUHost, true
+	case onePasswordRegionENT:
+		return onePasswordENTHost, true
 	default:
-		return "https://api.1password.com"
+		return "", false
+	}
+}
+
+// onePasswordUserActive maps a user's state. 1Password lists only ACTIVE and
+// SUSPENDED users but may add states, so anything else is unknown rather than
+// inactive.
+func onePasswordUserActive(state string) *bool {
+	switch state {
+	case "ACTIVE":
+		return new(true)
+	case "SUSPENDED":
+		return new(false)
+	default:
+		return nil
 	}
 }
 
@@ -83,25 +198,23 @@ func (d *OnePasswordUsersAPIDriver) ListAccounts(ctx context.Context) ([]Account
 		}
 
 		for _, u := range resp.Users {
-			record := AccountRecord{
-				Email:       u.Email,
-				FullName:    u.DisplayName,
-				Active:      new(u.State == "ACTIVE"),
-				ExternalID:  u.ID,
-				MFAStatus:   coredata.MFAStatusUnknown,
-				AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
-				AccountType: coredata.AccessReviewEntryAccountTypeUser,
+			if u.Email == "" {
+				continue
 			}
 
-			if u.CreateTime != "" {
-				if t, err := time.Parse(time.RFC3339, u.CreateTime); err == nil {
-					record.CreatedAt = &t
-				}
-			}
-
-			if record.Email != "" {
-				records = append(records, record)
-			}
+			records = append(
+				records,
+				AccountRecord{
+					Email:       u.Email,
+					FullName:    u.DisplayName,
+					Active:      onePasswordUserActive(u.State),
+					ExternalID:  u.ID,
+					MFAStatus:   coredata.MFAStatusUnknown,
+					AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
+					AccountType: coredata.AccessReviewEntryAccountTypeUser,
+					CreatedAt:   parseRFC3339Ptr(u.CreateTime),
+				},
+			)
 		}
 
 		if resp.NextPageToken == "" {
@@ -115,26 +228,24 @@ func (d *OnePasswordUsersAPIDriver) ListAccounts(ctx context.Context) ([]Account
 }
 
 func (d *OnePasswordUsersAPIDriver) queryUsers(ctx context.Context, pageToken string) (*onePasswordUsersAPIResponse, error) {
-	u, err := url.Parse(d.baseURL)
+	u, err := OnePasswordUsersURL(d.baseURL, d.accountID)
 	if err != nil {
-		return nil, fmt.Errorf("cannot parse 1password users api base url: %w", err)
+		return nil, fmt.Errorf("cannot build 1password users api request url: %w", err)
 	}
 
-	u = u.JoinPath("v1beta1", "accounts", d.accountID, "users")
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create 1password users api request: %w", err)
-	}
-
-	q := req.URL.Query()
-	q.Set("max_page_size", "100")
+	q := url.Values{}
+	q.Set("max_page_size", strconv.Itoa(onePasswordUsersPageSize))
 
 	if pageToken != "" {
 		q.Set("page_token", pageToken)
 	}
 
-	req.URL.RawQuery = q.Encode()
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create 1password users api request: %w", err)
+	}
 
 	req.Header.Set("Accept", "application/json")
 

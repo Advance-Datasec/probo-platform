@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -23,24 +29,30 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"go.gearno.de/kit/pg"
+	"go.gearno.de/x/ref"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/iam/policy"
 	"go.probo.inc/probo/pkg/page"
 )
 
+var (
+	_ Searchable = (*RightsRequest)(nil)
+)
+
 type (
 	RightsRequest struct {
-		ID             gid.GID            `db:"id"`
-		OrganizationID gid.GID            `db:"organization_id"`
-		RequestType    RightsRequestType  `db:"request_type"`
-		RequestState   RightsRequestState `db:"request_state"`
-		DataSubject    *string            `db:"data_subject"`
-		Contact        *string            `db:"contact"`
-		Details        *string            `db:"details"`
-		Deadline       *time.Time         `db:"deadline"`
-		ActionTaken    *string            `db:"action_taken"`
-		CreatedAt      time.Time          `db:"created_at"`
-		UpdatedAt      time.Time          `db:"updated_at"`
+		ID                 gid.GID            `db:"id"`
+		OrganizationID     gid.GID            `db:"organization_id"`
+		CompliancePortalID *gid.GID           `db:"compliance_portal_id"`
+		RequestType        RightsRequestType  `db:"request_type"`
+		RequestState       RightsRequestState `db:"request_state"`
+		DataSubject        *string            `db:"data_subject"`
+		Contact            *string            `db:"contact"`
+		Details            *string            `db:"details"`
+		Deadline           *time.Time         `db:"deadline"`
+		ActionTaken        *string            `db:"action_taken"`
+		CreatedAt          time.Time          `db:"created_at"`
+		UpdatedAt          time.Time          `db:"updated_at"`
 	}
 
 	RightsRequests []*RightsRequest
@@ -59,6 +71,15 @@ func (rr *RightsRequest) CursorKey(field RightsRequestOrderField) page.CursorKey
 	}
 
 	panic(fmt.Sprintf("unsupported order by: %s", field))
+}
+
+func (rr RightsRequest) SearchText() []string {
+	return []string{
+		ref.UnrefOrZero(rr.DataSubject),
+		ref.UnrefOrZero(rr.Contact),
+		ref.UnrefOrZero(rr.Details),
+		ref.UnrefOrZero(rr.ActionTaken),
+	}
 }
 
 // AuthorizationAttributes returns the authorization attributes for policy evaluation.
@@ -111,6 +132,7 @@ func (rr *RightsRequest) LoadByID(
 SELECT
 	id,
 	organization_id,
+	compliance_portal_id,
 	request_type,
 	request_state,
 	data_subject,
@@ -148,6 +170,62 @@ LIMIT 1;
 	}
 
 	*rr = request
+
+	return nil
+}
+
+func (rrs *RightsRequests) LoadByIDs(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	rightsRequestIDs []gid.GID,
+) error {
+	if len(rightsRequestIDs) == 0 {
+		*rrs = nil
+		return nil
+	}
+
+	q := `
+SELECT
+	id,
+	organization_id,
+	compliance_portal_id,
+	request_type,
+	request_state,
+	data_subject,
+	contact,
+	details,
+	deadline,
+	action_taken,
+	created_at,
+	updated_at
+FROM
+	rights_requests
+WHERE
+	%s
+	AND id = ANY(@rights_request_ids)
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"rights_request_ids": rightsRequestIDs}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query rights requests: %w", err)
+	}
+
+	items, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[RightsRequest])
+	if err != nil {
+		return fmt.Errorf("cannot collect rights requests: %w", err)
+	}
+
+	*rrs = items
+
+	if len(items) != len(gid.NewSet(rightsRequestIDs...)) {
+		return ErrResourceNotFound
+	}
 
 	return nil
 }
@@ -196,6 +274,7 @@ func (rrs *RightsRequests) LoadByOrganizationID(
 SELECT
 	id,
 	organization_id,
+	compliance_portal_id,
 	request_type,
 	request_state,
 	data_subject,
@@ -234,6 +313,61 @@ WHERE
 	return nil
 }
 
+func (rrs *RightsRequests) LoadByCompliancePortalIDAndContact(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	compliancePortalID gid.GID,
+	contact string,
+	cursor *page.Cursor[RightsRequestOrderField],
+) error {
+	q := `
+SELECT
+	id,
+	organization_id,
+	compliance_portal_id,
+	request_type,
+	request_state,
+	data_subject,
+	contact,
+	details,
+	deadline,
+	action_taken,
+	created_at,
+	updated_at
+FROM
+	rights_requests
+WHERE
+	%s
+	AND compliance_portal_id = @compliance_portal_id
+	AND contact = @contact
+	AND %s
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment(), cursor.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"compliance_portal_id": compliancePortalID,
+		"contact":              contact,
+	}
+	maps.Copy(args, scope.SQLArguments())
+	maps.Copy(args, cursor.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query rights requests: %w", err)
+	}
+
+	requests, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[RightsRequest])
+	if err != nil {
+		return fmt.Errorf("cannot collect rights requests: %w", err)
+	}
+
+	*rrs = requests
+
+	return nil
+}
+
 func (rr *RightsRequest) Insert(
 	ctx context.Context,
 	conn pg.Tx,
@@ -244,6 +378,7 @@ INSERT INTO rights_requests (
 	id,
 	tenant_id,
 	organization_id,
+	compliance_portal_id,
 	request_type,
 	request_state,
 	data_subject,
@@ -257,6 +392,7 @@ INSERT INTO rights_requests (
 	@id,
 	@tenant_id,
 	@organization_id,
+	@compliance_portal_id,
 	@request_type,
 	@request_state,
 	@data_subject,
@@ -270,18 +406,19 @@ INSERT INTO rights_requests (
 `
 
 	args := pgx.StrictNamedArgs{
-		"id":              rr.ID,
-		"tenant_id":       scope.GetTenantID(),
-		"organization_id": rr.OrganizationID,
-		"request_type":    rr.RequestType,
-		"request_state":   rr.RequestState,
-		"data_subject":    rr.DataSubject,
-		"contact":         rr.Contact,
-		"details":         rr.Details,
-		"deadline":        rr.Deadline,
-		"action_taken":    rr.ActionTaken,
-		"created_at":      rr.CreatedAt,
-		"updated_at":      rr.UpdatedAt,
+		"id":                   rr.ID,
+		"tenant_id":            scope.GetTenantID(),
+		"organization_id":      rr.OrganizationID,
+		"compliance_portal_id": rr.CompliancePortalID,
+		"request_type":         rr.RequestType,
+		"request_state":        rr.RequestState,
+		"data_subject":         rr.DataSubject,
+		"contact":              rr.Contact,
+		"details":              rr.Details,
+		"deadline":             rr.Deadline,
+		"action_taken":         rr.ActionTaken,
+		"created_at":           rr.CreatedAt,
+		"updated_at":           rr.UpdatedAt,
 	}
 
 	_, err := conn.Exec(ctx, q, args)

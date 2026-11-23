@@ -1,21 +1,28 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -33,7 +40,7 @@ type (
 		CertificateChain *string   `db:"certificate_chain"`
 		ExpiresAt        time.Time `db:"expires_at"`
 		CachedAt         time.Time `db:"cached_at"`
-		CustomDomainID   gid.GID   `db:"custom_domain_id"`
+		CertificateID    gid.GID   `db:"certificate_id"`
 	}
 
 	CachedCertificates []*CachedCertificate
@@ -48,7 +55,7 @@ SELECT
 	certificate_chain,
 	expires_at,
 	cached_at,
-	custom_domain_id
+	certificate_id
 FROM
 	cached_certificates
 WHERE
@@ -66,6 +73,11 @@ LIMIT 1
 
 	cache, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[CachedCertificate])
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Missing and expired rows are both unusable.
+			return ErrResourceNotFound
+		}
+
 		return fmt.Errorf("cannot collect certificate cache: %w", err)
 	}
 
@@ -85,7 +97,7 @@ INSERT INTO cached_certificates (
 	certificate_chain,
 	expires_at,
 	cached_at,
-	custom_domain_id
+	certificate_id
 ) VALUES (
 	@domain,
 	@certificate_pem,
@@ -93,7 +105,7 @@ INSERT INTO cached_certificates (
 	@certificate_chain,
 	@expires_at,
 	@cached_at,
-	@custom_domain_id
+	@certificate_id
 )
 ON CONFLICT (domain) DO UPDATE SET
 	certificate_pem = EXCLUDED.certificate_pem,
@@ -101,7 +113,7 @@ ON CONFLICT (domain) DO UPDATE SET
 	certificate_chain = EXCLUDED.certificate_chain,
 	expires_at = EXCLUDED.expires_at,
 	cached_at = NOW(),
-	custom_domain_id = EXCLUDED.custom_domain_id
+	certificate_id = EXCLUDED.certificate_id
 `
 
 	args := pgx.NamedArgs{
@@ -111,7 +123,7 @@ ON CONFLICT (domain) DO UPDATE SET
 		"certificate_chain": cc.CertificateChain,
 		"expires_at":        cc.ExpiresAt,
 		"cached_at":         cc.CachedAt,
-		"custom_domain_id":  cc.CustomDomainID,
+		"certificate_id":    cc.CertificateID,
 	}
 
 	_, err := conn.Exec(ctx, q, args)
@@ -164,36 +176,62 @@ WHERE
 	return nil
 }
 
-func (cc *CachedCertificate) RefreshFromDomain(ctx context.Context, conn pg.Querier, domain *CustomDomain, encryptionKey cipher.EncryptionKey) error {
-	if domain.SSLCertificate == nil {
-		return fmt.Errorf("domain has no parsed certificate")
+// DeleteWhereCertificateIDNotIn removes cache rows whose certificate is not
+// among the provided IDs. An empty keep set deletes every cache row.
+func (cc *CachedCertificates) DeleteWhereCertificateIDNotIn(
+	ctx context.Context,
+	conn pg.Querier,
+	keepCertificateIDs []gid.GID,
+) error {
+	q := `
+DELETE FROM
+	cached_certificates
+WHERE
+	NOT (certificate_id = ANY(@keep_certificate_ids::text[]))
+`
+
+	_, err := conn.Exec(
+		ctx,
+		q,
+		pgx.NamedArgs{"keep_certificate_ids": keepCertificateIDs},
+	)
+	if err != nil {
+		return fmt.Errorf("cannot delete unreferenced certificate cache: %w", err)
 	}
 
-	if len(domain.SSLCertificatePEM) == 0 {
-		return fmt.Errorf("domain has no certificate PEM")
+	return nil
+}
+
+func (cc *CachedCertificate) RefreshFromCertificate(ctx context.Context, conn pg.Querier, certificate *Certificate, encryptionKey cipher.EncryptionKey) error {
+	if certificate.SSLCertificate == nil {
+		return fmt.Errorf("certificate has no parsed certificate")
 	}
 
-	privateKeyPEM, err := domain.DecryptPrivateKey(encryptionKey)
+	if len(certificate.SSLCertificatePEM) == 0 {
+		return fmt.Errorf("certificate has no certificate PEM")
+	}
+
+	privateKeyPEM, err := certificate.DecryptPrivateKey(encryptionKey)
 	if err != nil {
 		return fmt.Errorf("cannot decrypt private key: %w", err)
 	}
 
 	if len(privateKeyPEM) == 0 {
-		return fmt.Errorf("domain has no private key PEM")
+		return fmt.Errorf("certificate has no private key PEM")
 	}
 
-	if domain.SSLExpiresAt == nil {
-		return fmt.Errorf("domain certificate has no expiry date")
+	if certificate.SSLExpiresAt == nil {
+		return fmt.Errorf("certificate has no expiry date")
 	}
 
 	cache := &CachedCertificate{
-		Domain:           domain.Domain,
-		CertificatePEM:   string(domain.SSLCertificatePEM),
+		Domain:           certificate.Hostname,
+		CertificatePEM:   string(certificate.SSLCertificatePEM),
 		PrivateKeyPEM:    string(privateKeyPEM),
-		CertificateChain: domain.SSLCertificateChain,
-		ExpiresAt:        *domain.SSLExpiresAt,
+		CertificateChain: certificate.SSLCertificateChain,
+		ExpiresAt:        *certificate.SSLExpiresAt,
 		CachedAt:         time.Now(),
-		CustomDomainID:   domain.ID,
+		CertificateID:    certificate.ID,
 	}
 
 	return cache.Upsert(ctx, conn)

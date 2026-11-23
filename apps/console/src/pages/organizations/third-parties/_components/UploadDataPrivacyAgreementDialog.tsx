@@ -1,19 +1,24 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   Dialog,
@@ -24,14 +29,15 @@ import {
   Input,
   Spinner,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { graphql, useMutation } from "react-relay";
-import { z } from "zod";
 
 import type { UploadDataPrivacyAgreementDialogMutation } from "#/__generated__/core/UploadDataPrivacyAgreementDialogMutation.graphql";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
+import { z } from "#/lib/zod";
 
 const uploadDataPrivacyAgreementMutation = graphql`
   mutation UploadDataPrivacyAgreementDialogMutation(
@@ -44,19 +50,15 @@ const uploadDataPrivacyAgreementMutation = graphql`
           fileName
           downloadUrl
         }
-        validFrom
-        validUntil
+        validity {
+          start
+          end
+        }
         createdAt
       }
     }
   }
 `;
-
-const schema = z.object({
-  fileName: z.string().min(1, "File name is required"),
-  validFrom: z.string().optional(),
-  validUntil: z.string().optional(),
-});
 
 type Props = {
   children: React.ReactNode;
@@ -69,7 +71,12 @@ export function UploadDataPrivacyAgreementDialog({
   thirdPartyId,
   onSuccess,
 }: Props) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
+  const schema = z.object({
+    fileName: z.string().min(1, t("uploadDataPrivacyAgreementDialog.validation.fileNameRequired")),
+    validFrom: z.string().optional(),
+    validUntil: z.string().optional(),
+  });
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const ref = useDialogRef();
 
@@ -87,7 +94,7 @@ export function UploadDataPrivacyAgreementDialog({
     },
   });
 
-  const { toast } = useToast();
+  const toast = useToast();
   const [uploadAgreement, isUploading]
     = useMutation<UploadDataPrivacyAgreementDialogMutation>(
       uploadDataPrivacyAgreementMutation,
@@ -116,8 +123,10 @@ export function UploadDataPrivacyAgreementDialog({
         input: {
           thirdPartyId,
           fileName: data.fileName,
-          validFrom: formatDatetime(data.validFrom),
-          validUntil: formatDatetime(data.validUntil),
+          validity: {
+            start: formatDatetime(data.validFrom),
+            end: formatDatetime(data.validUntil),
+          },
           file: null,
         },
       },
@@ -126,20 +135,20 @@ export function UploadDataPrivacyAgreementDialog({
       },
       onCompleted(_response, errors) {
         if (errors) {
-          toast({
-            title: __("Error"),
+          toast.add({
+            title: t("uploadDataPrivacyAgreementDialog.messages.error"),
             description: formatError(
-              __("Failed to upload Data Privacy Agreement"),
+              t("uploadDataPrivacyAgreementDialog.errors.upload"),
               errors,
             ),
-            variant: "error",
+            type: "error",
           });
           return;
         }
-        toast({
-          title: __("Success"),
-          description: __("Data Privacy Agreement uploaded successfully"),
-          variant: "success",
+        toast.add({
+          title: t("uploadDataPrivacyAgreementDialog.messages.success"),
+          description: t("uploadDataPrivacyAgreementDialog.messages.uploaded"),
+          type: "success",
         });
         reset();
         setUploadedFile(null);
@@ -147,13 +156,13 @@ export function UploadDataPrivacyAgreementDialog({
         ref.current?.close();
       },
       onError(error) {
-        toast({
-          title: __("Error"),
+        toast.add({
+          title: t("uploadDataPrivacyAgreementDialog.messages.error"),
           description: formatError(
-            __("Failed to upload Data Privacy Agreement"),
+            t("uploadDataPrivacyAgreementDialog.errors.upload"),
             error,
           ),
-          variant: "error",
+          type: "error",
         });
       },
     });
@@ -166,7 +175,7 @@ export function UploadDataPrivacyAgreementDialog({
 
   return (
     <Dialog
-      title={__("Upload Data Privacy Agreement")}
+      title={t("uploadDataPrivacyAgreementDialog.title")}
       ref={ref}
       trigger={children}
       className="max-w-lg"
@@ -175,7 +184,7 @@ export function UploadDataPrivacyAgreementDialog({
       <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
         <DialogContent padded className="space-y-4">
           <Dropzone
-            description={__("Only PDF files up to 10MB are allowed")}
+            description={t("uploadDataPrivacyAgreementDialog.fileHelp")}
             isUploading={isUploading}
             onDrop={handleDrop}
             accept={{
@@ -187,8 +196,7 @@ export function UploadDataPrivacyAgreementDialog({
           {uploadedFile && (
             <div className="p-3 bg-tertiary-subtle rounded-lg">
               <p className="text-sm font-medium">
-                {__("Selected file")}
-                :
+                {t("uploadDataPrivacyAgreementDialog.selectedFile")}
               </p>
               <p className="text-sm text-txt-secondary">{uploadedFile.name}</p>
             </div>
@@ -196,18 +204,18 @@ export function UploadDataPrivacyAgreementDialog({
 
           <Field
             {...register("fileName")}
-            label={__("File name")}
+            label={t("uploadDataPrivacyAgreementDialog.fields.fileName")}
             type="text"
             required
             error={errors.fileName?.message}
-            placeholder={__("Data Privacy Agreement")}
+            placeholder={t("uploadDataPrivacyAgreementDialog.placeholders.fileName")}
           />
 
           <div className="grid grid-cols-2 gap-4">
-            <Field label={__("Valid from")}>
+            <Field label={t("uploadDataPrivacyAgreementDialog.fields.validFrom")}>
               <Input {...register("validFrom")} type="date" />
             </Field>
-            <Field label={__("Valid until")}>
+            <Field label={t("uploadDataPrivacyAgreementDialog.fields.validUntil")}>
               <Input {...register("validUntil")} type="date" />
             </Field>
           </div>
@@ -219,7 +227,7 @@ export function UploadDataPrivacyAgreementDialog({
             disabled={isUploading || !uploadedFile}
             icon={isUploading ? Spinner : undefined}
           >
-            {__("Upload")}
+            {t("uploadDataPrivacyAgreementDialog.actions.upload")}
           </Button>
         </DialogFooter>
       </form>

@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata_test
 
@@ -25,35 +31,31 @@ import (
 	"go.gearno.de/kit/pg"
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/gid"
-	"go.probo.inc/probo/pkg/llm"
 )
 
-func insertPendingRun(
+func insertIdleExecution(
 	t *testing.T,
 	client *pg.Client,
 	agentName string,
-	inputMessages []llm.Message,
-) coredata.AgentRun {
+) coredata.AgentExecution {
 	t.Helper()
 
 	tenantID := gid.NewTenantID()
 	orgID := gid.New(tenantID, coredata.OrganizationEntityType)
-	runID := gid.New(tenantID, coredata.AgentRunEntityType)
-	inputJSON, err := json.Marshal(inputMessages)
-	require.NoError(t, err)
+	runID := gid.New(tenantID, coredata.AgentExecutionEntityType)
 
 	now := time.Now()
-	run := coredata.AgentRun{
-		ID:             runID,
-		OrganizationID: orgID,
-		StartAgentName: agentName,
-		Status:         coredata.AgentRunStatusPending,
-		InputMessages:  inputJSON,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+	run := coredata.AgentExecution{
+		ID:              runID,
+		OrganizationID:  orgID,
+		StartAgentName:  agentName,
+		Status:          coredata.AgentExecutionStatusIdle,
+		SessionMessages: json.RawMessage("[]"),
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 
-	err = client.WithTx(
+	err := client.WithTx(
 		context.Background(),
 		func(ctx context.Context, tx pg.Tx) error {
 			if _, err := tx.Exec(
@@ -64,7 +66,7 @@ func insertPendingRun(
 				return fmt.Errorf("cannot insert placeholder organization: %w", err)
 			}
 
-			return run.Insert(ctx, tx, coredata.NewScope(tenantID))
+			return run.Insert(ctx, tx, coredata.NewScope(tenantID, gid.Nil))
 		},
 	)
 	require.NoError(t, err)

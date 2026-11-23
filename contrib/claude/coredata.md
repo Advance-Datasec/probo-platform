@@ -123,7 +123,7 @@ The method name signals whether the result set is bounded:
 
 ### Loading every row without an unbounded query
 
-When a caller genuinely needs all rows, expose a cursor-paginated `LoadBy*` and walk it with the generic `page.LoadAll` helper ([`pkg/page/load_all.go`](../../pkg/page/load_all.go)). It repeatedly fetches forward pages of `MaxCursorSize` until the result is exhausted, and returns an error past `MaxLoadAllPages` (20) pages so a genuinely unbounded set fails loudly instead of exhausting memory.
+When a caller genuinely needs all rows, expose a cursor-paginated `LoadBy*` and walk it with the generic `page.LoadAll` / `page.WalkAll` helpers ([`pkg/page/load_all.go`](../../pkg/page/load_all.go)). They repeatedly fetch forward pages of `MaxCursorSize` until the result is exhausted. `LoadAll` materialises the concatenated slice and errors past `MaxLoadAllPages` pages so a genuinely unbounded set fails loudly instead of exhausting memory. `WalkAll` streams each page to a callback with no page cap — use it when you can process rows as they arrive (e.g. streaming an export).
 
 ```go
 things, err := page.LoadAll(
@@ -143,11 +143,80 @@ things, err := page.LoadAll(
 )
 ```
 
-The order field passed to `page.LoadAll` must have a `CursorKey` case on the entity. `CursorKey` panics at runtime (not compile time) on an unhandled field, so add the case when introducing the order field.
+```go
+err := page.WalkAll(
+	ctx,
+	page.OrderBy[coredata.ThingOrderField]{
+		Field:     coredata.ThingOrderFieldCreatedAt,
+		Direction: page.OrderDirectionAsc,
+	},
+	func(ctx context.Context, cursor *page.Cursor[coredata.ThingOrderField]) ([]*coredata.Thing, error) {
+		var batch coredata.Things
+		if err := batch.LoadByParentID(ctx, conn, scope, parentID, cursor); err != nil {
+			return nil, err
+		}
+
+		return batch, nil
+	},
+	func(things []*coredata.Thing) error {
+		// process one page
+		return nil
+	},
+)
+```
+
+The order field passed to `page.LoadAll` / `page.WalkAll` must have a `CursorKey` case on the entity. `CursorKey` panics at runtime (not compile time) on an unhandled field, so add the case when introducing the order field.
 
 ## No cross-entity JOINs
 
-Each entity file queries only its own table. When data from multiple entities is needed, the caller orchestrates separate calls. Never write a JOIN between two entity tables inside an entity method, and never return a raw ID belonging to a different entity — return the full entity and let the caller read the foreign key field.
+Each entity file in `pkg/coredata` queries its own table. Never JOIN another entity table to **return its columns** — the caller orchestrates separate calls instead. Using the other table only to narrow a `WHERE` clause is allowed.
+
+**Subqueries for filtering are OK.** When the only purpose of the other table is to narrow a `WHERE` clause (e.g. `IN (SELECT id FROM ...)`), keep it in the query rather than loading that table's IDs in Go and passing them as an `ANY(@ids)` parameter. A subquery keeps the filtering in the database and eliminates an extra round trip. Passing values already loaded from the first entity into the second entity's own filter is the separate-calls case, not this shortcut.
+
+```go
+// BAD — JOIN that returns a column from the joined table
+q := `
+SELECT ctpd.common_third_party_id
+FROM detected_trackers dt
+JOIN common_third_party_domains ctpd ON ctpd.domain = dt.initiator_domain
+WHERE dt.tracker_pattern_id = @tracker_pattern_id
+`
+
+// GOOD — two entity calls. domains come from detected_trackers, not from pre-loading the other table's IDs.
+var trackers coredata.DetectedTrackers
+domains, err := trackers.LoadInitiatorDomainsByTrackerPatternID(ctx, conn, patternID, 10)
+if err != nil {
+	return nil, fmt.Errorf("cannot load initiator domains: %w", err)
+}
+
+if len(domains) == 0 {
+	return nil, nil
+}
+
+filter := coredata.NewCommonThirdPartyDomainFilter(domains)
+
+var matched coredata.CommonThirdPartyDomains
+if err := matched.Load(ctx, conn, 1, filter); err != nil {
+	return nil, fmt.Errorf("cannot load common third party domains: %w", err)
+}
+
+if len(matched) == 0 {
+	return nil, nil
+}
+
+thirdPartyID := matched[0].CommonThirdPartyID
+return &thirdPartyID, nil
+
+// GOOD — subquery only used for filtering, no columns returned from it
+q := `
+SELECT id, pattern, tracker_type, ...
+FROM tracker_patterns
+WHERE common_tracker_pattern_id IN (
+    SELECT id FROM common_tracker_patterns
+    WHERE common_third_party_id = @filter_common_third_party_id
+)
+`
+```
 
 ## Row collection
 
@@ -276,12 +345,12 @@ The same applies to foreign key violations (`"23503"`) mapped to `ErrResourceInU
 
 ```go
 // Good — composite PK on junction table (real business constraint)
-if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" && pgErr.ConstraintName == "risk_assessment_scenario_threats_pkey" {
+if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" && pgErr.ConstraintName == "risk_analysis_scenario_threats_pkey" {
     return ErrResourceAlreadyExists
 }
 
 // Bad — single GID PK (cannot collide, dead code)
-if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" && pgErr.ConstraintName == "risk_assessments_pkey" {
+if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" && pgErr.ConstraintName == "risk_analyses_pkey" {
     return ErrResourceAlreadyExists
 }
 ```
@@ -319,6 +388,37 @@ func (f *CookieBannerFilter) SQLArguments() pgx.StrictNamedArgs {
 ```
 
 For complex multi-field filters, use `CASE WHEN` in SQL and always declare all argument keys in every code path (use `nil` for inactive ones).
+
+### List text search
+
+Text search on a filterable list uses a stored `search_vector`. A typed word is a prefix of a stored word, every word is required, and punctuation is ignored. A query that keeps no words matches every row. Words may sit in different columns because those columns are concatenated into one vector.
+
+```sql
+search_vector tsvector
+GENERATED ALWAYS AS (
+    to_tsvector(
+        'simple',
+        COALESCE(name, '') || ' ' || COALESCE(description, '')
+    )
+) STORED
+```
+
+Index it with GIN. Copy this predicate into `SQLFragment` and write the real column name in place. Do not build it from a Go constant or a function that interpolates the column name. Bind `@query` on every path, including when it is unset.
+
+```sql
+CASE
+    WHEN to_tsvector('simple', COALESCE(@query::text, '')) <> ''::tsvector THEN
+        search_vector @@ (
+            SELECT to_tsquery('simple', string_agg(quote_literal(lexeme) || ':*', ' & '))
+            FROM unnest(to_tsvector('simple', @query::text)) AS lex(lexeme, positions)
+        )
+    ELSE TRUE
+END
+```
+
+Columns that store codes such as `POL-004`, `AC-2`, or `RSK-001` pass the text through `translate(text, '-+', '  ')` before `to_tsvector`. Do the same to `@query` in that list's `SQLFragment`. Documents, controls, and risks do this. Leave the query unchanged on a list whose stored vector has not been rebuilt the same way. A hyphen before digits is otherwise stored as a signed number, so a search for the digits misses.
+
+On a new module, one escaped `ILIKE '%…%' ESCAPE '\'` on a single column is acceptable for the first implementation. Replace it with a `search_vector` once the list searches more than one column, needs word prefixes, or the table is large enough that a scan matters. Do not mix `ILIKE` and `search_vector` in the same text search.
 
 ## Enums
 
@@ -375,15 +475,78 @@ Rules:
 
 - Keep enums as string types only (no iota/int enums).
 - `UnmarshalText` must validate via `IsValid`; do not duplicate validation switches in `Scan`/`Value`.
-- Do not implement `database/sql` `Scan`/`Value` on singular enums in coredata; pgx uses `MarshalText` / `UnmarshalText`.
+- Do not implement `database/sql` `Scan`/`Value` on singular enums in coredata; pgx uses `MarshalText` / `UnmarshalText`. A slice of the enum passed as a Postgres array is the exception below.
 - Add compile-time interface checks in a `var` block for every enum (`fmt.Stringer`, `encoding.TextMarshaler`, `encoding.TextUnmarshaler`).
 - Keep a `Values()` helper named as the pluralized enum type when there is no naming conflict.
+
+## Enum arrays
+
+pgx does not know our PostgreSQL enum array types. A single enum value encodes through `MarshalText`. A slice of the named type does not: `[]XXXType` has no encode plan, and the query fails before it reaches Postgres.
+
+Pass a named slice type that implements `database/sql/driver.Valuer`. `Value` returns the Postgres array literal. Do not loop the values into `[]string` at the call site. Enum labels are plain ASCII tokens, so `%q` produces the same literal PostgreSQL parses.
+
+Name the slice type the plural of the enum when that name is free (`DocumentVersionSignatureStates`). When a plural helper already uses that name (`ProfileStates()`, `CompliancePortalDocumentAccessStatuses()`, `DocumentTypes()`), append `Values` to the enum type (`ProfileStateValues`, `CompliancePortalDocumentAccessStatusValues`).
+
+```go
+type (
+    XXXType       string
+    XXXTypeValues []XXXType
+)
+
+var (
+    _ driver.Valuer = XXXTypeValues(nil)
+)
+
+func (values XXXTypeValues) Value() (driver.Value, error) {
+    if len(values) == 0 {
+        return nil, nil
+    }
+
+    var result strings.Builder
+    result.WriteString("{")
+
+    for i, value := range values {
+        if i > 0 {
+            result.WriteString(",")
+        }
+
+        fmt.Fprintf(&result, "%q", value.String())
+    }
+
+    result.WriteString("}")
+
+    return result.String(), nil
+}
+```
+
+An empty slice encodes as SQL NULL, so a filter written as `WHEN @states::xxx_type[] IS NOT NULL` stays off when no values were supplied.
+
+The SQL still casts the parameter:
+
+```sql
+status = ANY(@statuses::xxx_type[])
+```
+
+```go
+// GOOD
+"statuses": XXXTypeValues{XXXTypeAlpha, XXXTypeBeta},
+
+// BAD — pgx cannot encode a slice of the named type
+"statuses": []XXXType{XXXTypeAlpha, XXXTypeBeta},
+
+// BAD — converts at the call site instead of implementing driver.Valuer
+encoded := make([]string, len(values))
+for i, value := range values {
+    encoded[i] = value.String()
+}
+"statuses": encoded,
+```
 
 Collection enum wrappers (`OAuth2Scopes`, `CountryCodes`, etc.) may keep custom parsing/encoding methods when wire format differs from a single enum token.
 
 ## Order fields
 
-Order-field enums follow the same enum rules and additionally implement `Column()` and `page.OrderField`:
+Order-field enums follow the same enum rules and additionally implement `Column()` and `page.OrderField`. Shared `IsValid` / `UnmarshalText` logic lives in `order_field.go` — do not copy a validation switch into each file:
 
 ```go
 type XXXOrderField string
@@ -399,6 +562,29 @@ var (
     _ encoding.TextMarshaler   = XXXOrderField("")
     _ encoding.TextUnmarshaler = (*XXXOrderField)(nil)
 )
+
+func XXXOrderFields() []XXXOrderField {
+    return []XXXOrderField{
+        XXXOrderFieldCreatedAt,
+        XXXOrderFieldName,
+    }
+}
+
+func (v XXXOrderField) IsValid() bool {
+    return isValidOrderField(v, XXXOrderFields())
+}
+
+func (v XXXOrderField) String() string {
+    return string(v)
+}
+
+func (v XXXOrderField) MarshalText() ([]byte, error) {
+    return []byte(v.String()), nil
+}
+
+func (v *XXXOrderField) UnmarshalText(text []byte) error {
+    return unmarshalOrderField(v, text, XXXOrderFields())
+}
 
 func (f XXXOrderField) Column() string {
     return string(f)
@@ -508,6 +694,17 @@ json.Unmarshal(plaintext, &c.Connection)
 - **Name columns and fields consistently.** Use `hashed_` prefix for hashed values and `encrypted_` prefix for encrypted values. The Go struct field must mirror this (e.g. `HashedToken`, `EncryptedConnection`).
 - **Return plaintext tokens once.** For SHA-256-hashed tokens, return the raw token to the caller at creation time only. After that, the application only ever sees the hash.
 - **Migration columns.** When adding a new sensitive column, always use `BYTEA`. Never add `DEFAULT` on sensitive columns.
+
+## Resource ownership
+
+Org-scoped owners are stored as `owner_profile_id` → `iam_membership_profiles`,
+not identity GIDs. GraphQL uses `ownerId`; resolvers load `owner: Profile` via
+dataloader. Employee self-service resolves identity → profile at the API
+boundary; IAM may bridge profile storage back to identity in
+`AuthorizationAttributes`.
+
+See [`ownership.md`](ownership.md) for the full pattern (provisional — pending
+team review).
 
 ## New entity checklist
 

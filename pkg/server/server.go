@@ -1,123 +1,209 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package server
 
 import (
-	"errors"
+	"context"
+	"fmt"
 	"net/http"
-	"path"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"go.gearno.de/kit/httpserver"
 	"go.gearno.de/kit/log"
-	"go.gearno.de/x/ref"
+	"go.probo.inc/probo/apps/console"
+	employeeportalstatics "go.probo.inc/probo/apps/employee-portal"
 	"go.probo.inc/probo/pkg/accessreview"
-	"go.probo.inc/probo/pkg/agentrun"
+	"go.probo.inc/probo/pkg/agentexecution"
 	"go.probo.inc/probo/pkg/baseurl"
-	"go.probo.inc/probo/pkg/connector"
-	"go.probo.inc/probo/pkg/connector/provider"
+	"go.probo.inc/probo/pkg/certmanager"
+	cloudaws "go.probo.inc/probo/pkg/cloud/aws"
+	cloudazure "go.probo.inc/probo/pkg/cloud/azure"
+	cloudgcp "go.probo.inc/probo/pkg/cloud/gcp"
+	"go.probo.inc/probo/pkg/complianceportal/management"
+	"go.probo.inc/probo/pkg/complianceportal/visitor"
+	"go.probo.inc/probo/pkg/connectorprotocol"
+	"go.probo.inc/probo/pkg/connectorprotocol/provider"
 	"go.probo.inc/probo/pkg/cookiebanner"
+	employeeportalmgmt "go.probo.inc/probo/pkg/employeeportal/management"
 	"go.probo.inc/probo/pkg/esign"
 	"go.probo.inc/probo/pkg/filemanager"
 	"go.probo.inc/probo/pkg/geoloc"
 	"go.probo.inc/probo/pkg/iam"
-	"go.probo.inc/probo/pkg/iam/oauth2"
+	"go.probo.inc/probo/pkg/identityfederation"
+	"go.probo.inc/probo/pkg/itam"
 	"go.probo.inc/probo/pkg/mailman"
+	"go.probo.inc/probo/pkg/notification"
 	"go.probo.inc/probo/pkg/probo"
+	"go.probo.inc/probo/pkg/probot"
+	slackchannel "go.probo.inc/probo/pkg/probot/channel/slack"
+	"go.probo.inc/probo/pkg/probot/identitybinding"
+	"go.probo.inc/probo/pkg/realtime"
 	"go.probo.inc/probo/pkg/resourcealias"
 	"go.probo.inc/probo/pkg/riskmanagement"
 	"go.probo.inc/probo/pkg/securecookie"
 	"go.probo.inc/probo/pkg/server/api"
-	"go.probo.inc/probo/pkg/server/api/compliancepage"
-	"go.probo.inc/probo/pkg/server/gqlutils"
+	connect_v1 "go.probo.inc/probo/pkg/server/api/connect/v1"
+	"go.probo.inc/probo/pkg/server/gqlx"
+	"go.probo.inc/probo/pkg/server/gqlx/directives/ratelimit"
+	server_identityfederation "go.probo.inc/probo/pkg/server/identityfederation"
 	"go.probo.inc/probo/pkg/server/mailactions"
-	trust_web "go.probo.inc/probo/pkg/server/trust"
 	console_web "go.probo.inc/probo/pkg/server/web"
+	employeeportal_web "go.probo.inc/probo/pkg/server/web/employeeportal"
 	"go.probo.inc/probo/pkg/slack"
+	"go.probo.inc/probo/pkg/tag"
+	"go.probo.inc/probo/pkg/task"
 	"go.probo.inc/probo/pkg/thirdparty"
-	"go.probo.inc/probo/pkg/trust"
 	"go.probo.inc/probo/pkg/uri"
 )
 
 type Config struct {
 	BaseURL           *baseurl.BaseURL
-	AllowedOrigins    []string
-	ExtraHeaderFields map[string]string
-	Probo             *probo.Service
-	ResourceAlias     *resourcealias.Service
-	File              *filemanager.Service
-	IAM               *iam.Service
-	Trust             *trust.Service
-	ESign             *esign.Service
-	AccessReview      *accessreview.Service
-	AgentRun          *agentrun.Service
-	Slack             *slack.Service
-	Mailman           *mailman.Service
-	CookieBanner      *cookiebanner.Service
-	Geoloc            *geoloc.Service
-	ThirdParty        *thirdparty.Service
-	RiskManagement    *riskmanagement.Service
-	Cookie            securecookie.Config
-	TokenSecret       string
-	ConnectorRegistry *connector.ConnectorRegistry
+	FileStorageOrigin string
+	// FaroEnabled gates the collector meta tags and the connect-src origin.
+	FaroEnabled             bool
+	FaroCollectorURL        string
+	FaroAPIKey              string
+	AllowedOrigins          []string
+	ExtraHeaderFields       map[string]string
+	Probo                   *probo.Service
+	CollaborationEvents     *realtime.Events
+	ShutdownContext         context.Context
+	ResourceAlias           *resourcealias.Service
+	Tag                     *tag.Service
+	File                    *filemanager.Service
+	IAM                     *iam.Service
+	Visitor                 *visitor.Service
+	ESign                   *esign.Service
+	Management              *management.Service
+	CertManager             *certmanager.Service
+	AccessReview            *accessreview.Service
+	AgentExecution          *agentexecution.Service
+	Slack                   *slack.Service
+	BotDeliveryDestinations api.BotDeliveryDestinations
+	ComplianceMessages      api.ComplianceMessages
+	Slackbot                *slackchannel.Service
+	SlackInteractiveInbox   *slackchannel.InteractiveCommandInbox
+	ProbotIdentityBindings  *identitybinding.Service
+	SlackbotInstallations   *slackchannel.InstallationService
+	ProbotCapabilities      *probot.CapabilityRegistry
+	Mailman                 *mailman.Service
+	CookieBanner            *cookiebanner.Service
+	EmployeePortal          *employeeportalmgmt.Service
+	Geoloc                  *geoloc.Service
+	ThirdParty              *thirdparty.Service
+	RiskManagement          *riskmanagement.Service
+	ITAM                    *itam.Service
+	Task                    *task.Service
+	Notification            *notification.Service
+	Cookie                  securecookie.Config
+	TokenSecret             string
+	// InstallStateKey signs the app-install state tokens the connector install
+	// ceremony carries across the vendor.
+	InstallStateKey   string
+	ConnectorRegistry *connectorprotocol.Registry
 	ProviderRegistry  *provider.Registry
 	CustomDomainCname string
-	GraphQLLimits     gqlutils.Limits
+	GraphQLLimits     gqlx.Limits
+	RateLimitDefault  ratelimit.Budget
+	RateLimits        map[string]ratelimit.Budget
 	Logger            *log.Logger
+
+	// IdentityFederationIssuer serves the outbound OIDC documents. It is nil when the
+	// identity federation issuer is disabled, in which case no /federation route exists.
+	IdentityFederationIssuer *identityfederation.Issuer
+	AWSConnectorInstall      cloudaws.ConnectorInstallConfig
+	GCPConnectorInstall      cloudgcp.ConnectorInstallConfig
+	AzureConnectorInstall    cloudazure.ConnectorInstallConfig
+	LinearWebhookSecret      string
+	MCPFeedbackURL           string
 }
 
 type Server struct {
-	apiServer          *api.Server
-	mailActionsHandler http.Handler
-	consoleWebServer   *console_web.Server
-	trustWebServer     *trust_web.Server
-	router             *chi.Mux
-	extraHeaderFields  map[string]string
-	baseURL            string
-	proboService       *probo.Service
-	iamService         *iam.Service
-	trustService       *trust.Service
-	logger             *log.Logger
+	cfg                          Config
+	apiServer                    *api.Server
+	mailActionsHandler           http.Handler
+	identityFederationHandler    http.Handler
+	consoleWebServer             *console_web.Server
+	consoleSecurityPolicy        string
+	employeePortalWebServer      *employeeportal_web.Server
+	employeePortalSecurityPolicy string
+	employeePortal               *employeeportalmgmt.Service
+	router                       *chi.Mux
+	extraHeaderFields            map[string]string
+	baseURL                      string
+	proboService                 *probo.Service
+	iamService                   *iam.Service
+	logger                       *log.Logger
 }
 
 func NewServer(cfg Config) (*Server, error) {
 	apiCfg := api.Config{
-		BaseURL:           cfg.BaseURL,
-		AllowedOrigins:    cfg.AllowedOrigins,
-		Probo:             cfg.Probo,
-		ResourceAlias:     cfg.ResourceAlias,
-		File:              cfg.File,
-		IAM:               cfg.IAM,
-		Trust:             cfg.Trust,
-		ESign:             cfg.ESign,
-		AccessReview:      cfg.AccessReview,
-		AgentRun:          cfg.AgentRun,
-		Slack:             cfg.Slack,
-		Mailman:           cfg.Mailman,
-		CookieBanner:      cfg.CookieBanner,
-		Geoloc:            cfg.Geoloc,
-		ThirdParty:        cfg.ThirdParty,
-		RiskManagement:    cfg.RiskManagement,
-		Cookie:            cfg.Cookie,
-		TokenSecret:       cfg.TokenSecret,
-		ConnectorRegistry: cfg.ConnectorRegistry,
-		ProviderRegistry:  cfg.ProviderRegistry,
-		CustomDomainCname: cfg.CustomDomainCname,
-		GraphQLLimits:     cfg.GraphQLLimits,
-		Logger:            cfg.Logger.Named("api"),
+		BaseURL:                  cfg.BaseURL,
+		AllowedOrigins:           cfg.AllowedOrigins,
+		Probo:                    cfg.Probo,
+		CollaborationEvents:      cfg.CollaborationEvents,
+		ShutdownContext:          cfg.ShutdownContext,
+		ResourceAlias:            cfg.ResourceAlias,
+		Tag:                      cfg.Tag,
+		File:                     cfg.File,
+		IAM:                      cfg.IAM,
+		Visitor:                  cfg.Visitor,
+		ESign:                    cfg.ESign,
+		Management:               cfg.Management,
+		CertManager:              cfg.CertManager,
+		AccessReview:             cfg.AccessReview,
+		AgentExecution:           cfg.AgentExecution,
+		Slack:                    cfg.Slack,
+		BotDeliveryDestinations:  cfg.BotDeliveryDestinations,
+		ComplianceMessages:       cfg.ComplianceMessages,
+		Slackbot:                 cfg.Slackbot,
+		SlackInteractiveInbox:    cfg.SlackInteractiveInbox,
+		ProbotIdentityBindings:   cfg.ProbotIdentityBindings,
+		SlackbotInstallations:    cfg.SlackbotInstallations,
+		ProbotCapabilities:       cfg.ProbotCapabilities,
+		Mailman:                  cfg.Mailman,
+		CookieBanner:             cfg.CookieBanner,
+		EmployeePortal:           cfg.EmployeePortal,
+		Geoloc:                   cfg.Geoloc,
+		ThirdParty:               cfg.ThirdParty,
+		RiskManagement:           cfg.RiskManagement,
+		ITAM:                     cfg.ITAM,
+		Task:                     cfg.Task,
+		Notification:             cfg.Notification,
+		Cookie:                   cfg.Cookie,
+		TokenSecret:              cfg.TokenSecret,
+		InstallStateKey:          cfg.InstallStateKey,
+		ConnectorRegistry:        cfg.ConnectorRegistry,
+		ProviderRegistry:         cfg.ProviderRegistry,
+		CustomDomainCname:        cfg.CustomDomainCname,
+		GraphQLLimits:            cfg.GraphQLLimits,
+		RateLimitDefault:         cfg.RateLimitDefault,
+		RateLimits:               cfg.RateLimits,
+		Logger:                   cfg.Logger.Named("api"),
+		IdentityFederationIssuer: cfg.IdentityFederationIssuer,
+		AWSConnectorInstall:      cfg.AWSConnectorInstall,
+		GCPConnectorInstall:      cfg.GCPConnectorInstall,
+		AzureConnectorInstall:    cfg.AzureConnectorInstall,
+		LinearWebhookSecret:      cfg.LinearWebhookSecret,
+		MCPFeedbackURL:           cfg.MCPFeedbackURL,
 	}
 
 	apiServer, err := api.NewServer(apiCfg)
@@ -125,54 +211,146 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
-	consoleWebServer, err := console_web.NewServer()
+	consoleWebServer, err := console_web.NewServer(
+		cfg.FaroEnabled,
+		cfg.FaroCollectorURL,
+		cfg.FaroAPIKey,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	trustWebServer, err := trust_web.NewServer(compliancePageHeadData(cfg.BaseURL, cfg.Trust))
+	employeePortalWebServer, err := employeeportal_web.NewServer(
+		cfg.FaroEnabled,
+		cfg.FaroCollectorURL,
+		cfg.FaroAPIKey,
+	)
 	if err != nil {
 		return nil, err
+	}
+
+	appOrigin := ""
+
+	if cfg.BaseURL != nil {
+		var originErr error
+
+		appOrigin, originErr = cfg.BaseURL.CSPOrigin()
+		if originErr != nil {
+			return nil, fmt.Errorf("cannot build console content security policy: %w", originErr)
+		}
+	}
+
+	consoleCSP, err := console.ContentSecurityPolicy(
+		appOrigin,
+		cfg.FileStorageOrigin,
+		cfg.FaroEnabled,
+		cfg.FaroCollectorURL,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build console content security policy: %w", err)
+	}
+
+	employeePortalCSP, err := employeeportalstatics.ContentSecurityPolicy(
+		appOrigin,
+		cfg.FileStorageOrigin,
+		cfg.FaroEnabled,
+		cfg.FaroCollectorURL,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build employee portal content security policy: %w", err)
 	}
 
 	router := chi.NewRouter()
 
-	server := &Server{
-		apiServer:          apiServer,
-		mailActionsHandler: mailactions.NewMux(cfg.Mailman, cfg.TokenSecret),
-		consoleWebServer:   consoleWebServer,
-		trustWebServer:     trustWebServer,
-		router:             router,
-		extraHeaderFields:  cfg.ExtraHeaderFields,
-		baseURL:            cfg.BaseURL.String(),
-		proboService:       cfg.Probo,
-		iamService:         cfg.IAM,
-		trustService:       cfg.Trust,
-		logger:             cfg.Logger,
+	var identityFederationHandler http.Handler
+
+	if cfg.IdentityFederationIssuer != nil {
+		if cfg.Probo == nil || cfg.Probo.Organizations == nil {
+			return nil, fmt.Errorf("cannot create server: identity federation issuer needs an organization service")
+		}
+
+		identityFederationHandler = server_identityfederation.NewMux(
+			cfg.Logger.Named("identityfederation"),
+			cfg.IdentityFederationIssuer,
+			cfg.Probo.Organizations,
+		)
 	}
 
-	server.setupRoutes(cfg.BaseURL.String())
+	server := &Server{
+		cfg:                          cfg,
+		apiServer:                    apiServer,
+		mailActionsHandler:           mailactions.NewMux(cfg.Mailman, cfg.TokenSecret),
+		identityFederationHandler:    identityFederationHandler,
+		consoleWebServer:             consoleWebServer,
+		consoleSecurityPolicy:        consoleCSP,
+		employeePortalWebServer:      employeePortalWebServer,
+		employeePortalSecurityPolicy: employeePortalCSP,
+		employeePortal:               cfg.EmployeePortal,
+		router:                       router,
+		extraHeaderFields:            cfg.ExtraHeaderFields,
+		baseURL:                      cfg.BaseURL.String(),
+		proboService:                 cfg.Probo,
+		iamService:                   cfg.IAM,
+		logger:                       cfg.Logger,
+	}
+
+	server.setupRoutes()
 
 	return server, nil
 }
 
-func (s *Server) setupRoutes(baseURL string) {
+func (s *Server) setupRoutes() {
 	// OIDC Discovery 1.0 §4 and RFC 8414 §3 both require the metadata
 	// document at the issuer root under well-known paths.
 	s.router.Get("/.well-known/openid-configuration", s.oidcDiscoveryHandler)
 	s.router.Get("/.well-known/oauth-authorization-server", s.oidcDiscoveryHandler)
 	s.router.Get("/.well-known/oauth-protected-resource", s.protectedResourceMetadataHandler)
+	s.router.Get(
+		"/.well-known/oauth-protected-resource/api/mcp/v1",
+		s.mcpProtectedResourceMetadataHandler,
+	)
 
 	s.router.Mount("/api", http.StripPrefix("/api", s.apiServer))
 	s.router.Mount("/mail-actions", http.StripPrefix("/mail-actions", s.mailActionsHandler))
 
-	s.router.Route("/trust/{slugOrId}", func(r chi.Router) {
-		r.Use(compliancepage.NewIDMiddleware(s.trustService, baseURL))
-		r.Use(s.stripTrustPrefix)
-		r.Mount("/", s.trustCenterRouter())
-	})
+	// The identity federation route tree is mounted at the same prefix in every
+	// deployment; only the advertised issuer differs, and it comes from
+	// configuration. The SaaS edge maps its public apex onto this prefix.
+	if s.identityFederationHandler != nil {
+		s.router.Mount(
+			identityfederation.PathPrefix,
+			http.StripPrefix(identityfederation.PathPrefix, s.identityFederationHandler),
+		)
+	}
 
-	s.router.Mount("/", s.consoleWebServer)
+	employeePortalHandler := http.Handler(s.employeePortalWebServer)
+	if s.employeePortal != nil {
+		employeePortalHandler = employeeportal_web.OrganizationGIDRedirectMiddleware(
+			s.logger.Named("employeeportal.redirect"),
+			s.employeePortal.OldestIDForOrganization,
+			employeePortalHandler,
+		)
+	}
+
+	s.router.Mount(
+		employeeportal_web.PathPrefix,
+		NewSecurityHeadersMiddleware(
+			SecurityHeadersOptions{
+				ExtraHeaderFields:     s.extraHeaderFields,
+				ContentSecurityPolicy: s.employeePortalSecurityPolicy,
+			},
+		)(http.StripPrefix(employeeportal_web.PathPrefix, employeePortalHandler)),
+	)
+
+	s.router.Mount(
+		"/",
+		NewSecurityHeadersMiddleware(
+			SecurityHeadersOptions{
+				ExtraHeaderFields:     s.extraHeaderFields,
+				ContentSecurityPolicy: s.consoleSecurityPolicy,
+			},
+		)(employeeportal_web.LegacyRedirectMiddleware(s.consoleWebServer)),
+	)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -181,124 +359,36 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setExtraHeaders(w http.ResponseWriter) {
-	for key, value := range s.extraHeaderFields {
-		w.Header().Set(key, value)
-	}
+	ApplyExtraHeaders(w, s.extraHeaderFields)
 }
 
 func (s *Server) oidcDiscoveryHandler(w http.ResponseWriter, r *http.Request) {
-	api := s.baseURL + "/api/connect/v1"
-
-	endpoints := oauth2.Endpoints{
-		Authorization:       uri.URI(api + "/oauth2/authorize"),
-		Token:               uri.URI(api + "/oauth2/token"),
-		Userinfo:            uri.URI(api + "/oauth2/userinfo"),
-		JWKS:                uri.URI(api + "/oauth2/jwks"),
-		Registration:        uri.URI(api + "/oauth2/register"),
-		Introspection:       uri.URI(api + "/oauth2/introspect"),
-		Revocation:          uri.URI(api + "/oauth2/revoke"),
-		DeviceAuthorization: uri.URI(api + "/oauth2/device"),
-	}
-
-	metadata := s.iamService.OAuth2ServerMetadata(endpoints)
+	metadata := connect_v1.OAuth2ServerMetadata(
+		s.cfg.BaseURL,
+		s.iamService.OAuth2ScopeRegistry.RegisteredScopes(),
+	)
 
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	httpserver.RenderJSON(w, http.StatusOK, metadata)
 }
 
 func (s *Server) protectedResourceMetadataHandler(w http.ResponseWriter, r *http.Request) {
-	resource := uri.URI(s.baseURL)
+	s.renderProtectedResourceMetadata(w, uri.URI(s.baseURL))
+}
+
+func (s *Server) mcpProtectedResourceMetadataHandler(w http.ResponseWriter, r *http.Request) {
+	resource, err := s.iamService.OAuth2MCPResource()
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	s.renderProtectedResourceMetadata(w, resource)
+}
+
+func (s *Server) renderProtectedResourceMetadata(w http.ResponseWriter, resource uri.URI) {
 	metadata := s.iamService.OAuth2ProtectedResourceMetadata(resource)
 
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	httpserver.RenderJSON(w, http.StatusOK, metadata)
-}
-
-func (s *Server) handleCustomDomain404(w http.ResponseWriter, r *http.Request) {
-	httpserver.RenderError(w, http.StatusNotFound, errors.New("not found"))
-}
-
-func (s *Server) stripTrustPrefix(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		slugOrId := chi.URLParam(r, "slugOrId")
-		prefix := "/trust/" + slugOrId
-
-		if r.URL.Path == prefix {
-			cleanPath := path.Clean(prefix) + "/"
-			http.Redirect(w, r, cleanPath, http.StatusMovedPermanently)
-
-			return
-		}
-
-		r.URL.Path = strings.TrimPrefix(r.URL.Path, prefix)
-		if r.URL.Path == "" {
-			r.URL.Path = "/"
-		}
-
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (s *Server) trustCenterRouter() chi.Router {
-	r := chi.NewRouter()
-
-	h := compliancepage.NewHandler(s.trustService)
-
-	r.Mount("/api/trust/v1", s.apiServer.CompliancePageHandler())
-	r.Get("/llms.txt", h.HandleLLMsTxt)
-	r.Get("/robots.txt", h.HandleRobotsTxt)
-	r.Get("/sitemap.xml", h.HandleSitemap)
-	r.Handle("/*", s.trustWebServer)
-
-	return r
-}
-
-func (s *Server) TrustCenterHandler() http.Handler {
-	r := chi.NewRouter()
-
-	r.Use(compliancepage.NewSNIMiddleware(s.trustService))
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Strict-Transport-Security", "max-age=31536000; preload")
-			s.setExtraHeaders(w)
-			next.ServeHTTP(w, r)
-		})
-	})
-
-	r.NotFound(s.handleCustomDomain404)
-
-	r.Mount("/", s.trustCenterRouter())
-
-	return r
-}
-
-func compliancePageHeadData(baseURL *baseurl.BaseURL, trustService *trust.Service) trust_web.HeadDataFunc {
-	return func(r *http.Request) trust_web.HeadData {
-		tc := compliancepage.CompliancePageFromContext(r.Context())
-		if tc == nil {
-			return trust_web.HeadData{Title: "Compliance Page"}
-		}
-
-		org, err := trustService.GetOrganizationByTrustCenterID(r.Context(), tc.ID)
-		if err != nil || org == nil {
-			return trust_web.HeadData{Title: "Compliance Page"}
-		}
-
-		compliancePageBaseURL := compliancepage.CompliancePageBaseURLFromContext(r.Context())
-
-		headData := trust_web.HeadData{
-			Title:       org.Name + " — Compliance",
-			Description: org.Name + " Compliance Page",
-			OGURL:       ref.UnrefOrZero(compliancePageBaseURL),
-		}
-
-		if tc.LogoFileID != nil {
-			faviconURL, err := baseURL.WithPath("/api/files/v1/public/" + tc.LogoFileID.String()).String()
-			if err == nil {
-				headData.FaviconURL = faviconURL
-			}
-		}
-
-		return headData
-	}
 }

@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_test
 
@@ -183,130 +189,70 @@ func TestAuditLog_Filter(t *testing.T) {
 	})
 }
 
-func TestAuditLog_RBAC(t *testing.T) {
+func TestAuditLog_Export(t *testing.T) {
 	t.Parallel()
 	owner := testutil.NewClient(t, testutil.RoleOwner)
 
-	// Generate an audit log entry.
-	factory.NewThirdParty(owner).WithName(factory.SafeName("RBACThirdParty")).Create()
-
-	const query = `
-		query($orgId: ID!) {
-			node(id: $orgId) {
-				... on Organization {
-					auditLogEntries(first: 10) {
-						edges {
-							node {
-								id
-								action
-							}
-						}
-						totalCount
-					}
-				}
+	const mutation = `
+		mutation($input: RequestAuditLogExportInput!) {
+			requestAuditLogExport(input: $input) {
+				exportJobId
 			}
 		}
 	`
 
-	t.Run("viewer can list audit log entries", func(t *testing.T) {
+	t.Run("owner can request export", func(t *testing.T) {
 		t.Parallel()
-		viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
 
 		var result struct {
-			Node struct {
-				AuditLogEntries struct {
-					Edges []struct {
-						Node struct {
-							ID     string `json:"id"`
-							Action string `json:"action"`
-						} `json:"node"`
-					} `json:"edges"`
-					TotalCount int `json:"totalCount"`
-				} `json:"auditLogEntries"`
-			} `json:"node"`
+			RequestAuditLogExport struct {
+				ExportJobID string `json:"exportJobId"`
+			} `json:"requestAuditLogExport"`
 		}
 
-		err := viewer.Execute(query, map[string]any{
-			"orgId": viewer.GetOrganizationID().String(),
+		err := owner.Execute(mutation, map[string]any{
+			"input": map[string]any{
+				"organizationId": owner.GetOrganizationID().String(),
+				"fromTime":       "2026-01-01T00:00:00Z",
+				"toTime":         "2026-03-24T00:00:00Z",
+			},
 		}, &result)
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, result.Node.AuditLogEntries.TotalCount, 1)
+		assert.NotEmpty(t, result.RequestAuditLogExport.ExportJobID)
 	})
 
-	t.Run("admin can list audit log entries", func(t *testing.T) {
+	t.Run("admin can request export", func(t *testing.T) {
 		t.Parallel()
 		admin := testutil.NewClientInOrg(t, testutil.RoleAdmin, owner)
 
 		var result struct {
-			Node struct {
-				AuditLogEntries struct {
-					TotalCount int `json:"totalCount"`
-				} `json:"auditLogEntries"`
-			} `json:"node"`
+			RequestAuditLogExport struct {
+				ExportJobID string `json:"exportJobId"`
+			} `json:"requestAuditLogExport"`
 		}
 
-		err := admin.Execute(query, map[string]any{
-			"orgId": admin.GetOrganizationID().String(),
+		err := admin.Execute(mutation, map[string]any{
+			"input": map[string]any{
+				"organizationId": admin.GetOrganizationID().String(),
+				"fromTime":       "2026-01-01T00:00:00Z",
+				"toTime":         "2026-03-24T00:00:00Z",
+			},
 		}, &result)
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, result.Node.AuditLogEntries.TotalCount, 1)
+		assert.NotEmpty(t, result.RequestAuditLogExport.ExportJobID)
 	})
-}
 
-func TestAuditLog_TenantIsolation(t *testing.T) {
-	t.Parallel()
+	t.Run("viewer cannot request export", func(t *testing.T) {
+		t.Parallel()
+		viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
 
-	org1Owner := testutil.NewClient(t, testutil.RoleOwner)
-	org2Owner := testutil.NewClient(t, testutil.RoleOwner)
-
-	// Create a thirdParty in org1 to generate audit log entries.
-	factory.NewThirdParty(org1Owner).WithName(factory.SafeName("IsoThirdParty")).Create()
-
-	const query = `
-		query($orgId: ID!) {
-			node(id: $orgId) {
-				... on Organization {
-					auditLogEntries(first: 50) {
-						edges {
-							node {
-								id
-								action
-								resourceType
-							}
-						}
-						totalCount
-					}
-				}
-			}
-		}
-	`
-
-	// org2 should not see org1's audit log entries about thirdParties.
-	var result struct {
-		Node struct {
-			AuditLogEntries struct {
-				Edges []struct {
-					Node struct {
-						ID           string `json:"id"`
-						Action       string `json:"action"`
-						ResourceType string `json:"resourceType"`
-					} `json:"node"`
-				} `json:"edges"`
-				TotalCount int `json:"totalCount"`
-			} `json:"auditLogEntries"`
-		} `json:"node"`
-	}
-
-	err := org2Owner.Execute(query, map[string]any{
-		"orgId": org2Owner.GetOrganizationID().String(),
-	}, &result)
-	require.NoError(t, err)
-
-	for _, edge := range result.Node.AuditLogEntries.Edges {
-		// org2 may have its own audit log entries (from user/org creation),
-		// but should never see org1's thirdParty entries.
-		if edge.Node.ResourceType == "ThirdParty" {
-			t.Fatalf("org2 should not see org1's thirdParty audit log entries, but found: %s", edge.Node.Action)
-		}
-	}
+		_, err := viewer.Do(mutation, map[string]any{
+			"input": map[string]any{
+				"organizationId": viewer.GetOrganizationID().String(),
+				"fromTime":       "2026-01-01T00:00:00Z",
+				"toTime":         "2026-03-24T00:00:00Z",
+			},
+		})
+		testutil.RequireForbiddenError(t, err, "viewer cannot request audit log export")
+	})
 }

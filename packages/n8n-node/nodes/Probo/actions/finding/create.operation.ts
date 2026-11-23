@@ -1,35 +1,32 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import type { INodeProperties, IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
+import { organizationLocator, personLocator, riskLocator } from '../../locators';
 import { proboApiRequest } from '../../GenericFunctions';
 
 export const description: INodeProperties[] = [
-	{
-		displayName: 'Organization ID',
-		name: 'organizationId',
-		type: 'string',
-		displayOptions: {
-			show: {
-				resource: ['finding'],
-				operation: ['create'],
-			},
-		},
-		default: '',
-		description: 'The ID of the organization',
-		required: true,
-	},
+	organizationLocator({
+		resource: ['finding'],
+		operation: ['create'],
+	}),
 	{
 		displayName: 'Kind',
 		name: 'kind',
@@ -60,6 +57,20 @@ export const description: INodeProperties[] = [
 		],
 		default: 'MINOR_NONCONFORMITY',
 		description: 'The kind of finding',
+		required: true,
+	},
+	{
+		displayName: 'Title',
+		name: 'title',
+		type: 'string',
+		displayOptions: {
+			show: {
+				resource: ['finding'],
+				operation: ['create'],
+			},
+		},
+		default: '',
+		description: 'The title of the finding',
 		required: true,
 	},
 	{
@@ -117,13 +128,10 @@ export const description: INodeProperties[] = [
 				default: '',
 				description: 'The date the finding was identified (ISO 8601 format)',
 			},
-			{
-				displayName: 'Owner ID',
-				name: 'ownerId',
-				type: 'string',
-				default: '',
-				description: 'The ID of the person who owns this finding',
-			},
+			personLocator({
+				displayName: 'Owner',
+				required: false,
+			}),
 			{
 				displayName: 'Priority',
 				name: 'priority',
@@ -145,13 +153,9 @@ export const description: INodeProperties[] = [
 				default: 'MEDIUM',
 				description: 'The priority of the finding',
 			},
-			{
-				displayName: 'Risk ID',
-				name: 'riskId',
-				type: 'string',
-				default: '',
-				description: 'The ID of the associated risk',
-			},
+			riskLocator({
+				required: false,
+			}),
 			{
 				displayName: 'Root Cause',
 				name: 'rootCause',
@@ -207,8 +211,9 @@ export async function execute(
 	this: IExecuteFunctions,
 	itemIndex: number,
 ): Promise<INodeExecutionData> {
-	const organizationId = this.getNodeParameter('organizationId', itemIndex) as string;
+	const organizationId = this.getNodeParameter('organizationId', itemIndex, '', { extractValue: true }) as string;
 	const kind = this.getNodeParameter('kind', itemIndex) as string;
+	const title = this.getNodeParameter('title', itemIndex) as string;
 	const description = this.getNodeParameter('description', itemIndex) as string;
 	const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {}) as {
 		source?: string;
@@ -229,6 +234,7 @@ export async function execute(
 				findingEdge {
 					node {
 						id
+						title
 						kind
 						description
 						source
@@ -250,17 +256,18 @@ export async function execute(
 	const input: Record<string, unknown> = {
 		organizationId,
 		kind,
+		title,
 		description,
 	};
 	if (additionalFields.source) input.source = additionalFields.source;
 	if (additionalFields.identifiedOn) input.identifiedOn = additionalFields.identifiedOn;
 	if (additionalFields.rootCause) input.rootCause = additionalFields.rootCause;
 	if (additionalFields.correctiveAction) input.correctiveAction = additionalFields.correctiveAction;
-	if (additionalFields.ownerId) input.ownerId = additionalFields.ownerId;
+	if (this.getNodeParameter('additionalFields.ownerId', itemIndex, '', { extractValue: true }) as string) input.ownerId = this.getNodeParameter('additionalFields.ownerId', itemIndex, '', { extractValue: true }) as string;
 	if (additionalFields.dueDate) input.dueDate = additionalFields.dueDate;
 	if (additionalFields.status) input.status = additionalFields.status;
 	if (additionalFields.priority) input.priority = additionalFields.priority;
-	if (additionalFields.riskId) input.riskId = additionalFields.riskId;
+	if (this.getNodeParameter('additionalFields.riskId', itemIndex, '', { extractValue: true }) as string) input.riskId = this.getNodeParameter('additionalFields.riskId', itemIndex, '', { extractValue: true }) as string;
 	if (additionalFields.effectivenessCheck) input.effectivenessCheck = additionalFields.effectivenessCheck;
 
 	const responseData = await proboApiRequest.call(this, query, { input });

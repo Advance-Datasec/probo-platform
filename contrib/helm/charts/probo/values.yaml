@@ -125,6 +125,29 @@ autoscaling:
   targetCPUUtilizationPercentage: 80
   # targetMemoryUtilizationPercentage: 80
 
+# Additional environment variables for the probod container, appended after
+# the variables the chart renders itself. Use this for any PROBOD_* setting the
+# chart has no dedicated value for, for example connectors for providers the
+# chart does not template yet:
+# https://www.probo.com/docs/deployment/configuration/environment-reference
+# Do not repeat a name the chart already sets: Kubernetes rejects duplicate
+# environment variable names under server-side apply (the Helm 4 default).
+extraEnv: []
+# - name: PROBOD_CONNECTOR_VERCEL_CLIENT_ID
+#   valueFrom:
+#     secretKeyRef:
+#       name: probo-connectors
+#       key: vercel-client-id
+# - name: PROBOD_CONNECTOR_VERCEL_INTEGRATION_SLUG
+#   value: my-integration
+
+# Additional sources of environment variables for the probod container
+# (envFrom). Only keys that are valid environment variable names are loaded.
+# Variables set by the chart or by extraEnv take precedence.
+extraEnvFrom: []
+# - secretRef:
+#     name: probo-extra-secrets
+
 # Additional volumes on the output Deployment definition.
 volumes: []
 # - name: foo
@@ -162,9 +185,9 @@ metrics:
     labels: {}
     relabelings: []
 
-# Govrly application configuration
+# Probo application configuration
 probo:
-  # Public hostname where Govrly will be accessible
+  # Public hostname where Probo will be accessible
   # This should match your ingress host
   baseUrl: probo.example.com
   # REQUIRED: Generate with openssl rand -base64 32
@@ -176,6 +199,16 @@ probo:
   metrics:
     port: 8081
 
+  trustCenter:
+    # Use "external" when an external L7 proxy terminates TLS and forwards
+    # requests privately to service.httpPort. Probo's HTTPS port and all
+    # bundled HAProxy TCP passthrough are disabled in this mode.
+    # External mode also disables Probo ACME issuance and renewal. Preserve the
+    # requested Host and overwrite X-Forwarded-Proto at the proxy. Route
+    # {slug}.<baseDomain> or a domain already stored in Probo.
+    # Creating custom domains is unsupported and leaves them pending.
+    tlsMode: "direct"
+
   # OpenTelemetry tracing configuration
   tracing:
     enabled: false
@@ -186,6 +219,14 @@ probo:
     exportTimeout: 30
     maxQueueSize: 2048
 
+  # Browser telemetry for the console, employee portal, and compliance portal.
+  # The API key is visible to the page; it only authenticates the browser to
+  # the collector. Point collectorUrl at a Faro receiver you already run.
+  faro:
+    enabled: false
+    collectorUrl: ""
+    apiKey: ""
+
   # OAuth2 signing key used by bootstrap to sign auth tokens
   # REQUIRED: PEM-encoded private key (RSA is recommended)
   # Generate with: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048
@@ -194,6 +235,43 @@ probo:
     # Comma-separated HTTPS client metadata document URLs allowed for CIMD
     # OAuth clients (e.g. MCP connectors). Leave empty to disable CIMD.
     cimdAllowedClientIds: []
+
+  # Outbound OIDC issuer used to federate into customer cloud accounts.
+  # Disabled by default: it needs its own signing key and a publicly reachable
+  # issuer URL.
+  identityFederation:
+    enabled: false
+    # Base of the advertised issuer. Leave empty to serve the issuer at
+    # {baseUrl}/federation, which is what a self-hosted deployment uses.
+    # WARNING: this value becomes immutable once a customer registers it with
+    # their cloud provider. Changing it forces every customer to redeploy their
+    # own infrastructure.
+    issuerBaseUrl: ""
+    # REQUIRED when enabled: PEM-encoded RSA private key, separate from
+    # oauth2.signingKey.
+    # Generate with: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048
+    signingKey: ""
+    # Key id published for signingKey. Name the keys before the first rotation:
+    # a retired key can only be told apart from the active one by its kid.
+    signingKeyKid: "default"
+    # Optional retired key. It never signs, it only stays published in the JWKS
+    # so a cloud provider holding a cached key set can still verify a token
+    # minted before a rotation. Rotate in three steps: set the new key here
+    # while signingKey still signs, then swap the two so the old key becomes the
+    # previous one, then clear these two once the token TTL (5 minutes) has
+    # elapsed.
+    previousSigningKey: ""
+    # REQUIRED when previousSigningKey is set, and it must differ from
+    # signingKeyKid.
+    previousSigningKeyKid: ""
+    # Public S3 HTTPS URL used to build the AWS console quick-create link.
+    cloudformationTemplateUrl: "https://probo-cloudformation-template.s3.us-east-2.amazonaws.com/aws-audit-role.yaml"
+    # Terraform module address copied into the AWS connector install snippet.
+    terraformModuleSource: "getprobo/audit-role/aws"
+    # Terraform module address copied into the GCP connector install snippet.
+    gcpTerraformModuleSource: "getprobo/audit-role/gcp"
+    # Terraform module address copied into the Azure connector install snippet.
+    azureTerraformModuleSource: "getprobo/audit-role/azurerm"
 
   # CORS configuration
   cors:
@@ -214,25 +292,55 @@ probo:
     queryCacheSize: 1000
     # Disable field suggestions on invalid queries.
     disableSuggestion: true
+    # Connect @rateLimit uses 10 requests per 60 seconds. Override the
+    # global default or one mutation by its name. Set both limit and
+    # window (seconds):
+    # rateLimit:
+    #   default:
+    #     limit: 10
+    #     window: 60
+    #   signUp:
+    #     limit: 4
+    #     window: 30
 
   # Show Probo branding
   branding: true
+
+  # Cookie banner instance settings
+  cookieBanner:
+    # IAB TCF CMP ID encoded in consent strings. 4095 is a placeholder
+    # until IAB Europe issues Probo a registered ID. Self-hosted
+    # instances that register their own CMP must set this to that ID.
+    tcfCmpId: 4095
 
   # Extra HTTP headers to add to responses
   extraHeaderFields: {}
 
   # Authentication configuration
   auth:
+    # When true, only identities that belong to an organization can use the
+    # console: password signup is rejected, and a magic-link or OIDC identity
+    # with no membership is refused by the console API (compliance-portal
+    # access is unaffected). Invited people keep normal access.
     disableSignup: false
     invitationTokenValidity: 3600
+    # Email confirmation token validity in seconds (default: 3600 = 1 hour)
+    emailConfirmationTokenValidity: 3600
     cookieName: "SSID"
     cookieDomain: "probo.example.com"
+    # lax, strict, or none (none requires HTTPS / secure cookies)
+    cookieSameSite: "lax"
     # REQUIRED: Generate with openssl rand -base64 32
     cookieSecret: ""
     cookieDuration: 24
     # REQUIRED: Generate with openssl rand -base64 32
     passwordPepper: ""
     passwordIterations: 1000000
+
+  # ITAM / device agent configuration
+  itam:
+    # One-shot enrollment token validity in seconds (default: 604800 = 7 days)
+    deviceEnrollmentTokenValidity: 604800
 
   # SAML authentication (optional)
   saml:
@@ -261,7 +369,7 @@ probo:
 
   # Email configuration
   mailer:
-    senderName: "Govrly"
+    senderName: "Probo"
     senderEmail: "no-reply@notification.getprobo.com"
     smtp:
       addr: ""
@@ -276,12 +384,44 @@ probo:
 #      tlsRequired: false
 #      helloName: ""
 
+  # Recurring task worker. Interval is seconds between scans for due tasks.
+  taskRecurrence:
+    interval: 300
+
+  # Weekly notification digest. Weekday uses Go's time.Weekday: 0 is Sunday, 1 is Monday.
+  # Hour is UTC. The digest becomes due at that hour and can be sent through the rest of the day.
+  notificationWeekly:
+    weekday: 1
+    hour: 16
+
+  # MCP submit_feedback. The tool is hidden when this is empty.
+  feedbackUrl: ""
+
+  # Outbound webhook delivery
+  webhook:
+    senderInterval: 5
+    requestTimeout: 15
+    cacheTTL: 86400
+    staleAfter: 300
+    retryBase: 30
+    retryMax: 14400
+    maxConcurrency: 5
+
   # OpenAI integration (optional)
   openai:
     apiKey: ""
+    # OpenAI compatible endpoint, e.g. Azure OpenAI
+    # https://<resource>.openai.azure.com/openai/v1/. Empty uses api.openai.com.
+    baseUrl: ""
     temperature: 0.1
     modelName: "gpt-4o"
     maxTokens: 4096
+
+  # Anthropic integration (optional; required when slackbot.provider is anthropic)
+  anthropic:
+    apiKey: ""
+    # Anthropic compatible endpoint. Empty uses api.anthropic.com.
+    baseUrl: ""
 
   # Agent tools (optional, shared across agents)
   agentTools:
@@ -303,15 +443,6 @@ probo:
     maxConcurrency: 1
     staleAfter: 1500
 
-  # Third-party disambiguation agent (optional; runs inside the tracker
-  # mapping worker to pick the best matching org third party). Falls back
-  # to trackerMapping when its provider is unset.
-  thirdPartyDisambiguation:
-    provider: ""
-    modelName: ""
-    temperature: ""
-    maxTokens: ""
-
   # Tracker mapping agent (optional, requires openai.apiKey or anthropic key)
   trackerMapping:
     provider: ""
@@ -328,16 +459,15 @@ probo:
     maxTokens: ""
 
   # Tracker mapping background worker tuning (optional). interval,
-  # staleAfter, agentTimeout, and disambiguationAgentTimeout are in
-  # seconds. Keep concurrency modest to stay under OpenAI/Firecrawl rate
-  # limits and the database connection pool.
+  # staleAfter, and agentTimeout are in seconds. Keep concurrency modest
+  # to stay under OpenAI/Firecrawl rate limits and the database connection
+  # pool.
   trackerMappingWorker:
     interval: 10
     maxConcurrency: 3
     staleAfter: 600
     agentTimeout: 45
     agentMaxTurns: 10
-    disambiguationAgentTimeout: 45
 
   # Common-pattern enrichment background worker tuning (optional).
   # interval, staleAfter, and agentTimeout are in seconds.
@@ -372,7 +502,27 @@ probo:
     confidenceThreshold: 0.7
     maxAttempts: 3
 
-  # Custom domains configuration (optional)
+  # Slackbot assistant and compliance notifications (optional). Each Slack
+  # workspace installs the app through OAuth. Events API URL:
+  # https://<baseUrl>/slack/v1/events
+  # Interactive URL: https://<baseUrl>/slack/v1/interactive
+  # Slash command Request URL: https://<baseUrl>/slack/v1/commands
+  # Create a /probot slash command on the Slackbot app pointing at that URL.
+  # OAuth requests the commands bot scope; reinstall after adding it.
+  # signingSecret must be the Slackbot app secret. Do not reuse the Slack
+  # connector signing secret when Slackbot is a separate Slack app.
+  slackbot:
+    enabled: false
+    signingSecret: ""
+    clientId: ""
+    clientSecret: ""
+    redirectUri: ""
+    provider: ""
+    modelName: ""
+    temperature: ""
+    maxTokens: ""
+
+  # Custom domains configuration (optional, direct TLS mode only)
   customDomains:
     enabled: false
     renewalInterval: 3600
@@ -397,6 +547,34 @@ probo:
   #     redirect-uri: "https://probo.example.com/api/console/v1/connectors/complete"
   #     auth-url: "https://github.com/login/oauth/authorize"
   #     token-url: "https://github.com/login/oauth/access_token"
+  # - name: "github"
+  #   type: "github-app"
+  #   config:
+  #     # Enable "Request user authorization (OAuth) during installation" and
+  #     # set its callback URL to /api/console/v1/connectors/github-app/complete.
+  #     appId: "123456"
+  #     clientId: "Iv1.example"
+  #     clientSecret: "github-app-client-secret"
+  #     slug: "probo"
+  #     privateKey: |
+  #       -----BEGIN RSA PRIVATE KEY-----
+  #       ...
+  #       -----END RSA PRIVATE KEY-----
+  # Slack endpoint overrides use endpointAuth, endpointToken, and
+  # endpointApiBase in the connector config. endpointToken is secret
+  # material and is mounted from the chart Secret, not a plain env value.
+  # - name: "linear"
+  #   type: "oauth2"
+  #   config:
+  #     clientId: "linear-client-id"
+  #     clientSecret: "linear-client-secret"
+  # - name: "linear-sync"
+  #   type: "oauth2"
+  #   config:
+  #     clientId: "linear-sync-client-id"
+  #     clientSecret: "linear-sync-client-secret"
+  #     # Required with Linear Sync. Signs POST /api/linear/v1/webhooks.
+  #     webhookSecret: "linear-sync-webhook-secret"
 
 # PostgreSQL configuration
 # For production: Use external managed PostgreSQL (AWS RDS, GCP Cloud SQL, etc.)
@@ -453,8 +631,16 @@ s3:
   # For AWS S3, leave endpoint empty
   # For S3-compatible storage (SeaweedFS, DigitalOcean Spaces, etc.), set the endpoint
   endpoint: ""
-  accessKeyId: ""  # REQUIRED when seaweedfs.enabled=false: S3 access key
-  secretAccessKey: ""  # REQUIRED when seaweedfs.enabled=false: S3 secret key
+  # Set both to authenticate with a static key pair. On AWS, set
+  # seaweedfs.enabled=false and leave endpoint, accessKeyId, and
+  # secretAccessKey empty to use the AWS SDK default credential chain
+  # (EKS Pod Identity, IRSA, instance role). Setting only one key is
+  # rejected at render time. A non-empty endpoint (DigitalOcean Spaces,
+  # GCS, and so on) has no fallback: both keys are required, and an empty
+  # pair fails at render time. These values are unused while
+  # seaweedfs.enabled=true (the default).
+  accessKeyId: ""  # Ignored while seaweedfs.enabled=true (the default)
+  secretAccessKey: ""  # Ignored while seaweedfs.enabled=true (the default)
   # Use path-style URLs for selected S3-compatible services
   # When true: https://endpoint/bucket/key
   # When false (default): https://bucket.endpoint/key

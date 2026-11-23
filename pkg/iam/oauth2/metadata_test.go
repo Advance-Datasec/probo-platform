@@ -1,31 +1,114 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package oauth2_test
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.gearno.de/kit/httpclient"
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/iam/oauth2"
 	"go.probo.inc/probo/pkg/iam/oauth2scope"
 	"go.probo.inc/probo/pkg/probo"
 	"go.probo.inc/probo/pkg/uri"
 )
+
+func TestFetchServerMetadata(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(
+		http.HandlerFunc(
+			func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "/.well-known/openid-configuration", r.URL.Path)
+
+				_ = json.NewEncoder(w).Encode(
+					map[string]string{
+						"issuer":                 "https://auth.example.com",
+						"authorization_endpoint": "https://auth.example.com/api/connect/v1/oauth2/authorize",
+						"token_endpoint":         "https://auth.example.com/api/connect/v1/oauth2/token",
+					},
+				)
+			},
+		),
+	)
+	t.Cleanup(server.Close)
+
+	client := httpclient.DefaultClient(
+		httpclient.WithSSRFProtection(),
+		httpclient.WithSSRFAllowLoopback(),
+	)
+
+	metadata, err := oauth2.FetchServerMetadata(context.Background(), client, server.URL)
+	require.NoError(t, err)
+	assert.Equal(
+		t,
+		uri.URI("https://auth.example.com/api/connect/v1/oauth2/authorize"),
+		metadata.AuthorizationEndpoint,
+	)
+}
+
+func TestAuthorizationURLWithQuery(t *testing.T) {
+	t.Parallel()
+
+	authorizationEndpoint := uri.URI("https://auth.example.com/api/connect/v1/oauth2/authorize")
+	query := url.Values{}
+	query.Set("client_id", "https://trust.example.com/.well-known/oauth-client-metadata")
+	query.Set("response_type", "code")
+
+	got, err := oauth2.AuthorizationURLWithQuery(authorizationEndpoint, query)
+	require.NoError(t, err)
+	assert.Equal(
+		t,
+		"https://auth.example.com/api/connect/v1/oauth2/authorize?client_id=https%3A%2F%2Ftrust.example.com%2F.well-known%2Foauth-client-metadata&response_type=code",
+		got,
+	)
+}
+
+func TestAuthorizationURLWithQueryPreservesEndpointQuery(t *testing.T) {
+	t.Parallel()
+
+	authorizationEndpoint := uri.URI(
+		"https://auth.example.com/api/connect/v1/oauth2/authorize?tenant=acme",
+	)
+	query := url.Values{}
+	query.Set("client_id", "https://trust.example.com/.well-known/oauth-client-metadata")
+	query.Set("response_type", "code")
+
+	got, err := oauth2.AuthorizationURLWithQuery(authorizationEndpoint, query)
+	require.NoError(t, err)
+
+	parsed, err := url.Parse(got)
+	require.NoError(t, err)
+	assert.Equal(t, "acme", parsed.Query().Get("tenant"))
+	assert.Equal(t, "https://trust.example.com/.well-known/oauth-client-metadata", parsed.Query().Get("client_id"))
+	assert.Equal(t, "code", parsed.Query().Get("response_type"))
+}
 
 func TestNewMetadata(t *testing.T) {
 	t.Parallel()
@@ -102,7 +185,20 @@ func TestNewMetadata(t *testing.T) {
 		func(t *testing.T) {
 			t.Parallel()
 
-			assert.Equal(t, []uri.URI{issuer}, metadata.ProtectedResources)
+			assert.Equal(
+				t,
+				[]uri.URI{issuer},
+				metadata.ProtectedResources,
+			)
+		},
+	)
+
+	t.Run(
+		"authorization response issuer supported",
+		func(t *testing.T) {
+			t.Parallel()
+
+			assert.True(t, metadata.AuthorizationResponseIssuerParameterSupported)
 		},
 	)
 

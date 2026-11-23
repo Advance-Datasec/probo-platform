@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package login
 
@@ -34,8 +40,8 @@ import (
 )
 
 const (
-	hostEU = "eu.console.getprobo.com"
-	hostUS = "us.console.getprobo.com"
+	hostEU = "eu.probo.com"
+	hostUS = "us.probo.com"
 
 	regionEU     = "eu"
 	regionUS     = "us"
@@ -80,58 +86,28 @@ func NewCmdLogin(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Authenticate with a Probo host",
-		Example: `  # Interactive login (select region, opens browser for device authorization)
+		Example: `  # Choose US, EU, or a custom host, then authorize in the browser
   prb auth login
 
-  # Login to Probo EU
-  prb auth login --hostname eu.console.getprobo.com
-
   # Login to Probo US
-  prb auth login --hostname us.console.getprobo.com
+  prb auth login --hostname us.probo.com
+
+  # Login to Probo EU
+  prb auth login --hostname eu.probo.com
 
   # Login to a self-hosted instance
   prb auth login --hostname probo.example.com`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if f.IOStreams.IsInteractive() && flagHost == "" {
-				var region string
-
-				err := huh.NewSelect[string]().
-					Title("Where is your Probo account hosted?").
-					Options(
-						huh.NewOption("Probo EU (eu.console.getprobo.com)", regionEU),
-						huh.NewOption("Probo US (us.console.getprobo.com)", regionUS),
-						huh.NewOption("Other (custom domain)", regionCustom),
-					).
-					Value(&region).
-					Run()
-				if err != nil {
-					return err
-				}
-
-				switch region {
-				case regionEU:
-					flagHost = hostEU
-				case regionUS:
-					flagHost = hostUS
-				case regionCustom:
-					err := huh.NewInput().
-						Title("Probo hostname").
-						Placeholder("probo.example.com").
-						Value(&flagHost).
-						Run()
-					if err != nil {
-						return err
-					}
-
-					if flagHost == "" {
-						return fmt.Errorf("hostname is required")
-					}
-				}
+			host, err := loginHost(
+				flagHost,
+				f.IOStreams.IsInteractive(),
+				promptHost,
+			)
+			if err != nil {
+				return err
 			}
 
-			if flagHost == "" {
-				flagHost = hostEU
-			}
+			flagHost = host
 
 			baseURL := normalizeHostToURL(flagHost)
 			httpClient := &http.Client{Timeout: 30 * time.Second}
@@ -219,10 +195,16 @@ func NewCmdLogin(f *cmdutil.Factory) *cobra.Command {
 				}
 			}
 
+			var expiresAt time.Time
+			if token.ExpiresIn > 0 {
+				expiresAt = time.Now().Add(time.Duration(token.ExpiresIn) * time.Second)
+			}
+
 			cfg.Hosts[flagHost] = &config.HostConfig{
 				Token:         token.AccessToken,
 				RefreshToken:  token.RefreshToken,
 				TokenEndpoint: discovery.TokenEndpoint,
+				ExpiresAt:     expiresAt,
 				Organization:  flagOrganization,
 			}
 			cfg.ActiveHost = flagHost
@@ -245,16 +227,88 @@ func NewCmdLogin(f *cmdutil.Factory) *cobra.Command {
 		&flagHost,
 		"hostname",
 		"",
-		"Probo hostname (e.g. eu.console.getprobo.com, us.console.getprobo.com)",
+		"Probo hostname (e.g. eu.probo.com, us.probo.com)",
 	)
-	cmd.Flags().StringVar(
-		&flagOrganization,
-		"org",
-		"",
-		"Default organization ID",
-	)
+	cmdutil.AddOrganizationFlag(cmd, &flagOrganization, "Default organization ID")
 
 	return cmd
+}
+
+func hostOptions() []huh.Option[string] {
+	return []huh.Option[string]{
+		huh.NewOption("Probo US (us.probo.com)", regionUS),
+		huh.NewOption("Probo EU (eu.probo.com)", regionEU),
+		huh.NewOption("Custom", regionCustom),
+	}
+}
+
+func loginHost(
+	hostname string,
+	interactive bool,
+	prompt func() (string, error),
+) (string, error) {
+	hostname = strings.TrimSpace(hostname)
+	if hostname != "" {
+		return hostname, nil
+	}
+
+	if !interactive {
+		return "", fmt.Errorf(
+			"hostname is required; pass --hostname with us.probo.com, eu.probo.com, or a custom host",
+		)
+	}
+
+	host, err := prompt()
+	if err != nil {
+		return "", err
+	}
+
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return "", fmt.Errorf("hostname is required")
+	}
+
+	return host, nil
+}
+
+func promptHost() (string, error) {
+	var region string
+
+	err := huh.NewSelect[string]().
+		Title("Where is your Probo account hosted?").
+		Options(hostOptions()...).
+		Value(&region).
+		Run()
+	if err != nil {
+		return "", err
+	}
+
+	switch region {
+	case regionUS:
+		return hostUS, nil
+	case regionEU:
+		return hostEU, nil
+	case regionCustom:
+		var host string
+
+		err := huh.NewInput().
+			Title("Probo hostname").
+			Placeholder("probo.example.com").
+			Value(&host).
+			Run()
+		if err != nil {
+			return "", err
+		}
+
+		host = strings.TrimSpace(host)
+		if host == "" {
+			return "", fmt.Errorf("hostname is required")
+		}
+
+		return host, nil
+	default:
+		return "", fmt.Errorf("hostname is required")
+	}
 }
 
 func normalizeHostToURL(host string) string {
@@ -432,7 +486,7 @@ func pollForToken(
 }
 
 const viewerOrganizationsQuery = `
-query($first: Int, $filter: ProfileFilter) {
+query AuthLoginViewerOrganizations($first: Int, $filter: ProfileFilter) {
   viewer {
     profiles(first: $first, filter: $filter) {
       edges {

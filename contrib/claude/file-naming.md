@@ -5,7 +5,7 @@
 Template files use the extension pattern `<name>.<output-ext>.tmpl`:
 
 ```
-pkg/trust/sitemap.xml.tmpl
+pkg/complianceportal/visitor/sitemap.xml.tmpl
 pkg/server/mailactions/templates/page.html.tmpl
 pkg/cookiebanner/prompts/tracker_identification.txt.tmpl
 pkg/probo/templates/risk_list.json.tmpl
@@ -66,7 +66,6 @@ This applies in two shapes:
    that owns the domain, named `<purpose>_agent.go`.
 
    ```
-   pkg/thirdparty/disambiguation_agent.go   -- catalog→org ThirdParty matcher
    pkg/vetting/sub_agent.go                  -- generic vetting sub-agent
    ```
 

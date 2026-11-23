@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package cookiebanner_v1
 
@@ -18,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -33,6 +40,7 @@ import (
 	"go.probo.inc/probo/pkg/server/api/clientip"
 	"go.probo.inc/probo/pkg/server/jsonx"
 	"go.probo.inc/probo/pkg/uri"
+	"go.probo.inc/probo/pkg/validator"
 )
 
 type Handler struct {
@@ -75,8 +83,8 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 
 	lang := r.URL.Query().Get("lang")
 	sdkVersion := sdkVersionFromContext(r.Context())
-	cc := h.resolveCountryCode(r)
-	regulation, _ := cookiebanner.ResolveRegulation(cc)
+	location := h.resolveLocation(r)
+	regulation, _ := cookiebanner.ResolveRegulation(location)
 
 	config, err := h.cookieBannerSvc.GetActiveBannerConfig(r.Context(), bannerID, lang, regulation, sdkVersion)
 	if err != nil {
@@ -99,14 +107,14 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	httpserver.RenderJSON(w, http.StatusOK, config)
 }
 
-func (h *Handler) resolveCountryCode(r *http.Request) *coredata.CountryCode {
+func (h *Handler) resolveLocation(r *http.Request) *coredata.IPLocationBlock {
 	ip := clientip.Extract(r)
 
-	cc, err := h.geolocSvc.LookupCountry(r.Context(), ip)
+	location, err := h.geolocSvc.LookupLocation(r.Context(), ip)
 	if err != nil {
 		h.logger.ErrorCtx(
 			r.Context(),
-			"cannot resolve country for IP",
+			"cannot resolve location for IP",
 			log.Error(err),
 			log.String("sdk_version", sdkVersionFromContext(r.Context())),
 		)
@@ -114,11 +122,11 @@ func (h *Handler) resolveCountryCode(r *http.Request) *coredata.CountryCode {
 		return nil
 	}
 
-	if cc == "" {
+	if location.CountryCode == "" {
 		return nil
 	}
 
-	return &cc
+	return &location
 }
 
 func (h *Handler) handleGetConsent(w http.ResponseWriter, r *http.Request) {
@@ -166,6 +174,7 @@ type (
 		Version     int                          `json:"version"`
 		Action      coredata.CookieConsentAction `json:"action"`
 		ConsentData json.RawMessage              `json:"consent_data"`
+		TC          *string                      `json:"tc,omitempty"`
 	}
 
 	postConsentResponse struct {
@@ -192,10 +201,8 @@ func (h *Handler) handlePostConsent(w http.ResponseWriter, r *http.Request) {
 	ip := clientip.Extract(r)
 	ua := r.UserAgent()
 	sdkVersion := sdkVersionFromContext(r.Context())
-	cc := h.resolveCountryCode(r)
-	regulation, regulationSource := cookiebanner.ResolveRegulation(cc)
-
-	cm := coredata.CookieConsentMode(cookiebanner.ConsentModeForRegulation(regulation))
+	location := h.resolveLocation(r)
+	regulation, regulationSource := cookiebanner.ResolveRegulation(location)
 
 	req := cookiebanner.RecordConsentRequest{
 		Version:          body.Version,
@@ -207,8 +214,12 @@ func (h *Handler) handlePostConsent(w http.ResponseWriter, r *http.Request) {
 		SdkVersion:       sdkVersion,
 		Regulation:       &regulation,
 		RegulationSource: regulationSource,
-		CountryCode:      cc,
-		ConsentMode:      &cm,
+		TC:               body.TC,
+		Origin:           r.Header.Get("Origin"),
+	}
+	if location != nil {
+		req.CountryCode = &location.CountryCode
+		req.SubdivisionCode = location.SubdivisionCode
 	}
 
 	record, err := h.cookieBannerSvc.RecordConsent(r.Context(), bannerID, req)
@@ -220,6 +231,11 @@ func (h *Handler) handlePostConsent(w http.ResponseWriter, r *http.Request) {
 
 		if errors.Is(err, cookiebanner.ErrVersionNotFound) || errors.Is(err, cookiebanner.ErrVersionNotPublished) {
 			jsonx.RenderBadRequest(w, fmt.Errorf("invalid version"))
+			return
+		}
+
+		if validationErrors, ok := errors.AsType[validator.ValidationErrors](err); ok {
+			jsonx.RenderBadRequest(w, validationErrors)
 			return
 		}
 
@@ -242,10 +258,15 @@ func (h *Handler) handlePostConsent(w http.ResponseWriter, r *http.Request) {
 }
 
 type detectedCookieEntry struct {
-	Name          string  `json:"name"`
-	MaxAgeSeconds *int    `json:"max_age_seconds"`
-	Source        string  `json:"source"`
-	InitiatorURL  *string `json:"initiator_url,omitempty"`
+	Name            string  `json:"name"`
+	MaxAgeSeconds   *int    `json:"max_age_seconds"`
+	Source          string  `json:"source"`
+	InitiatorURL    *string `json:"initiator_url,omitempty"`
+	CookieDomain    *string `json:"cookie_domain,omitempty"`
+	HostOnly        *bool   `json:"host_only,omitempty"`
+	DiscoveryHit    bool    `json:"discovery_hit,omitempty"`
+	SampleHit       bool    `json:"sample_hit,omitempty"`
+	CategoryGranted *bool   `json:"category_granted,omitempty"`
 }
 
 type reportDetectedCookiesBody struct {
@@ -287,6 +308,72 @@ func sanitizeInitiatorURL(raw *string) *string {
 	return &s
 }
 
+// sanitizeCookieDomain lowercases and strips a leading dot, then
+// accepts the value only when it is a hostname. A trailing-dot Domain
+// is ignored by cookie parsers, so it is dropped. A missing or invalid
+// domain is dropped so one bad report cannot fail the batch.
+func sanitizeCookieDomain(raw *string) *string {
+	if raw == nil {
+		return nil
+	}
+
+	s := strings.ToLower(strings.TrimSpace(*raw))
+	if s == "" || strings.HasSuffix(s, ".") {
+		return nil
+	}
+
+	s = strings.TrimPrefix(s, ".")
+	if s == "" {
+		return nil
+	}
+
+	if err := validator.Domain()(s); err != nil {
+		return nil
+	}
+
+	return &s
+}
+
+// sanitizeCookieDomainFields keeps a hostname Domain attribute or a
+// confirmed host-only flag. A Domain value that is not a hostname is
+// dropped, and host_only is cleared with it so a false (Domain-seen)
+// flag cannot land without a domain.
+func sanitizeCookieDomainFields(rawDomain *string, hostOnly *bool) (*string, *bool) {
+	domain := sanitizeCookieDomain(rawDomain)
+	if rawDomain != nil && strings.TrimSpace(*rawDomain) != "" && domain == nil {
+		return nil, nil
+	}
+
+	if domain != nil && hostOnly == nil {
+		notHostOnly := false
+		hostOnly = &notHostOnly
+	}
+
+	// host_only=false means a Domain attribute was seen. Without a
+	// hostname that claim is incomplete and must not wipe a stored
+	// domain on upsert.
+	if domain == nil && hostOnly != nil && !*hostOnly {
+		hostOnly = nil
+	}
+
+	if hostOnly != nil && *hostOnly {
+		domain = nil
+	}
+
+	return domain, hostOnly
+}
+
+// sanitizeInt4 drops a value that cannot be stored as PostgreSQL
+// INTEGER. A cookie Max-Age of 251610986978 otherwise decodes into
+// Go's 64-bit int and fails the upsert for every item in the batch.
+func sanitizeInt4(raw *int) *int {
+	if raw == nil || *raw <= 0 || *raw > math.MaxInt32 {
+		return nil
+	}
+
+	return raw
+}
+
 func (h *Handler) handleReportDetectedCookies(w http.ResponseWriter, r *http.Request) {
 	bannerID, err := gid.ParseGID(chi.URLParam(r, "bannerID"))
 	if err != nil {
@@ -317,6 +404,19 @@ func (h *Handler) handleReportDetectedCookies(w http.ResponseWriter, r *http.Req
 			continue
 		}
 
+		if len(name) > cookiebanner.MaxTrackerIdentifierLength {
+			h.logger.InfoCtx(
+				r.Context(),
+				"skipping oversized detected cookie name",
+				log.String("banner_id", bannerID.String()),
+				log.String("tracker_type", string(coredata.TrackerTypeCookie)),
+				log.Int("identifier_length", len(name)),
+				log.String("sdk_version", sdkVersionFromContext(r.Context())),
+			)
+
+			continue
+		}
+
 		var source coredata.CookieSource
 
 		switch strings.TrimSpace(c.Source) {
@@ -328,13 +428,17 @@ func (h *Handler) handleReportDetectedCookies(w http.ResponseWriter, r *http.Req
 			source = coredata.CookieSourceScript
 		}
 
+		cookieDomain, hostOnly := sanitizeCookieDomainFields(c.CookieDomain, c.HostOnly)
+
 		detected = append(
 			detected,
 			cookiebanner.DetectedCookie{
 				Name:          name,
-				MaxAgeSeconds: c.MaxAgeSeconds,
+				MaxAgeSeconds: sanitizeInt4(c.MaxAgeSeconds),
 				Source:        source,
 				InitiatorURL:  sanitizeInitiatorURL(c.InitiatorURL),
+				CookieDomain:  cookieDomain,
+				HostOnly:      hostOnly,
 			},
 		)
 	}
@@ -369,11 +473,14 @@ func (h *Handler) handleReportDetectedCookies(w http.ResponseWriter, r *http.Req
 }
 
 type detectedStorageEntry struct {
-	Key          string  `json:"key"`
-	StorageType  string  `json:"storage_type"`
-	ValueSize    *int    `json:"value_size"`
-	Source       string  `json:"source"`
-	InitiatorURL *string `json:"initiator_url,omitempty"`
+	Key             string  `json:"key"`
+	StorageType     string  `json:"storage_type"`
+	ValueSize       *int    `json:"value_size"`
+	Source          string  `json:"source"`
+	InitiatorURL    *string `json:"initiator_url,omitempty"`
+	DiscoveryHit    bool    `json:"discovery_hit,omitempty"`
+	SampleHit       bool    `json:"sample_hit,omitempty"`
+	CategoryGranted *bool   `json:"category_granted,omitempty"`
 }
 
 type detectedResourceEntry struct {
@@ -382,12 +489,29 @@ type detectedResourceEntry struct {
 }
 
 type reportDetectedTrackersBody struct {
-	Cookies   []detectedCookieEntry   `json:"cookies"`
-	Storage   []detectedStorageEntry  `json:"storage"`
-	Resources []detectedResourceEntry `json:"resources"`
+	Cookies       []detectedCookieEntry   `json:"cookies"`
+	Storage       []detectedStorageEntry  `json:"storage"`
+	Resources     []detectedResourceEntry `json:"resources"`
+	PageView      bool                    `json:"page_view,omitempty"`
+	ConsentAction *string                 `json:"consent_action,omitempty"`
 }
 
 const maxDetectedTrackersPerRequest = 100
+
+// reportConsentAction accepts any string so an unknown consent_action
+// does not fail JSON decode of the whole report. Invalid values are dropped.
+func reportConsentAction(raw *string) *coredata.CookieConsentAction {
+	if raw == nil {
+		return nil
+	}
+
+	action := coredata.CookieConsentAction(*raw)
+	if !action.IsValid() {
+		return nil
+	}
+
+	return &action
+}
 
 func (h *Handler) handleReportDetectedTrackers(w http.ResponseWriter, r *http.Request) {
 	bannerID, err := gid.ParseGID(chi.URLParam(r, "bannerID"))
@@ -397,13 +521,16 @@ func (h *Handler) handleReportDetectedTrackers(w http.ResponseWriter, r *http.Re
 	}
 
 	var body reportDetectedTrackersBody
+	// The unload-safe Beacon transport sends JSON bytes as text/plain so
+	// cross-origin reports remain CORS-safelisted and avoid a preflight.
+	// Decode the body independently of Content-Type to preserve that contract.
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonx.RenderBadRequest(w, fmt.Errorf("invalid request body"))
 		return
 	}
 
 	total := len(body.Cookies) + len(body.Storage) + len(body.Resources)
-	if total == 0 {
+	if total == 0 && !body.PageView {
 		jsonx.RenderBadRequest(w, fmt.Errorf("no items provided"))
 		return
 	}
@@ -413,11 +540,32 @@ func (h *Handler) handleReportDetectedTrackers(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	var req cookiebanner.ReportDetectedTrackersRequest
+	location := h.resolveLocation(r)
+	regulation, _ := cookiebanner.ResolveRegulation(location)
+
+	req := cookiebanner.ReportDetectedTrackersRequest{
+		PageView:      body.PageView,
+		ConsentAction: reportConsentAction(body.ConsentAction),
+		Family:        cookiebanner.BrowserFamily(r.UserAgent()),
+		Presentation:  cookiebanner.PresentationForRegulation(regulation),
+	}
 
 	for _, c := range body.Cookies {
 		name := strings.TrimSpace(c.Name)
 		if name == "" {
+			continue
+		}
+
+		if len(name) > cookiebanner.MaxTrackerIdentifierLength {
+			h.logger.InfoCtx(
+				r.Context(),
+				"skipping oversized detected cookie name",
+				log.String("banner_id", bannerID.String()),
+				log.String("tracker_type", string(coredata.TrackerTypeCookie)),
+				log.Int("identifier_length", len(name)),
+				log.String("sdk_version", sdkVersionFromContext(r.Context())),
+			)
+
 			continue
 		}
 
@@ -434,13 +582,19 @@ func (h *Handler) handleReportDetectedTrackers(w http.ResponseWriter, r *http.Re
 			source = coredata.CookieSourceScript
 		}
 
+		cookieDomain, hostOnly := sanitizeCookieDomainFields(c.CookieDomain, c.HostOnly)
+
 		req.Cookies = append(
 			req.Cookies,
 			cookiebanner.DetectedCookie{
-				Name:          name,
-				MaxAgeSeconds: c.MaxAgeSeconds,
-				Source:        source,
-				InitiatorURL:  sanitizeInitiatorURL(c.InitiatorURL),
+				Name:            name,
+				MaxAgeSeconds:   sanitizeInt4(c.MaxAgeSeconds),
+				Source:          source,
+				InitiatorURL:    sanitizeInitiatorURL(c.InitiatorURL),
+				CookieDomain:    cookieDomain,
+				HostOnly:        hostOnly,
+				Hit:             c.DiscoveryHit || c.SampleHit,
+				CategoryGranted: c.CategoryGranted,
 			},
 		)
 	}
@@ -448,6 +602,19 @@ func (h *Handler) handleReportDetectedTrackers(w http.ResponseWriter, r *http.Re
 	for _, s := range body.Storage {
 		key := strings.TrimSpace(s.Key)
 		if key == "" {
+			continue
+		}
+
+		if len(key) > cookiebanner.MaxTrackerIdentifierLength {
+			h.logger.InfoCtx(
+				r.Context(),
+				"skipping oversized detected storage key",
+				log.String("banner_id", bannerID.String()),
+				log.String("storage_type", strings.TrimSpace(s.StorageType)),
+				log.Int("identifier_length", len(key)),
+				log.String("sdk_version", sdkVersionFromContext(r.Context())),
+			)
+
 			continue
 		}
 
@@ -480,11 +647,13 @@ func (h *Handler) handleReportDetectedTrackers(w http.ResponseWriter, r *http.Re
 		req.Storage = append(
 			req.Storage,
 			cookiebanner.DetectedStorageItem{
-				Key:          key,
-				StorageType:  storageType,
-				ValueSize:    s.ValueSize,
-				Source:       &source,
-				InitiatorURL: sanitizeInitiatorURL(s.InitiatorURL),
+				Key:             key,
+				StorageType:     storageType,
+				ValueSize:       sanitizeInt4(s.ValueSize),
+				Source:          &source,
+				InitiatorURL:    sanitizeInitiatorURL(s.InitiatorURL),
+				Hit:             s.DiscoveryHit || s.SampleHit,
+				CategoryGranted: s.CategoryGranted,
 			},
 		)
 	}
@@ -532,7 +701,7 @@ func (h *Handler) handleReportDetectedTrackers(w http.ResponseWriter, r *http.Re
 		)
 	}
 
-	if len(req.Cookies)+len(req.Storage)+len(req.Resources) == 0 {
+	if len(req.Cookies)+len(req.Storage)+len(req.Resources) == 0 && !req.PageView {
 		jsonx.RenderBadRequest(w, fmt.Errorf("no valid items provided"))
 		return
 	}

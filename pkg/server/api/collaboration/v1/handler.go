@@ -1,0 +1,973 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+package collaboration_v1
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/go-chi/chi/v5"
+	"go.gearno.de/kit/log"
+	"go.probo.inc/probo/pkg/automerge"
+	collabpkg "go.probo.inc/probo/pkg/automerge/collaboration"
+	"go.probo.inc/probo/pkg/baseurl"
+	"go.probo.inc/probo/pkg/bearertoken"
+	"go.probo.inc/probo/pkg/collaboration"
+	"go.probo.inc/probo/pkg/coredata"
+	"go.probo.inc/probo/pkg/gid"
+	"go.probo.inc/probo/pkg/iam"
+	"go.probo.inc/probo/pkg/probo"
+	"go.probo.inc/probo/pkg/server/api/authn"
+	"go.probo.inc/probo/pkg/server/api/authz"
+	"go.probo.inc/probo/pkg/server/jsonx"
+)
+
+const (
+	MessageMaxBytes = 1024 * 1024
+	// WriteTimeoutFloor covers a small frame, including a long round trip.
+	WriteTimeoutFloor = 10 * time.Second
+	// WriteTimeoutCeiling bounds a stalled peer. It must exceed the floor
+	// plus an 8 MiB snapshot frame at minWriteBytesPerSecond (138s), and
+	// stay under the browser's 180s initialization budget. It also bounds
+	// the initial sync response as a whole, not just one of its frames.
+	WriteTimeoutCeiling = 150 * time.Second
+	// minWriteBytesPerSecond budgets a long-haul transfer. Snapshot sync
+	// frames reach 8 MiB, and a short fixed deadline closes the socket
+	// before a distant peer can read them.
+	minWriteBytesPerSecond = 64 << 10
+)
+
+const (
+	DepartureNotifyTimeout = 2 * time.Second
+)
+
+type (
+	Handler struct {
+		Logger         *log.Logger
+		Probo          *probo.Service
+		IAM            *iam.Service
+		BaseURL        *baseurl.BaseURL
+		AllowedOrigins []string
+		Hub            *Hub
+		Shutdown       context.Context
+	}
+
+	Incoming struct {
+		MessageType websocket.MessageType
+		Data        []byte
+		Err         error
+	}
+
+	RepoConfig struct {
+		ServerPeerID     string
+		Scope            coredata.Scoper
+		DocumentID       gid.GID
+		Logger           *log.Logger
+		Shutdown         context.Context
+		PublishEphemeral func(ctx context.Context, frame []byte) error
+		// Session is the handshake already completed with this client. The
+		// peer reply has been written; document loading must not delay it.
+		Session         *collabpkg.ServerSession
+		DisplayName     string
+		IdentityID      string
+		AvatarURL       string
+		RecordActors    func(ctx context.Context, actors [][]byte) error
+		Incoming        <-chan Incoming
+		OpenSuggestions func(ctx context.Context, ids []string) (map[string]bool, error)
+		CanUpdate       bool
+		// CanComment is suggestion access. Both flags false is read-only.
+		CanComment bool
+	}
+)
+
+// collaborationAccess is the write access for this socket. Viewing is the
+// default. A generated or archived document stays in that mode.
+func collaborationAccess(
+	mode string,
+	document *coredata.Document,
+	canUpdate bool,
+	canComment bool,
+) (bool, bool) {
+	switch mode {
+	case "editing", "suggesting":
+		if document.ReadOnly() {
+			return false, false
+		}
+
+		return canUpdate, canComment
+	default:
+		return false, false
+	}
+}
+
+func (h *Handler) HandleRepo(w http.ResponseWriter, r *http.Request) {
+	documentIDString := chi.URLParam(r, "documentID")
+
+	documentID, err := gid.ParseGID(documentIDString)
+	if err != nil || documentID.EntityType() != coredata.DocumentEntityType {
+		jsonx.RenderNotFound(w, fmt.Errorf("document not found"))
+		return
+	}
+
+	scope, document, canUpdate, canComment, err := h.authorize(
+		r.Context(),
+		documentID,
+		authz.RequestMetadataFromHTTP(r),
+	)
+	if err != nil {
+		h.renderAuthorizationError(w, err)
+		return
+	}
+
+	canUpdate, canComment = collaborationAccess(
+		r.URL.Query().Get("mode"),
+		document,
+		canUpdate,
+		canComment,
+	)
+
+	identity := authn.IdentityFromContext(r.Context())
+	displayName, identityID, avatarURL, profileID := collaborationPresenceIdentity(
+		r.Context(),
+		h,
+		document,
+		identity,
+	)
+
+	connectionID, err := NewConnectionID()
+	if err != nil {
+		jsonx.RenderInternalServerError(w)
+		return
+	}
+
+	// Upgrade before loading the collaboration row. Until hijack, net/http
+	// cancels the request when the client drops, and that aborts the SELECT.
+	connection, err := websocket.Accept(
+		w,
+		r,
+		&websocket.AcceptOptions{
+			OriginPatterns:  h.AllowedOrigins,
+			CompressionMode: websocket.CompressionDisabled,
+		},
+	)
+	if err != nil {
+		h.Logger.WarnCtx(
+			r.Context(),
+			"cannot accept collaboration repo connection",
+			log.Error(err),
+			log.String("document_id", documentIDString),
+		)
+
+		return
+	}
+
+	defer func() { _ = connection.Close(websocket.StatusNormalClosure, "") }()
+
+	connection.SetReadLimit(MessageMaxBytes)
+
+	collaborationCtx, cancelCollaboration := context.WithCancel(r.Context())
+	defer cancelCollaboration()
+
+	incoming := make(chan Incoming, 1)
+	go func() {
+		_ = ReadMessages(collaborationCtx, connection, incoming)
+
+		cancelCollaboration()
+	}()
+
+	serverPeerID := "probo-gateway-" + connectionID
+
+	session, accepted, err := acceptRepoJoin(
+		collaborationCtx,
+		connection,
+		incoming,
+		serverPeerID,
+	)
+	if err != nil {
+		h.closeWithError(collaborationCtx, connection, documentIDString, err)
+		return
+	}
+
+	if !accepted {
+		return
+	}
+
+	lease, err := h.Hub.Acquire(collaborationCtx, scope, documentID, connectionID)
+	if err != nil {
+		h.closeOpenError(collaborationCtx, connection, documentIDString, err)
+		return
+	}
+
+	defer lease.Close()
+
+	syncState, err := lease.Collaboration().Document.NewSyncState()
+	if err != nil {
+		h.closeWithError(r.Context(), connection, documentIDString, err)
+		return
+	}
+
+	defer func() { _ = syncState.Close() }()
+
+	config := RepoConfig{
+		ServerPeerID: serverPeerID,
+		Session:      session,
+		Scope:        scope,
+		DocumentID:   documentID,
+		Logger:       h.Logger,
+		Shutdown:     h.Shutdown,
+		DisplayName:  displayName,
+		IdentityID:   identityID,
+		AvatarURL:    avatarURL,
+		Incoming:     incoming,
+		CanUpdate:    canUpdate,
+		CanComment:   canComment,
+		PublishEphemeral: func(ctx context.Context, frame []byte) error {
+			return h.Probo.Collaboration.NotifyEphemeral(
+				ctx,
+				documentID,
+				h.Hub.InstanceID(),
+				frame,
+			)
+		},
+	}
+
+	if identity != nil {
+		organizationID := document.OrganizationID
+		authenticatedIdentityID := identity.ID
+		authenticatedProfileID := profileID
+
+		config.RecordActors = func(ctx context.Context, actors [][]byte) error {
+			return h.Probo.Collaboration.RecordActors(
+				ctx,
+				scope,
+				documentID,
+				organizationID,
+				authenticatedIdentityID,
+				authenticatedProfileID,
+				actors,
+			)
+		}
+	}
+
+	if !canUpdate && canComment {
+		config.OpenSuggestions = func(ctx context.Context, ids []string) (map[string]bool, error) {
+			return h.Probo.Documents.LoadOpenSuggestionIDs(ctx, scope, documentID, ids)
+		}
+	}
+
+	if err := ServeRepoCollaboration(collaborationCtx, connection, lease, syncState, config); err != nil {
+		h.closeWithError(collaborationCtx, connection, documentIDString, err)
+	}
+}
+
+func (h *Handler) authorize(
+	ctx context.Context,
+	documentID gid.GID,
+	request iam.RequestMetadata,
+) (*coredata.Scope, *coredata.Document, bool, bool, error) {
+	identity := authn.IdentityFromContext(ctx)
+	session := authn.SessionFromContext(ctx)
+
+	scope := coredata.NewScopeFromObjectID(documentID)
+
+	document, err := h.Probo.Documents.LoadDocument(ctx, scope, documentID)
+	if err != nil {
+		return nil, nil, false, false, fmt.Errorf("cannot load document: %w", err)
+	}
+
+	params := iam.AuthorizeParams{
+		Principal:          identity.ID,
+		Resource:           document.ID,
+		Action:             probo.ActionDocumentUpdate,
+		ResourceAttributes: make(map[string]string),
+		Request:            request,
+	}
+	if session != nil {
+		params.Session = &session.ID
+	}
+
+	authScope, err := h.IAM.Authorizer.Authorize(ctx, params)
+	if err == nil {
+		return authScope, document, true, true, nil
+	}
+
+	if !insufficientAuthorization(err) {
+		return nil, nil, false, false, fmt.Errorf("cannot authorize document update: %w", err)
+	}
+
+	params.Action = probo.ActionDocumentComment
+
+	authScope, err = h.IAM.Authorizer.Authorize(ctx, params)
+	if err == nil {
+		return authScope, document, false, true, nil
+	}
+
+	if !insufficientAuthorization(err) {
+		return nil, nil, false, false, fmt.Errorf("cannot authorize document comment: %w", err)
+	}
+
+	params.Action = probo.ActionDocumentGet
+
+	authScope, err = h.IAM.Authorizer.Authorize(ctx, params)
+	if err != nil {
+		return nil, nil, false, false, fmt.Errorf("cannot authorize document read: %w", err)
+	}
+
+	return authScope, document, false, false, nil
+}
+
+func insufficientAuthorization(err error) bool {
+	if _, ok := errors.AsType[*iam.ErrInsufficientPermissions](err); ok {
+		return true
+	}
+
+	if _, ok := errors.AsType[*iam.ErrInsufficientOAuth2Scope](err); ok {
+		return true
+	}
+
+	return false
+}
+
+func (h *Handler) renderAuthorizationError(w http.ResponseWriter, err error) {
+	if scopeErr, ok := errors.AsType[*iam.ErrInsufficientOAuth2Scope](err); ok {
+		bearertoken.SetBearerInsufficientScope(w, h.BaseURL, scopeErr.Scopes...)
+		jsonx.RenderForbidden(w)
+
+		return
+	}
+
+	if _, ok := errors.AsType[*iam.ErrInsufficientPermissions](err); ok {
+		jsonx.RenderForbidden(w)
+		return
+	}
+
+	jsonx.RenderNotFound(w, fmt.Errorf("document not found"))
+}
+
+func (h *Handler) closeOpenError(
+	ctx context.Context,
+	connection *websocket.Conn,
+	documentID string,
+	err error,
+) {
+	if requestCanceled(err) {
+		_ = connection.Close(websocket.StatusGoingAway, "")
+		return
+	}
+
+	if collaborationOpenUnavailable(err) {
+		_ = connection.Close(websocket.StatusPolicyViolation, "collaboration unavailable")
+		return
+	}
+
+	h.Logger.ErrorCtx(
+		ctx,
+		"cannot open document collaboration",
+		log.Error(err),
+		log.String("document_id", documentID),
+	)
+
+	_ = connection.Close(websocket.StatusInternalError, "collaboration failed")
+}
+
+// collaborationOpenUnavailable reports whether a room could not be opened
+// because the document has no collaboration document, as generated documents
+// do not.
+func collaborationOpenUnavailable(err error) bool {
+	return errors.Is(err, collaboration.ErrDocumentCollaborationNotFound)
+}
+
+func (h *Handler) closeWithError(
+	ctx context.Context,
+	connection *websocket.Conn,
+	documentID string,
+	err error,
+) {
+	h.Logger.ErrorCtx(
+		ctx,
+		"document collaboration failed",
+		log.Error(err),
+		log.String("document_id", documentID),
+	)
+
+	_ = connection.Close(websocket.StatusInternalError, "collaboration failed")
+}
+
+func collaborationPresenceIdentity(
+	ctx context.Context,
+	h *Handler,
+	document *coredata.Document,
+	identity *coredata.Identity,
+) (displayName string, identityID string, avatarURL string, profileID *gid.GID) {
+	if identity == nil {
+		return "", "", "", nil
+	}
+
+	identityID = identity.ID.String()
+	avatarURL = collaborationPresenceAvatarURL(h, identity)
+
+	profile, err := h.IAM.OrganizationService.GetProfileForIdentityAndOrganization(
+		ctx,
+		identity.ID,
+		document.OrganizationID,
+	)
+	if err == nil {
+		name := strings.TrimSpace(profile.FullName)
+		if name == "" {
+			name = identity.EmailAddress.String()
+		}
+
+		return name, identityID, avatarURL, &profile.ID
+	}
+
+	if _, ok := errors.AsType[*iam.ErrProfileNotFound](err); !ok && h.Logger != nil {
+		h.Logger.WarnCtx(
+			ctx,
+			"cannot load collaboration presence profile",
+			log.Error(err),
+			log.String("document_id", document.ID.String()),
+			log.String("identity_id", identityID),
+		)
+	}
+
+	name := strings.TrimSpace(identity.FullName)
+	if name == "" {
+		name = identity.EmailAddress.String()
+	}
+
+	return name, identityID, avatarURL, nil
+}
+
+func collaborationPresenceAvatarURL(
+	h *Handler,
+	identity *coredata.Identity,
+) string {
+	if identity.AvatarFileID == nil || h.BaseURL == nil {
+		return ""
+	}
+
+	avatarURL, err := h.BaseURL.WithPath(
+		"/api/files/v1/public/" + identity.AvatarFileID.String(),
+	).String()
+	if err != nil {
+		return ""
+	}
+
+	return avatarURL
+}
+
+func announceCollaborationDeparture(
+	ctx context.Context,
+	conn *collabpkg.ServerConn,
+	lease *RoomLease,
+	config RepoConfig,
+) {
+	senderID := conn.RemotePeerID()
+
+	documentID := conn.DocumentID()
+	if senderID == "" || documentID == "" {
+		return
+	}
+
+	sessionID, err := NewConnectionID()
+	if err != nil {
+		return
+	}
+
+	frame, err := collabpkg.EncodeDepartureEphemeral(
+		senderID,
+		config.ServerPeerID,
+		documentID,
+		sessionID,
+	)
+	if err != nil {
+		if config.Logger != nil {
+			config.Logger.WarnCtx(
+				ctx,
+				"cannot encode collaboration departure",
+				log.Error(err),
+				log.String("document_id", config.DocumentID.String()),
+			)
+		}
+
+		return
+	}
+
+	lease.BroadcastEphemeral(frame)
+
+	if config.PublishEphemeral == nil {
+		return
+	}
+
+	notifyCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		DepartureNotifyTimeout,
+	)
+	defer cancel()
+
+	if err := config.PublishEphemeral(notifyCtx, frame); err != nil && config.Logger != nil {
+		config.Logger.WarnCtx(
+			notifyCtx,
+			"cannot relay collaboration departure across instances",
+			log.Error(err),
+			log.String("document_id", config.DocumentID.String()),
+		)
+	}
+}
+
+// acceptRepoJoin writes the peer reply before the document is opened.
+// A far client treats a quiet socket as a missing document, and opening a
+// large snapshot takes longer than that wait.
+func acceptRepoJoin(
+	ctx context.Context,
+	connection *websocket.Conn,
+	incoming <-chan Incoming,
+	serverPeerID string,
+) (*collabpkg.ServerSession, bool, error) {
+	var join Incoming
+
+	select {
+	case join = <-incoming:
+	case <-ctx.Done():
+		return nil, false, nil
+	}
+
+	if join.Err != nil {
+		return nil, false, repoReadResult(join.Err)
+	}
+
+	if join.MessageType != websocket.MessageBinary {
+		_ = connection.Close(websocket.StatusUnsupportedData, "expected a binary join frame")
+
+		return nil, false, nil
+	}
+
+	session, err := collabpkg.NewServerSession(
+		collabpkg.ServerConfig{ServerPeerID: serverPeerID},
+	)
+	if err != nil {
+		return nil, false, err
+	}
+
+	handshake, err := session.Accept(join.Data)
+	if err != nil {
+		return nil, false, fmt.Errorf("cannot accept collaboration join: %w", err)
+	}
+
+	err = WriteMessage(ctx, connection, websocket.MessageBinary, handshake.Reply)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if !handshake.Accepted {
+		_ = connection.Close(websocket.StatusPolicyViolation, "unsupported protocol version")
+
+		return nil, false, nil
+	}
+
+	return session, true, nil
+}
+
+func ServeRepoCollaboration(
+	ctx context.Context,
+	connection *websocket.Conn,
+	lease *RoomLease,
+	syncState *automerge.SyncState,
+	config RepoConfig,
+) error {
+	// Viewers apply nothing, including changes outside the body, and do not persist.
+	readOnly := !config.CanUpdate && !config.CanComment
+	if readOnly {
+		if err := syncState.SetReadOnly(true); err != nil {
+			return fmt.Errorf("cannot mark collaboration peer read-only: %w", err)
+		}
+	}
+
+	conn, err := collabpkg.NewHandshakenServerConn(
+		config.Session,
+		collabpkg.DeriveDocumentID(config.DocumentID.String()),
+		syncState,
+	)
+	if err != nil {
+		return fmt.Errorf("cannot create repo server connection: %w", err)
+	}
+
+	incoming := config.Incoming
+	if incoming == nil {
+		return fmt.Errorf("repo collaboration requires an incoming frame source")
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	lease.SetRemotePeerID(conn.RemotePeerID())
+	lease.ReplayPresence()
+
+	defer announceCollaborationDeparture(ctx, conn, lease, config)
+
+	initialSyncPending := true
+
+	for {
+		select {
+		case <-config.Shutdown.Done():
+			_ = connection.CloseNow()
+			return nil
+		case <-ctx.Done():
+			return nil
+		case message := <-incoming:
+			if message.Err != nil {
+				return repoReadResult(message.Err)
+			}
+
+			if message.MessageType != websocket.MessageBinary {
+				continue
+			}
+
+			reply, fanout, err := applyRepoFrame(ctx, conn, lease, config, message.Data)
+			if err != nil {
+				return err
+			}
+
+			if err := writeRepoReply(
+				ctx,
+				connection,
+				reply,
+				initialSyncPending,
+			); err != nil {
+				return err
+			}
+
+			if len(reply) > 0 {
+				initialSyncPending = false
+			}
+
+			if fanout != nil {
+				fanout = collabpkg.StampSelectionIdentity(
+					fanout,
+					config.DisplayName,
+					config.IdentityID,
+					config.AvatarURL,
+				)
+				if len(fanout) == 0 {
+					continue
+				}
+
+				lease.BroadcastEphemeral(fanout)
+
+				if config.PublishEphemeral != nil {
+					if err := config.PublishEphemeral(ctx, fanout); err != nil && config.Logger != nil {
+						config.Logger.WarnCtx(
+							ctx,
+							"cannot relay collaboration ephemeral across instances",
+							log.Error(err),
+							log.String("document_id", config.DocumentID.String()),
+						)
+					}
+				}
+
+				continue
+			}
+
+			kind, err := collabpkg.FrameKind(message.Data)
+			if err != nil {
+				return fmt.Errorf("cannot read repo frame type: %w", err)
+			}
+
+			frameType := collabpkg.MessageType(kind)
+			if frameType != collabpkg.MessageSync && frameType != collabpkg.MessageRequest {
+				continue
+			}
+
+			if config.RecordActors != nil && (config.CanUpdate || config.CanComment) {
+				recordActorsFromFrame(
+					ctx,
+					message.Data,
+					config,
+				)
+			}
+
+			lease.NotifyPeers()
+
+			if readOnly {
+				continue
+			}
+
+			if err := lease.PersistError(); err != nil {
+				return fmt.Errorf("cannot persist repo collaboration: %w", err)
+			}
+
+			lease.SchedulePersist()
+		case frame := <-lease.EphemeralCh:
+			if err := WriteMessage(ctx, connection, websocket.MessageBinary, frame); err != nil {
+				return err
+			}
+		case <-lease.WakeCh:
+			// The room document changed, through another peer here or a
+			// refresh the room ran for changes persisted elsewhere.
+			if !readOnly {
+				if err := lease.PersistError(); err != nil {
+					return fmt.Errorf("cannot persist repo collaboration: %w", err)
+				}
+			}
+
+			frames, err := conn.SyncChanged()
+			if err != nil {
+				return fmt.Errorf("cannot generate repo sync frames: %w", err)
+			}
+
+			if err := writeRepoFrames(ctx, connection, frames); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// applyRepoFrame applies one inbound frame to the shared room document under the
+// room document lock so the comment-only snapshot/validate/restore is atomic
+// with every other connection's mutation. Without the lock a concurrent editor
+// update on another socket can land between the before and after snapshots and
+// be rolled back, erasing that editor's change.
+func applyRepoFrame(
+	ctx context.Context,
+	conn *collabpkg.ServerConn,
+	lease *RoomLease,
+	config RepoConfig,
+	data []byte,
+) (reply [][]byte, fanout []byte, err error) {
+	lease.LockDocument()
+	defer lease.UnlockDocument()
+
+	var beforeSpans []automerge.Span
+	if !config.CanUpdate && lease.Collaboration() != nil && lease.Collaboration().Document != nil {
+		beforeSpans, err = collaboration.BodySpans(lease.Collaboration().Document)
+		if err != nil {
+			return nil, nil, fmt.Errorf("cannot read collaboration spans: %w", err)
+		}
+	}
+
+	reply, fanout, err = conn.Receive(data)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cannot process repo frame: %w", err)
+	}
+
+	if config.CanUpdate || fanout != nil || lease.Collaboration() == nil || lease.Collaboration().Document == nil {
+		return reply, fanout, nil
+	}
+
+	kind, kindErr := collabpkg.FrameKind(data)
+	if kindErr != nil {
+		return restoreCommentOnlySpans(
+			lease,
+			beforeSpans,
+			fmt.Errorf("cannot read repo frame type: %w", kindErr),
+		)
+	}
+
+	frameType := collabpkg.MessageType(kind)
+	if frameType != collabpkg.MessageSync && frameType != collabpkg.MessageRequest {
+		return reply, fanout, nil
+	}
+
+	afterSpans, spanErr := collaboration.BodySpans(lease.Collaboration().Document)
+	if spanErr != nil {
+		return restoreCommentOnlySpans(
+			lease,
+			beforeSpans,
+			fmt.Errorf("cannot read collaboration spans: %w", spanErr),
+		)
+	}
+
+	openSuggestionIDs := map[string]bool{}
+
+	newIDs := collaboration.NewSuggestionIDs(beforeSpans, afterSpans)
+	if len(newIDs) > 0 && config.OpenSuggestions != nil {
+		openSuggestionIDs, err = config.OpenSuggestions(ctx, newIDs)
+		if err != nil {
+			return restoreCommentOnlySpans(
+				lease,
+				beforeSpans,
+				fmt.Errorf("cannot load open collaboration suggestions: %w", err),
+			)
+		}
+	}
+
+	if collaboration.CommentChangeAllowed(beforeSpans, afterSpans, openSuggestionIDs) {
+		return reply, fanout, nil
+	}
+
+	if err := restoreCommentOnlyDocument(lease, beforeSpans); err != nil {
+		return nil, nil, err
+	}
+
+	restored, syncErr := conn.SyncChanged()
+	if syncErr != nil {
+		return nil, nil, fmt.Errorf("cannot sync restored collaboration spans: %w", syncErr)
+	}
+
+	reply = append(reply, restored...)
+
+	return reply, fanout, nil
+}
+
+func restoreCommentOnlySpans(
+	lease *RoomLease,
+	beforeSpans []automerge.Span,
+	err error,
+) ([][]byte, []byte, error) {
+	if restoreErr := restoreCommentOnlyDocument(lease, beforeSpans); restoreErr != nil {
+		return nil, nil, restoreErr
+	}
+
+	return nil, nil, err
+}
+
+func restoreCommentOnlyDocument(lease *RoomLease, beforeSpans []automerge.Span) error {
+	if err := collaboration.WriteBodySpans(lease.Collaboration().Document, beforeSpans); err != nil {
+		return fmt.Errorf("cannot restore collaboration spans: %w", err)
+	}
+
+	if _, err := lease.Collaboration().Document.Commit("Reject direct edit", time.Now()); err != nil && !errors.Is(err, automerge.ErrNoOperations) {
+		return fmt.Errorf("cannot commit restored collaboration spans: %w", err)
+	}
+
+	return nil
+}
+
+func repoReadResult(err error) error {
+	switch websocket.CloseStatus(err) {
+	case websocket.StatusNormalClosure,
+		websocket.StatusGoingAway,
+		websocket.StatusNoStatusRcvd:
+		return nil
+	default:
+		return fmt.Errorf("repo collaboration read failed: %w", err)
+	}
+}
+
+// A joined rollback is ignored when the operation itself was canceled.
+func requestCanceled(err error) bool {
+	for err != nil {
+		type joined interface{ Unwrap() []error }
+		if group, ok := err.(joined); ok {
+			parts := group.Unwrap()
+			if len(parts) == 0 {
+				return false
+			}
+
+			return requestCanceled(parts[0])
+		}
+
+		if err == context.Canceled {
+			return true
+		}
+
+		err = errors.Unwrap(err)
+	}
+
+	return false
+}
+
+func writeRepoFrames(ctx context.Context, connection *websocket.Conn, frames [][]byte) error {
+	for _, frame := range frames {
+		if err := WriteMessage(ctx, connection, websocket.MessageBinary, frame); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// writeRepoReply writes a response to an inbound client frame. The first
+// response carries the initial document snapshot, which can span multiple
+// frames; give that sequence one shared deadline so it cannot exceed the
+// browser's 180-second initialization budget by receiving a full allowance per
+// frame.
+func writeRepoReply(
+	ctx context.Context,
+	connection *websocket.Conn,
+	frames [][]byte,
+	initial bool,
+) error {
+	writeCtx, cancel := repoReplyContext(ctx, initial)
+	defer cancel()
+
+	return writeRepoFrames(writeCtx, connection, frames)
+}
+
+func repoReplyContext(ctx context.Context, initial bool) (context.Context, context.CancelFunc) {
+	if !initial {
+		return ctx, func() {}
+	}
+
+	return context.WithTimeout(ctx, WriteTimeoutCeiling)
+}
+
+func recordActorsFromFrame(
+	ctx context.Context,
+	frame []byte,
+	config RepoConfig,
+) {
+	message, err := collabpkg.DecodeMessage(frame)
+	if err != nil {
+		if config.Logger != nil {
+			config.Logger.WarnCtx(
+				ctx,
+				"cannot decode collaboration sync frame for actor attribution",
+				log.Error(err),
+				log.String("document_id", config.DocumentID.String()),
+			)
+		}
+
+		return
+	}
+
+	actors, err := automerge.ActorsFromSyncMessage(message.Data)
+	if err != nil {
+		if config.Logger != nil {
+			config.Logger.WarnCtx(
+				ctx,
+				"cannot read collaboration actors from sync message",
+				log.Error(err),
+				log.String("document_id", config.DocumentID.String()),
+			)
+		}
+
+		return
+	}
+
+	if len(actors) == 0 {
+		return
+	}
+
+	if err := config.RecordActors(ctx, actors); err != nil && config.Logger != nil {
+		config.Logger.WarnCtx(
+			ctx,
+			"cannot record collaboration actors",
+			log.Error(err),
+			log.String("document_id", config.DocumentID.String()),
+		)
+	}
+}

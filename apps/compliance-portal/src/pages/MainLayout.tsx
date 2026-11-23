@@ -1,30 +1,52 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { useTranslation } from "react-i18next";
 import type { PreloadedQuery } from "react-relay";
 import { graphql, usePreloadedQuery } from "react-relay";
-import { Outlet } from "react-router";
+import { Outlet, useMatch } from "react-router";
 
+import { LocaleMismatchBanner } from "#/components/LocaleMismatchBanner/LocaleMismatchBanner";
 import { PoweredBy } from "#/components/PoweredBy/PoweredBy";
 import { TopBar } from "#/components/TopBar/TopBar";
+import { UnsignedNDABanner } from "#/components/UnsignedNDABanner/UnsignedNDABanner";
+import { useResumeAccessRequest } from "#/lib/auth/useResumeAccessRequest";
+import { useEnsureViewerLocale } from "#/lib/i18n/useEnsureViewerLocale";
+import { SubscribeDialogProvider } from "#/lib/mailingList/SubscribeDialogProvider";
+import { PortalContactEmailProvider } from "#/lib/portal/portalContactContext";
 
 import type { MainLayoutQuery } from "./__generated__/MainLayoutQuery.graphql";
 
 export const mainLayoutQuery = graphql`
   query MainLayoutQuery {
+    viewer {
+      __typename
+      ...LocaleMismatchBanner_identity
+      ...useEnsureViewerLocale_identity
+    }
+    currentCompliancePortal {
+      email
+      ...UnsignedNDABanner_compliancePortal
+    }
     ...TopBar_query
+    ...SubscribeDialogProvider_query
   }
 `;
 
@@ -35,14 +57,43 @@ interface MainLayoutProps {
 export function MainLayout({ queryRef }: MainLayoutProps) {
   const { t } = useTranslation();
   const data = usePreloadedQuery<MainLayoutQuery>(mainLayoutQuery, queryRef);
+  const isDocumentViewer = useMatch("/:lang/documents/:alias") != null;
 
+  // Resume a deferred "request access" once the user lands back authenticated.
+  useResumeAccessRequest(data.viewer != null);
+  // First signed-in visit: seed Identity.locale from the URL when still null.
+  useEnsureViewerLocale(data.viewer ?? null);
+
+  // Document viewer fills the viewport under the TopBar and scrolls its own
+  // stage; every other page uses normal document flow so the footer sits after
+  // content (and at the bottom of short pages via flex-1 main).
   return (
-    <div className="flex min-h-screen flex-col bg-sand-2">
-      <TopBar queryKey={data} />
-      <div className="flex-1">
-        <Outlet />
-      </div>
-      <PoweredBy label={t("footer.poweredBy")} />
-    </div>
+    <PortalContactEmailProvider value={data.currentCompliancePortal?.email ?? null}>
+      <SubscribeDialogProvider queryKey={data}>
+        <div
+          className={
+            isDocumentViewer
+              ? "flex h-dvh flex-col bg-sand-2"
+              : "flex min-h-dvh flex-col bg-sand-2"
+          }
+        >
+          <TopBar queryKey={data} />
+          <LocaleMismatchBanner identityKey={data.viewer ?? null} />
+          {data.viewer != null && data.currentCompliancePortal != null
+            ? <UnsignedNDABanner compliancePortalKey={data.currentCompliancePortal} />
+            : null}
+          <div
+            className={
+              isDocumentViewer
+                ? "flex min-h-0 flex-1 flex-col overflow-hidden"
+                : "flex flex-1 flex-col"
+            }
+          >
+            <Outlet />
+          </div>
+          {isDocumentViewer ? null : <PoweredBy label={t("footer.poweredBy")} />}
+        </div>
+      </SubscribeDialogProvider>
+    </PortalContactEmailProvider>
   );
 }

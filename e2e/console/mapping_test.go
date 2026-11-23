@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_test
 
@@ -23,7 +29,7 @@ import (
 	"go.probo.inc/probo/e2e/internal/testutil"
 )
 
-func TestControlMeasureMapping_CreateDelete(t *testing.T) {
+func TestControlInternalControlMapping_CreateDelete(t *testing.T) {
 	t.Parallel()
 	owner := testutil.NewClient(t, testutil.RoleOwner)
 
@@ -93,21 +99,21 @@ func TestControlMeasureMapping_CreateDelete(t *testing.T) {
 
 	controlID := createControlResult.CreateControl.ControlEdge.Node.ID
 
-	// Create a measure
-	var createMeasureResult struct {
-		CreateMeasure struct {
-			MeasureEdge struct {
+	// Create an internal control
+	var createInternalControlResult struct {
+		CreateInternalControl struct {
+			InternalControlEdge struct {
 				Node struct {
 					ID string `json:"id"`
 				} `json:"node"`
-			} `json:"measureEdge"`
-		} `json:"createMeasure"`
+			} `json:"internalControlEdge"`
+		} `json:"createInternalControl"`
 	}
 
 	err = owner.Execute(`
-		mutation($input: CreateMeasureInput!) {
-			createMeasure(input: $input) {
-				measureEdge {
+		mutation($input: CreateInternalControlInput!) {
+			createInternalControl(input: $input) {
+				internalControlEdge {
 					node {
 						id
 					}
@@ -117,39 +123,39 @@ func TestControlMeasureMapping_CreateDelete(t *testing.T) {
 	`, map[string]any{
 		"input": map[string]any{
 			"organizationId": owner.GetOrganizationID().String(),
-			"name":           "Measure for Mapping",
+			"name":           "Internal control for Mapping",
 			"category":       "POLICY",
 		},
-	}, &createMeasureResult)
+	}, &createInternalControlResult)
 	require.NoError(t, err)
 
-	measureID := createMeasureResult.CreateMeasure.MeasureEdge.Node.ID
+	internalControlID := createInternalControlResult.CreateInternalControl.InternalControlEdge.Node.ID
 
 	t.Run("create mapping", func(t *testing.T) {
 		var result struct {
-			CreateControlMeasureMapping struct {
+			CreateControlInternalControlMapping struct {
 				ControlEdge struct {
 					Node struct {
 						ID string `json:"id"`
 					} `json:"node"`
 				} `json:"controlEdge"`
-				MeasureEdge struct {
+				InternalControlEdge struct {
 					Node struct {
 						ID string `json:"id"`
 					} `json:"node"`
-				} `json:"measureEdge"`
-			} `json:"createControlMeasureMapping"`
+				} `json:"internalControlEdge"`
+			} `json:"createControlInternalControlMapping"`
 		}
 
 		err := owner.Execute(`
-			mutation($input: CreateControlMeasureMappingInput!) {
-				createControlMeasureMapping(input: $input) {
+			mutation($input: CreateControlInternalControlMappingInput!) {
+				createControlInternalControlMapping(input: $input) {
 					controlEdge {
 						node {
 							id
 						}
 					}
-					measureEdge {
+					internalControlEdge {
 						node {
 							id
 						}
@@ -158,34 +164,34 @@ func TestControlMeasureMapping_CreateDelete(t *testing.T) {
 			}
 		`, map[string]any{
 			"input": map[string]any{
-				"controlId": controlID,
-				"measureId": measureID,
+				"controlId":         controlID,
+				"internalControlId": internalControlID,
 			},
 		}, &result)
 		require.NoError(t, err)
-		assert.Equal(t, controlID, result.CreateControlMeasureMapping.ControlEdge.Node.ID)
-		assert.Equal(t, measureID, result.CreateControlMeasureMapping.MeasureEdge.Node.ID)
+		assert.Equal(t, controlID, result.CreateControlInternalControlMapping.ControlEdge.Node.ID)
+		assert.Equal(t, internalControlID, result.CreateControlInternalControlMapping.InternalControlEdge.Node.ID)
 	})
 
 	t.Run("delete mapping", func(t *testing.T) {
 		_, err := owner.Do(`
-			mutation($input: DeleteControlMeasureMappingInput!) {
-				deleteControlMeasureMapping(input: $input) {
+			mutation($input: DeleteControlInternalControlMappingInput!) {
+				deleteControlInternalControlMapping(input: $input) {
 					deletedControlId
-					deletedMeasureId
+					deletedInternalControlId
 				}
 			}
 		`, map[string]any{
 			"input": map[string]any{
-				"controlId": controlID,
-				"measureId": measureID,
+				"controlId":         controlID,
+				"internalControlId": internalControlID,
 			},
 		})
 		require.NoError(t, err)
 	})
 }
 
-func TestRiskMeasureMapping_CreateDelete(t *testing.T) {
+func TestRiskInternalControlMapping_CreateDelete(t *testing.T) {
 	t.Parallel()
 	owner := testutil.NewClient(t, testutil.RoleOwner)
 
@@ -212,33 +218,30 @@ func TestRiskMeasureMapping_CreateDelete(t *testing.T) {
 		}
 	`, map[string]any{
 		"input": map[string]any{
-			"organizationId":     owner.GetOrganizationID().String(),
-			"name":               "Risk for Mapping",
-			"category":           "Operational",
-			"treatment":          "MITIGATED",
-			"inherentLikelihood": 3,
-			"inherentImpact":     3,
+			"organizationId": owner.GetOrganizationID().String(),
+			"name":           "Risk for Mapping",
+			"category":       "Operational",
 		},
 	}, &createRiskResult)
 	require.NoError(t, err)
 
 	riskID := createRiskResult.CreateRisk.RiskEdge.Node.ID
 
-	// Create a measure
-	var createMeasureResult struct {
-		CreateMeasure struct {
-			MeasureEdge struct {
+	// Create an internal control
+	var createInternalControlResult struct {
+		CreateInternalControl struct {
+			InternalControlEdge struct {
 				Node struct {
 					ID string `json:"id"`
 				} `json:"node"`
-			} `json:"measureEdge"`
-		} `json:"createMeasure"`
+			} `json:"internalControlEdge"`
+		} `json:"createInternalControl"`
 	}
 
 	err = owner.Execute(`
-		mutation($input: CreateMeasureInput!) {
-			createMeasure(input: $input) {
-				measureEdge {
+		mutation($input: CreateInternalControlInput!) {
+			createInternalControl(input: $input) {
+				internalControlEdge {
 					node {
 						id
 					}
@@ -248,39 +251,39 @@ func TestRiskMeasureMapping_CreateDelete(t *testing.T) {
 	`, map[string]any{
 		"input": map[string]any{
 			"organizationId": owner.GetOrganizationID().String(),
-			"name":           "Measure for Risk Mapping",
+			"name":           "Internal control for Risk Mapping",
 			"category":       "TECHNICAL",
 		},
-	}, &createMeasureResult)
+	}, &createInternalControlResult)
 	require.NoError(t, err)
 
-	measureID := createMeasureResult.CreateMeasure.MeasureEdge.Node.ID
+	internalControlID := createInternalControlResult.CreateInternalControl.InternalControlEdge.Node.ID
 
 	t.Run("create mapping", func(t *testing.T) {
 		var result struct {
-			CreateRiskMeasureMapping struct {
+			CreateRiskInternalControlMapping struct {
 				RiskEdge struct {
 					Node struct {
 						ID string `json:"id"`
 					} `json:"node"`
 				} `json:"riskEdge"`
-				MeasureEdge struct {
+				InternalControlEdge struct {
 					Node struct {
 						ID string `json:"id"`
 					} `json:"node"`
-				} `json:"measureEdge"`
-			} `json:"createRiskMeasureMapping"`
+				} `json:"internalControlEdge"`
+			} `json:"createRiskInternalControlMapping"`
 		}
 
 		err := owner.Execute(`
-			mutation($input: CreateRiskMeasureMappingInput!) {
-				createRiskMeasureMapping(input: $input) {
+			mutation($input: CreateRiskInternalControlMappingInput!) {
+				createRiskInternalControlMapping(input: $input) {
 					riskEdge {
 						node {
 							id
 						}
 					}
-					measureEdge {
+					internalControlEdge {
 						node {
 							id
 						}
@@ -289,27 +292,27 @@ func TestRiskMeasureMapping_CreateDelete(t *testing.T) {
 			}
 		`, map[string]any{
 			"input": map[string]any{
-				"riskId":    riskID,
-				"measureId": measureID,
+				"riskId":            riskID,
+				"internalControlId": internalControlID,
 			},
 		}, &result)
 		require.NoError(t, err)
-		assert.Equal(t, riskID, result.CreateRiskMeasureMapping.RiskEdge.Node.ID)
-		assert.Equal(t, measureID, result.CreateRiskMeasureMapping.MeasureEdge.Node.ID)
+		assert.Equal(t, riskID, result.CreateRiskInternalControlMapping.RiskEdge.Node.ID)
+		assert.Equal(t, internalControlID, result.CreateRiskInternalControlMapping.InternalControlEdge.Node.ID)
 	})
 
 	t.Run("delete mapping", func(t *testing.T) {
 		_, err := owner.Do(`
-			mutation($input: DeleteRiskMeasureMappingInput!) {
-				deleteRiskMeasureMapping(input: $input) {
+			mutation($input: DeleteRiskInternalControlMappingInput!) {
+				deleteRiskInternalControlMapping(input: $input) {
 					deletedRiskId
-					deletedMeasureId
+					deletedInternalControlId
 				}
 			}
 		`, map[string]any{
 			"input": map[string]any{
-				"riskId":    riskID,
-				"measureId": measureID,
+				"riskId":            riskID,
+				"internalControlId": internalControlID,
 			},
 		})
 		require.NoError(t, err)
@@ -555,7 +558,7 @@ func TestControlAuditMapping_CreateDelete(t *testing.T) {
 	`, map[string]any{
 		"input": map[string]any{
 			"organizationId": owner.GetOrganizationID().String(),
-			"frameworkId":    frameworkID,
+			"frameworkIds":   []string{frameworkID},
 			"name":           "Audit for Control Mapping",
 		},
 	}, &createAuditResult)
@@ -633,12 +636,9 @@ func TestRiskDocumentMapping_CreateDelete(t *testing.T) {
 		}
 	`, map[string]any{
 		"input": map[string]any{
-			"organizationId":     owner.GetOrganizationID().String(),
-			"name":               "Risk for Document Mapping",
-			"category":           "Operational",
-			"treatment":          "MITIGATED",
-			"inherentLikelihood": 3,
-			"inherentImpact":     3,
+			"organizationId": owner.GetOrganizationID().String(),
+			"name":           "Risk for Document Mapping",
+			"category":       "Operational",
 		},
 	}, &createRiskResult)
 	require.NoError(t, err)
@@ -722,6 +722,168 @@ func TestRiskDocumentMapping_CreateDelete(t *testing.T) {
 	})
 }
 
+func loadRiskLinkedDocumentIDs(
+	t *testing.T,
+	owner *testutil.Client,
+	riskID string,
+) []string {
+	t.Helper()
+
+	var result struct {
+		Node struct {
+			Documents struct {
+				Edges []struct {
+					Node struct {
+						ID string `json:"id"`
+					} `json:"node"`
+				} `json:"edges"`
+			} `json:"documents"`
+		} `json:"node"`
+	}
+
+	err := owner.Execute(`
+		query($id: ID!) {
+			node(id: $id) {
+				... on Risk {
+					documents(first: 10) {
+						edges {
+							node {
+								id
+							}
+						}
+					}
+				}
+			}
+		}
+	`, map[string]any{"id": riskID}, &result)
+	require.NoError(t, err)
+
+	ids := make([]string, 0, len(result.Node.Documents.Edges))
+	for _, edge := range result.Node.Documents.Edges {
+		ids = append(ids, edge.Node.ID)
+	}
+
+	return ids
+}
+
+func TestRiskDocumentMapping_DeleteDocumentClearsRiskDocumentLink(t *testing.T) {
+	t.Parallel()
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+
+	riskID := factory.NewRisk(owner).
+		WithName("Risk linked to deleted document").
+		Create()
+	documentID := factory.NewDocument(owner).
+		WithTitle("Document linked to risk").
+		Create()
+
+	_, err := owner.Do(`
+		mutation($input: CreateRiskDocumentMappingInput!) {
+			createRiskDocumentMapping(input: $input) {
+				riskEdge { node { id } }
+			}
+		}
+	`, map[string]any{
+		"input": map[string]any{
+			"riskId":     riskID,
+			"documentId": documentID,
+		},
+	})
+	require.NoError(t, err)
+
+	linkedDocumentIDs := loadRiskLinkedDocumentIDs(t, owner, riskID)
+	require.Contains(t, linkedDocumentIDs, documentID)
+
+	_, err = owner.Do(`
+		mutation DeleteDocument($input: DeleteDocumentInput!) {
+			deleteDocument(input: $input) {
+				deletedDocumentId
+			}
+		}
+	`, map[string]any{
+		"input": map[string]any{"documentId": documentID},
+	})
+	require.NoError(t, err)
+
+	linkedDocumentIDs = loadRiskLinkedDocumentIDs(t, owner, riskID)
+	assert.NotContains(t, linkedDocumentIDs, documentID)
+	assert.Empty(t, linkedDocumentIDs)
+
+	_, err = owner.Do(`
+		mutation DeleteRisk($input: DeleteRiskInput!) {
+			deleteRisk(input: $input) {
+				deletedRiskId
+			}
+		}
+	`, map[string]any{
+		"input": map[string]any{"riskId": riskID},
+	})
+	require.NoError(t, err)
+}
+
+func TestRiskDocumentMapping_DeleteRiskRequiresUnlinkedDocuments(t *testing.T) {
+	t.Parallel()
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+
+	riskID := factory.NewRisk(owner).
+		WithName("Risk with active document link").
+		Create()
+	documentID := factory.NewDocument(owner).
+		WithTitle("Document still linked to risk").
+		Create()
+
+	_, err := owner.Do(`
+		mutation($input: CreateRiskDocumentMappingInput!) {
+			createRiskDocumentMapping(input: $input) {
+				riskEdge { node { id } }
+			}
+		}
+	`, map[string]any{
+		"input": map[string]any{
+			"riskId":     riskID,
+			"documentId": documentID,
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = owner.Do(`
+		mutation DeleteRisk($input: DeleteRiskInput!) {
+			deleteRisk(input: $input) {
+				deletedRiskId
+			}
+		}
+	`, map[string]any{
+		"input": map[string]any{"riskId": riskID},
+	})
+	require.Error(t, err)
+
+	_, err = owner.Do(`
+		mutation($input: DeleteRiskDocumentMappingInput!) {
+			deleteRiskDocumentMapping(input: $input) {
+				deletedRiskId
+				deletedDocumentId
+			}
+		}
+	`, map[string]any{
+		"input": map[string]any{
+			"riskId":     riskID,
+			"documentId": documentID,
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = owner.Do(`
+		mutation DeleteRisk($input: DeleteRiskInput!) {
+			deleteRisk(input: $input) {
+				deletedRiskId
+			}
+		}
+	`, map[string]any{
+		"input": map[string]any{"riskId": riskID},
+	})
+	require.NoError(t, err)
+}
+
 func TestRiskObligationMapping_CreateDelete(t *testing.T) {
 	t.Parallel()
 	owner := testutil.NewClient(t, testutil.RoleOwner)
@@ -749,12 +911,9 @@ func TestRiskObligationMapping_CreateDelete(t *testing.T) {
 		}
 	`, map[string]any{
 		"input": map[string]any{
-			"organizationId":     owner.GetOrganizationID().String(),
-			"name":               "Risk for Obligation Mapping",
-			"category":           "Compliance",
-			"treatment":          "MITIGATED",
-			"inherentLikelihood": 2,
-			"inherentImpact":     4,
+			"organizationId": owner.GetOrganizationID().String(),
+			"name":           "Risk for Obligation Mapping",
+			"category":       "Compliance",
 		},
 	}, &createRiskResult)
 	require.NoError(t, err)
@@ -841,10 +1000,10 @@ func TestRiskObligationMapping_CreateDelete(t *testing.T) {
 	})
 }
 
-func TestMeasureDocumentMapping_CreateDelete(t *testing.T) {
+func TestInternalControlDocumentMapping_CreateDelete(t *testing.T) {
 	t.Parallel()
 	owner := testutil.NewClient(t, testutil.RoleOwner)
-	measureID := factory.NewMeasure(owner).Create()
+	internalControlID := factory.NewInternalControl(owner).Create()
 
 	t.Run("create mapping", func(t *testing.T) {
 		t.Parallel()
@@ -852,24 +1011,24 @@ func TestMeasureDocumentMapping_CreateDelete(t *testing.T) {
 		documentID := factory.NewDocument(owner).Create()
 
 		var result struct {
-			CreateMeasureDocumentMapping struct {
-				MeasureEdge struct {
+			CreateInternalControlDocumentMapping struct {
+				InternalControlEdge struct {
 					Node struct {
 						ID string `json:"id"`
 					} `json:"node"`
-				} `json:"measureEdge"`
+				} `json:"internalControlEdge"`
 				DocumentEdge struct {
 					Node struct {
 						ID string `json:"id"`
 					} `json:"node"`
 				} `json:"documentEdge"`
-			} `json:"createMeasureDocumentMapping"`
+			} `json:"createInternalControlDocumentMapping"`
 		}
 
 		err := owner.Execute(`
-			mutation($input: CreateMeasureDocumentMappingInput!) {
-				createMeasureDocumentMapping(input: $input) {
-					measureEdge {
+			mutation($input: CreateInternalControlDocumentMappingInput!) {
+				createInternalControlDocumentMapping(input: $input) {
+					internalControlEdge {
 						node {
 							id
 						}
@@ -883,13 +1042,13 @@ func TestMeasureDocumentMapping_CreateDelete(t *testing.T) {
 			}
 		`, map[string]any{
 			"input": map[string]any{
-				"measureId":  measureID,
-				"documentId": documentID,
+				"internalControlId": internalControlID,
+				"documentId":        documentID,
 			},
 		}, &result)
 		require.NoError(t, err)
-		assert.Equal(t, measureID, result.CreateMeasureDocumentMapping.MeasureEdge.Node.ID)
-		assert.Equal(t, documentID, result.CreateMeasureDocumentMapping.DocumentEdge.Node.ID)
+		assert.Equal(t, internalControlID, result.CreateInternalControlDocumentMapping.InternalControlEdge.Node.ID)
+		assert.Equal(t, documentID, result.CreateInternalControlDocumentMapping.DocumentEdge.Node.ID)
 	})
 
 	t.Run("delete mapping", func(t *testing.T) {
@@ -899,8 +1058,8 @@ func TestMeasureDocumentMapping_CreateDelete(t *testing.T) {
 
 		// Create the mapping first
 		_, err := owner.Do(`
-			mutation($input: CreateMeasureDocumentMappingInput!) {
-				createMeasureDocumentMapping(input: $input) {
+			mutation($input: CreateInternalControlDocumentMappingInput!) {
+				createInternalControlDocumentMapping(input: $input) {
 					documentEdge {
 						node {
 							id
@@ -910,26 +1069,34 @@ func TestMeasureDocumentMapping_CreateDelete(t *testing.T) {
 			}
 		`, map[string]any{
 			"input": map[string]any{
-				"measureId":  measureID,
-				"documentId": documentID,
+				"internalControlId": internalControlID,
+				"documentId":        documentID,
 			},
 		})
 		require.NoError(t, err)
 
 		// Delete it
 		_, err = owner.Do(`
-			mutation($input: DeleteMeasureDocumentMappingInput!) {
-				deleteMeasureDocumentMapping(input: $input) {
-					deletedMeasureId
+			mutation($input: DeleteInternalControlDocumentMappingInput!) {
+				deleteInternalControlDocumentMapping(input: $input) {
+					deletedInternalControlId
 					deletedDocumentId
 				}
 			}
 		`, map[string]any{
 			"input": map[string]any{
-				"measureId":  measureID,
-				"documentId": documentID,
+				"internalControlId": internalControlID,
+				"documentId":        documentID,
 			},
 		})
 		require.NoError(t, err)
 	})
 }
+
+// The mapping mutations below link two independently-authored resources
+// (e.g. controlId + internalControlId) together. Each is only safe because the
+// underlying service loads BOTH ids in the caller's own scope before
+// upserting the junction row (see e.g. ControlService.CreateInternalControlMapping);
+// an attacker supplying a valid GID from another organization on either
+// side must be rejected. These tests pin that invariant for every mapping
+// mutation.

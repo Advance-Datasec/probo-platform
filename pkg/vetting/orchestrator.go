@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package vetting
 
@@ -137,19 +143,19 @@ func newOrchestratorAgent(
 		},
 		{
 			toolName:    "assess_data_processing",
-			description: "Assess data processing practices. Returns structured JSON with encryption, retention, deletion, data locations, transfer mechanisms, DPA status, DSAR handling, and rating. Input: a relevant page URL (privacy policy, DPA, security page, or trust center).",
+			description: "Assess data processing practices. Returns structured JSON with encryption, retention, deletion, data locations, transfer mechanisms, DPA status, DSAR handling, and rating. Input: a relevant page URL (privacy policy, DPA, security page, or compliance portal).",
 			tools:       readOnlyBrowserTools,
 			build:       buildDataProcessingAgent,
 		},
 		{
 			toolName:    "assess_incident_response",
-			description: "Evaluate incident response capabilities. Returns structured JSON with ir_plan, notification_timeline, status_page, post_mortems, recent_incidents, security_contact, and rating. Input: a relevant page URL (security page, trust center, or status page).",
+			description: "Evaluate incident response capabilities. Returns structured JSON with ir_plan, notification_timeline, status_page, post_mortems, recent_incidents, security_contact, and rating. Input: a relevant page URL (security page, compliance portal, or status page).",
 			tools:       readOnlyBrowserTools,
 			build:       buildIncidentResponseAgent,
 		},
 		{
 			toolName:    "assess_business_continuity",
-			description: "Evaluate business continuity and disaster recovery. Returns structured JSON with dr_plan, rto, rpo, cloud_providers, uptime_sla, regions, backup_strategy, and rating. Input: a relevant page URL (SLA page, trust center, or infrastructure docs).",
+			description: "Evaluate business continuity and disaster recovery. Returns structured JSON with dr_plan, rto, rpo, cloud_providers, uptime_sla, regions, backup_strategy, and rating. Input: a relevant page URL (SLA page, compliance portal, or infrastructure docs).",
 			tools:       readOnlyBrowserTools,
 			build:       buildBusinessContinuityAgent,
 		},
@@ -161,13 +167,13 @@ func newOrchestratorAgent(
 		},
 		{
 			toolName:    "assess_ai_risk",
-			description: "Evaluate AI governance (ISO 42001). Returns structured JSON with ai_involvement, use_cases, model_transparency, bias_controls, customer_data_training, human_oversight, and rating. Input: relevant page URL (AI policy, trust center, responsible AI page, or main website).",
+			description: "Evaluate AI governance (ISO 42001). Returns structured JSON with ai_involvement, use_cases, model_transparency, bias_controls, customer_data_training, human_oversight, and rating. Input: relevant page URL (AI policy, compliance portal, responsible AI page, or main website).",
 			tools:       readOnlyBrowserTools,
 			build:       buildAIRiskAgent,
 		},
 		{
 			toolName:    "assess_regulatory_compliance",
-			description: "Deep regulatory compliance check. Returns structured JSON with per-framework assessment (gdpr, hipaa, pci_dss, sox) each with articles, status, and notes. Input: relevant page URL (DPA, compliance page, trust center).",
+			description: "Deep regulatory compliance check. Returns structured JSON with per-framework assessment (gdpr, hipaa, pci_dss, sox) each with articles, status, and notes. Input: relevant page URL (DPA, compliance page, compliance portal).",
 			tools:       readOnlyBrowserTools,
 			build:       buildRegulatoryComplianceAgent,
 		},

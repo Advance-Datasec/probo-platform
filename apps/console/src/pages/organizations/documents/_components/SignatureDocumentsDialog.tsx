@@ -1,22 +1,25 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { sprintf } from "@probo/helpers";
 import { useList } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
 import {
-  Avatar,
   Breadcrumb,
   Button,
   Checkbox,
@@ -31,10 +34,11 @@ import {
   Tr,
   useDialogRef,
 } from "@probo/ui";
+import { Avatar } from "@probo/ui/src/v2/Avatar/Avatar";
 import { type ReactNode, Suspense } from "react";
+import { useTranslation } from "react-i18next";
 import { useLazyLoadQuery, usePaginationFragment } from "react-relay";
 import { graphql } from "relay-runtime";
-import { z } from "zod";
 
 import type { SignatureDocumentsDialogMutation } from "#/__generated__/core/SignatureDocumentsDialogMutation.graphql";
 import type { SignatureDocumentsDialogPeopleFragment$key } from "#/__generated__/core/SignatureDocumentsDialogPeopleFragment.graphql";
@@ -43,6 +47,7 @@ import type { SignatureDocumentsDialogPeopleRefetchQuery } from "#/__generated__
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
 import { useMutationWithToasts } from "#/hooks/useMutationWithToasts";
 import { useOrganizationId } from "#/hooks/useOrganizationId";
+import { z } from "#/lib/zod";
 
 type Props = {
   documentIds: string[];
@@ -92,6 +97,9 @@ const signatureDocumentsDialogPeopleFragment = graphql`
           id
           fullName
           emailAddress
+          avatar {
+            downloadUrl
+          }
         }
       }
     }
@@ -118,7 +126,7 @@ export function SignatureDocumentsDialog({
   children,
   onSave,
 }: Props) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const dialogRef = useDialogRef();
   const { list: selectedPeople, toggle } = useList<string>([]);
 
@@ -131,9 +139,11 @@ export function SignatureDocumentsDialog({
         successMessage: (response) => {
           const actualRequestsCount
             = response.bulkRequestSignatures.documentVersionSignatureEdges.length;
-          return sprintf(__("%s signature requests created"), actualRequestsCount);
+          return t("signatureDocumentsDialog.messages.created", {
+            count: actualRequestsCount,
+          });
         },
-        errorMessage: __("Failed to create signature requests"),
+        errorMessage: t("signatureDocumentsDialog.errors.create"),
       },
     );
 
@@ -162,7 +172,14 @@ export function SignatureDocumentsDialog({
       className="max-w-xl"
       ref={dialogRef}
       trigger={children}
-      title={<Breadcrumb items={[__("Documents"), __("Signature requests")]} />}
+      title={(
+        <Breadcrumb
+          items={[
+            t("signatureDocumentsDialog.breadcrumbs.documents"),
+            t("signatureDocumentsDialog.breadcrumbs.requests"),
+          ]}
+        />
+      )}
     >
       <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
         <DialogContent>
@@ -175,7 +192,7 @@ export function SignatureDocumentsDialog({
             type="submit"
             disabled={selectedPeople.length === 0 || isSubmitting}
           >
-            {__("Request signatures")}
+            {t("signatureDocumentsDialog.actions.request")}
           </Button>
         </DialogFooter>
       </form>
@@ -190,13 +207,13 @@ function PeopleList({
   onChange: (id: string) => void;
   selectedPeople: string[];
 }) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const organizationId = useOrganizationId();
   const data = useLazyLoadQuery<SignatureDocumentsDialogPeopleQuery>(
     signatureDocumentsDialogPeopleQuery,
     {
       organizationId,
-      filter: { contractEnded: false, state: "ACTIVE" },
+      filter: { contractEnded: false, states: ["ACTIVE"] },
     },
   );
   const {
@@ -226,7 +243,13 @@ function PeopleList({
               </Td>
               <Td>
                 <div className="flex gap-3 items-center">
-                  <Avatar name={person.fullName} />
+                  <Avatar
+                    name={person.fullName}
+                    email={person.emailAddress}
+                    src={person.avatar?.downloadUrl}
+                    size={1}
+                    radius="full"
+                  />
                   <div>
                     <div className="text-sm">{person.fullName}</div>
                     <div className="text-xs text-txt-tertiary">
@@ -248,7 +271,9 @@ function PeopleList({
           icon={IconChevronDown}
           type="button"
         >
-          {sprintf(__("Show %s more"), profiles.length)}
+          {t("signatureDocumentsDialog.actions.showMore", {
+            count: profiles.length,
+          })}
         </Button>
       )}
     </>

@@ -1,24 +1,31 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { documentClassifications, documentTypes, formatDate, getDocumentClassificationLabel, getDocumentTypeLabel } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
-import { Badge, Button, Card, IconCheckmark1, IconCrossLargeX, IconPencil, useToast } from "@probo/ui";
+import { documentClassifications, documentTypes } from "@probo/helpers";
+import { dateFormat } from "@probo/i18n";
+import { Badge, Button, Card, IconCheckmark1, IconCrossLargeX, IconPencil } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useFragment, useMutation } from "react-relay";
 import { graphql } from "relay-runtime";
-import { z } from "zod";
 
 import type { DocumentDetailsCard_documentFragment$key } from "#/__generated__/core/DocumentDetailsCard_documentFragment.graphql";
 import type { DocumentDetailsCard_updateApproversMutation } from "#/__generated__/core/DocumentDetailsCard_updateApproversMutation.graphql";
@@ -31,11 +38,17 @@ import { DocumentTypeOptions } from "#/components/form/DocumentTypeOptions";
 import { PeopleMultiSelectField } from "#/components/form/PeopleMultiSelectField";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
 import { useOrganizationId } from "#/hooks/useOrganizationId";
+import { z } from "#/lib/zod";
 
 const documentFragment = graphql`
   fragment DocumentDetailsCard_documentFragment on Document {
     id
+    documentType
+    classification
+    updatedAt
     archivedAt
+    currentPublishedMajor
+    currentPublishedMinor
     canUpdate: permission(action: "core:document:update")
     defaultApprovers {
       id
@@ -62,14 +75,8 @@ const updateDocumentTypeMutation = graphql`
     updateDocument(input: $input) {
       document {
         id
-        versions(first: 1, orderBy: { field: CREATED_AT, direction: DESC }) {
-          edges {
-            node {
-              id
-              documentType
-            }
-          }
-        }
+        documentType
+        updatedAt
       }
     }
   }
@@ -80,14 +87,8 @@ const updateClassificationMutation = graphql`
     updateDocument(input: $input) {
       document {
         id
-        versions(first: 1, orderBy: { field: CREATED_AT, direction: DESC }) {
-          edges {
-            node {
-              id
-              classification
-            }
-          }
-        }
+        classification
+        updatedAt
       }
     }
   }
@@ -122,9 +123,10 @@ const approversSchema = z.object({
 
 export function DocumentDetailsCard(props: {
   documentFragmentRef: DocumentDetailsCard_documentFragment$key;
-  versionFragmentRef: DocumentDetailsCard_versionFragment$key;
+  versionFragmentRef: DocumentDetailsCard_versionFragment$key | null;
   isEditable: boolean;
   isLatestVersion?: boolean;
+  hasPendingApproval: boolean;
   onDocumentUpdated: () => void;
 }) {
   const {
@@ -132,29 +134,34 @@ export function DocumentDetailsCard(props: {
     versionFragmentRef,
     isEditable,
     isLatestVersion = true,
+    hasPendingApproval,
     onDocumentUpdated,
   } = props;
 
-  const { __ } = useTranslate();
+  const { t, i18n } = useTranslation();
   const organizationId = useOrganizationId();
 
   const [isEditingType, setIsEditingType] = useState(false);
   const [isEditingClassification, setIsEditingClassification] = useState(false);
   const [isEditingApprovers, setIsEditingApprovers] = useState(false);
 
-  const { toast } = useToast();
+  const toast = useToast();
   const document = useFragment<DocumentDetailsCard_documentFragment$key>(documentFragment, documentFragmentRef);
   const version = useFragment<DocumentDetailsCard_versionFragment$key>(versionFragment, versionFragmentRef);
 
+  const source = version ?? document;
+  const publishedMajor = version?.major ?? document.currentPublishedMajor;
+  const publishedMinor = version?.minor ?? document.currentPublishedMinor;
+
   const canEdit = document.canUpdate && isEditable;
   const canEditVersionFields = canEdit;
-  const canEditApprovers = document.canUpdate && isLatestVersion;
+  const canEditApprovers = document.canUpdate && isLatestVersion && !hasPendingApproval;
 
   const { control, handleSubmit, reset } = useFormWithSchema(
     schema,
     {
       values: {
-        documentType: version.documentType,
+        documentType: source.documentType,
       },
     },
   );
@@ -167,7 +174,7 @@ export function DocumentDetailsCard(props: {
     classificationSchema,
     {
       values: {
-        classification: version.classification,
+        classification: source.classification,
       },
     },
   );
@@ -194,6 +201,10 @@ export function DocumentDetailsCard(props: {
   const [updateApprovers, isUpdatingApprovers]
     = useMutation<DocumentDetailsCard_updateApproversMutation>(updateApproversMutation);
 
+  if (isEditingApprovers && !canEditApprovers) {
+    setIsEditingApprovers(false);
+  }
+
   const handleUpdateDocumentType = (data: {
     documentType: (typeof documentTypes)[number];
   }) => {
@@ -207,17 +218,17 @@ export function DocumentDetailsCard(props: {
       onCompleted: () => {
         setIsEditingType(false);
         onDocumentUpdated();
-        toast({
-          title: __("Success"),
-          description: __("Document type updated successfully"),
-          variant: "success",
+        toast.add({
+          title: t("documentDetails.messages.successTitle"),
+          description: t("documentDetails.messages.typeUpdated"),
+          type: "success",
         });
       },
       onError: () => {
-        toast({
-          title: __("Error"),
-          description: __("Failed to update document type"),
-          variant: "error",
+        toast.add({
+          title: t("documentDetails.errors.title"),
+          description: t("documentDetails.errors.updateType"),
+          type: "error",
         });
       },
     });
@@ -236,23 +247,27 @@ export function DocumentDetailsCard(props: {
       onCompleted: () => {
         setIsEditingClassification(false);
         onDocumentUpdated();
-        toast({
-          title: __("Success"),
-          description: __("Document classification updated successfully"),
-          variant: "success",
+        toast.add({
+          title: t("documentDetails.messages.successTitle"),
+          description: t("documentDetails.messages.classificationUpdated"),
+          type: "success",
         });
       },
       onError: () => {
-        toast({
-          title: __("Error"),
-          description: __("Failed to update document classification"),
-          variant: "error",
+        toast.add({
+          title: t("documentDetails.errors.title"),
+          description: t("documentDetails.errors.updateClassification"),
+          type: "error",
         });
       },
     });
   };
 
   const handleUpdateApprovers = (data: { approverIds: string[] }) => {
+    if (!canEditApprovers) {
+      return;
+    }
+
     updateApprovers({
       variables: {
         input: {
@@ -262,17 +277,17 @@ export function DocumentDetailsCard(props: {
       },
       onCompleted: () => {
         setIsEditingApprovers(false);
-        toast({
-          title: __("Success"),
-          description: __("Approvers updated successfully"),
-          variant: "success",
+        toast.add({
+          title: t("documentDetails.messages.successTitle"),
+          description: t("documentDetails.messages.approversUpdated"),
+          type: "success",
         });
       },
       onError: () => {
-        toast({
-          title: __("Error"),
-          description: __("Failed to update approvers"),
-          variant: "error",
+        toast.add({
+          title: t("documentDetails.errors.title"),
+          description: t("documentDetails.errors.updateApprovers"),
+          type: "error",
         });
       },
     });
@@ -283,7 +298,7 @@ export function DocumentDetailsCard(props: {
       <div className="grid grid-cols-3 gap-4">
         <div>
           <div className="text-xs text-txt-tertiary font-semibold mb-1">
-            {__("Type")}
+            {t("documentDetails.fields.type")}
           </div>
           {isEditingType
             ? (
@@ -316,7 +331,7 @@ export function DocumentDetailsCard(props: {
             : (
                 <div className="flex items-center gap-2">
                   <div className="text-sm text-txt-primary">
-                    {getDocumentTypeLabel(__, version.documentType)}
+                    {t(`documentDetails.documentTypes.${source.documentType.toLowerCase()}`)}
                   </div>
                   {canEditVersionFields && (
                     <Button
@@ -330,7 +345,7 @@ export function DocumentDetailsCard(props: {
         </div>
         <div>
           <div className="text-xs text-txt-tertiary font-semibold mb-1">
-            {__("Classification")}
+            {t("documentDetails.fields.classification")}
           </div>
           {isEditingClassification
             ? (
@@ -363,7 +378,7 @@ export function DocumentDetailsCard(props: {
             : (
                 <div className="flex items-center gap-2">
                   <div className="text-sm text-txt-primary">
-                    {getDocumentClassificationLabel(__, version.classification)}
+                    {t(`documentDetails.classifications.${source.classification.toLowerCase()}`)}
                   </div>
                   {canEditVersionFields && (
                     <Button
@@ -378,9 +393,9 @@ export function DocumentDetailsCard(props: {
         {isLatestVersion && (
           <div>
             <div className="text-xs text-txt-tertiary font-semibold mb-1">
-              {__("Approvers")}
+              {t("documentDetails.fields.approvers")}
             </div>
-            {isEditingApprovers
+            {isEditingApprovers && canEditApprovers
               ? (
                   <div className="flex items-center gap-2">
                     <div className="flex-1">
@@ -393,7 +408,7 @@ export function DocumentDetailsCard(props: {
                           fullName: a.fullName,
                           emailAddress: a.emailAddress,
                         }))}
-                        placeholder={__("Add approvers...")}
+                        placeholder={t("documentDetails.fields.approversPlaceholder")}
                       />
                     </div>
                     <Button
@@ -417,7 +432,7 @@ export function DocumentDetailsCard(props: {
                     <div className="text-sm text-txt-primary">
                       {document.defaultApprovers.length > 0
                         ? document.defaultApprovers.map(a => a.fullName).join(", ")
-                        : __("None")}
+                        : t("documentDetails.none")}
                     </div>
                     {canEditApprovers && (
                       <Button
@@ -434,40 +449,40 @@ export function DocumentDetailsCard(props: {
       <div className="grid grid-cols-3 gap-4">
         <div>
           <div className="text-xs text-txt-tertiary font-semibold mb-1">
-            {__("Version")}
+            {t("documentDetails.fields.version")}
           </div>
           <div className="text-sm text-txt-primary">
-            {version.major}
+            {publishedMajor ?? "—"}
             .
-            {version.minor}
+            {publishedMinor ?? "—"}
           </div>
         </div>
         <div>
           <div className="text-xs text-txt-tertiary font-semibold mb-1">
-            {__("Last modified")}
+            {t("documentDetails.fields.lastModified")}
           </div>
           <div className="text-sm text-txt-primary">
-            {formatDate(version.updatedAt)}
+            {dateFormat(i18n.language, source.updatedAt)}
           </div>
         </div>
         <div>
-          {version.publishedAt && (
+          {version?.publishedAt && (
             <>
               <div className="text-xs text-txt-tertiary font-semibold mb-1">
-                {__("Published Date")}
+                {t("documentDetails.fields.publishedDate")}
               </div>
               <div className="text-sm text-txt-primary">
-                {formatDate(version.publishedAt)}
+                {dateFormat(i18n.language, version.publishedAt)}
               </div>
             </>
           )}
           {document.archivedAt && (
             <>
               <div className="text-xs text-txt-tertiary font-semibold mb-1">
-                {__("Archived on")}
+                {t("documentDetails.fields.archivedOn")}
               </div>
               <Badge variant="danger" size="md" className="gap-2">
-                {formatDate(document.archivedAt)}
+                {dateFormat(i18n.language, document.archivedAt)}
               </Badge>
             </>
           )}

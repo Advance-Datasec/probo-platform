@@ -4,6 +4,180 @@ All notable changes to the `@probo/cookie-banner` SDK will be documented in this
 
 ## Unreleased
 
+## [0.23.0] - 2026-11-17
+
+### Changed
+
+- **Breaking**: every page reports a page view, and cookies already
+  listed on the banner are always reported, so analytics are measured
+  on every visit instead of only while a sample is open. The banner
+  config no longer carries `sample_active`. Older clients treat a
+  missing `sample_active` as false and stop sending page views, so
+  upgrade this SDK together with probod
+
+## [0.22.0] - 2026-10-22
+
+### Added
+
+- While a sample is open, each page reports a page view, and cookies
+  already listed on the banner are still reported
+- A discovery hit includes `category_granted`, and the batch includes
+  `consent_action` when the visitor has one. The grant follows current
+  consent for the matching tracker. A `*` in the pattern is a glob: an
+  exact name wins, and otherwise the match with the longest fixed text
+  wins. Necessary categories are always granted, and an unmatched name
+  uses the banner's default for non-necessary trackers
+
+## [0.21.0] - 2026-10-14
+
+### Changed
+
+- `document.cookie` and named storage writes (for example
+  `localStorage[key] = value`) are classified as `SCRIPT` instead of
+  `HTTP` or `PRE_EXISTING`. Hooks start before the config fetch, and the
+  leftover cookie scan waits for the config so inventoried cookies are
+  not re-queued on every page load
+
+### Fixed
+
+- Storage writes report the size of the value actually stored, instead of
+  failing on `null` or reporting `NaN` for numbers, and convert the key
+  only once
+
+## [0.20.0] - 2026-10-09
+
+### Added
+
+- Cookie detections report the cookie `Domain`, and a richer observation
+  replaces an earlier one without demoting its source
+
+### Fixed
+
+- Extension cookies are no longer reported as site trackers
+- Tracker reports drop a cookie `Max-Age` that does not fit a 32-bit
+  integer instead of failing the whole batch
+- Android Edge is counted as Edge, not Chrome, and a 404 on page-view
+  recording no longer causes endless retries
+
+
+## [0.19.0] - 2026-09-24
+
+### Fixed
+
+- `<probo-settings-link>` re-resolves the banner root on click so a
+  header control that mounts before the banner still reopens preferences
+- Restoring a TCF-mode cookie without a `tc` field keeps the stored
+  category grants instead of projecting deny-all
+- First-layer CTA warnings report colors that cannot be parsed, and a
+  contrast just below 5:1 is not rounded up to the minimum
+
+### Added
+
+- Warns in the console when first-layer primary CTAs fail matching text
+  treatment or 5:1 contrast. Custom CSS variables or a style snippet can
+  drop below that floor; default theme colors pass. Runs for opt-in,
+  opt-out, notice, and TCF layouts after the banner mounts
+- Optional `TCFRuntime.onUIVisible` so a TCF addon can follow banner /
+  panel / privacy-choices open and close
+- `projectConsentFromTCF` maps TCF purpose consent/LI bits onto category
+  slugs (AND, fail-closed). Customize and TC restore use it when TCF is on
+- Published banner config nests TCF under `tcf` (`cmp_id`, `cmp_version`,
+  `publisher_cc`, and a publisher-filtered IAB `gvl`) when the hidden
+  capability is on; the key is omitted otherwise. This replaces the
+  flat `tcf_enabled`, `tcf_vendors`, and `gvl_version` fields from
+  0.18.0
+- Stores an optional `tc` field on `probo_consent` when a TCF runtime is
+  registered via `setTCFRuntime`. Encoding and `__tcfapi` live in
+  `@probo/cookie-banner-tcf` so this package stays IAB-free
+- Posts `tc` with consent records and restores it from GET visitor consent
+  onto `probo_consent` and `getTCFRuntime()?.onConfig` so returning visitors
+  keep `__tcfapi` after a cookie miss
+- Public addon API for layout and TCF plugins: `setLayoutRenderer`,
+  `setTCFRuntime`, `bootCookieBanner`, and layout primitives (`floatingCard`,
+  `esc`, `BRANDING`, `CLOSE_ICON`). The themed banner asks a registered
+  renderer first and falls back to opt-in / opt-out / notice
+- `<probo-preference-panel>` requires only `probo-save-button`, so addons can
+  replace the category list. `.panel-body` and `.toggle-group` style the
+  replacement controls
+
+## [0.18.0] - 2026-09-16
+
+### Added
+
+- `BannerConfig` exposes the TCF fields `tcf_enabled`, `tcf_vendors`, and
+  `gvl_version`, plus a new exported `TCFVendor` type describing each
+  disclosed IAB Global Vendor List vendor
+
+## [0.17.0] - 2026-08-25
+
+### Changed
+
+- API calls to the retired hosted console hosts (`eu.console.getprobo.com`, `us.console.getprobo.com`) are rewritten to `eu.probo.com` and `us.probo.com` so existing snippets keep working after the domain migration. Self-hosted and already-migrated base URLs are unchanged.
+
+## [0.16.0] - 2026-08-19
+
+### Added
+
+- `google-consent-mode="off"` (and `data-google-consent-mode="off"` on the script tag) disables the Google Consent Mode integration entirely, for sites that already manage Consent Mode through their own CMP or GTM setup
+
+### Fixed
+
+- The Beacon-based unload report used a content type that is not CORS-safelisted, so browsers could silently drop it instead of sending it
+
+## [0.15.0] - 2026-08-13
+
+### Added
+
+- Operators can disable resource detection per banner: the SDK skips `ResourceDetector` and the server ignores resources on the shared report endpoint, while cookies and storage keep reporting normally
+
+## [0.14.0] - 2026-08-11
+
+### Changed
+
+- Privacy Choices wording keys are regulation-scoped: `privacy_choices_*` → `privacy_choices_*_ccpa`, falling back to the unsuffixed key for configs that have not migrated. The compact opt-out CTA stays on `button_opt_out` (generic); California receives the statutory label from the server via `button_opt_out_ccpa`
+
+## [0.13.0] - 2026-08-05
+
+### Changed
+
+- `Regulation` is a `string` alias rather than an exhaustive union, so the SDK no longer mirrors every backend regulation identifier. Banner behavior is driven by the server-provided `layout`, and new jurisdictions (US state laws, Canadian provincial PIPA) no longer require an SDK release
+
+## [0.12.0] - 2026-08-05
+
+### Added
+
+- CCPA Privacy Choices panel (`privacy_choices` state + `<probo-privacy-choices>`): under CCPA, the settings link opens a dedicated surface that describes the right to opt out of sale/sharing and the right to limit sensitive personal information, with a Do Not Sell or Share action (11 CCR § 7015). SPI is explained as a statement in v1 (no toggle)
+- `<probo-settings-link>` always shows the statutory “Your Privacy Choices” label plus the official CPPA opt-out icon under CCPA (overriding integrator children); otherwise keeps children or falls back to `aria_cookie_settings`; optional GPC badge when the opt-out preference signal was applied
+- Soft-validate that `<probo-settings-link>` is present (warn + `probo-validation`), since it is the sole reopen control
+- Structured `layout` object in the banner config (`presentation`, `initial_state`, `reopen_state`, `default_non_necessary_granted`, `buttons`, `settings_link`). The banner now renders from these explicit fields instead of inferring behavior from hardcoded regulation checks and empty text keys. A config without `layout` means a self-hosted Probo backend older than probod v0.246.0 (the first release that sends it): the client logs an error asking to update probod and falls back to a strict opt-in layout
+- First-class notice-only presentation (single acknowledge button) for jurisdictions with no cookie-consent law and implied-consent regimes (Japan APPI, Mexico LFPDPPP). Dismissing it records a distinct `ACKNOWLEDGE` consent action (via `<probo-acknowledge-button>` / `client.acknowledge()`) rather than `ACCEPT_ALL`, so the audit trail reflects an acknowledgement
+- The themed `<probo-cookie-banner>` is now a thin dispatcher that mounts a focused renderer per presentation (opt-in / opt-out / notice); each renderer owns only its own markup, wording keys, and quirks, replacing the single component's runtime button-toggling
+- Export `resolveLayout` and `resolveBannerText` (plus the `BannerLayout` / `BannerText` / `Presentation` types) so headless integrators can resolve the active presentation and its wording
+
+### Changed
+
+- Under CCPA, `layout.reopen_state` is `privacy_choices` (not the compact opt-out banner). Other OPT_OUT regimes (PIPEDA, Canadian PIPA, LGPD) still reopen the compact banner
+- Under CCPA, the banner starts closed by default (cookies already follow the opt-out model until the visitor opts out)
+- Auto-filled settings-link text inherits font and color from the host; the CCPA icon scales with `1em`
+- Initial state, reopen target, default toggle state, button visibility, and the statutory settings-link style are now driven by the server-provided `layout` rather than `regulation === "CCPA"` / `consent_mode` branching
+- Layout-aware clients (0.12+) receive the raw text keys and select their own wording from `layout.presentation`; the server-side key remap is now a shim for pre-0.12 clients only. Headless integrators on 0.12+ should use `resolveBannerText` / `layout` to render the correct copy
+
+### Removed
+
+- Remove the floating `<probo-settings-button>` widget and the `reopen-widget` attribute — place `<probo-settings-link>` in the header or footer instead (**breaking**)
+
+## [0.11.0] - 2026-08-04
+
+### Added
+
+- Dutch (nl-NL) translations for cookie banner texts and labels
+
+## [0.10.1] - 2026-07-28
+
+### Fixed
+
+- Grant all Google Consent Mode types when the banner config is unavailable (discovery mode), so GTM-managed tags can fire and be detected instead of staying blocked by the eager deny-all bootstrap
+
 ## [0.10.0] - 2026-06-19
 
 ### Changed

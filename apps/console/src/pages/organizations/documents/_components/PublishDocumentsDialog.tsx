@@ -1,19 +1,24 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { formatError, sprintf } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
+import { formatError } from "@probo/helpers";
 import {
   Button,
   Dialog,
@@ -23,15 +28,16 @@ import {
   IconWarning,
   Textarea,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { type ReactNode, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation } from "react-relay";
 import { graphql } from "relay-runtime";
-import { z } from "zod";
 
 import type { PublishDocumentsDialog_bulkPublishMutation } from "#/__generated__/core/PublishDocumentsDialog_bulkPublishMutation.graphql";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
+import { z } from "#/lib/zod";
 
 type Props = {
   documentIds: string[];
@@ -60,13 +66,13 @@ export function PublishDocumentsDialog({
   children,
   onSave,
 }: Props) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
   const dialogRef = useDialogRef();
   const minorRef = useRef(false);
 
   const schema = z.object({
-    changelog: z.string().min(1, __("Changelog is required")),
+    changelog: z.string().min(1, t("publishDocumentsDialog.validation.changelogRequired")),
   });
 
   const [publish, isPublishing]
@@ -95,26 +101,28 @@ export function PublishDocumentsDialog({
       },
       onCompleted(_, errors) {
         if (errors?.length) {
-          toast({
-            title: __("Error"),
-            description: formatError(__("Failed to publish documents"), [...errors]),
-            variant: "error",
+          toast.add({
+            title: t("publishDocumentsDialog.errors.title"),
+            description: formatError(t("publishDocumentsDialog.errors.publish"), [...errors]),
+            type: "error",
           });
           return;
         }
-        toast({
-          title: __("Success"),
-          description: sprintf(__("%s documents published"), documentIds.length),
-          variant: "success",
+        toast.add({
+          title: t("publishDocumentsDialog.messages.successTitle"),
+          description: t("publishDocumentsDialog.messages.published", {
+            count: documentIds.length,
+          }),
+          type: "success",
         });
         dialogRef.current?.close();
         onSave();
       },
       onError(error) {
-        toast({
-          title: __("Error"),
+        toast.add({
+          title: t("publishDocumentsDialog.errors.title"),
           description: error.message,
-          variant: "error",
+          type: "error",
         });
       },
     });
@@ -125,7 +133,7 @@ export function PublishDocumentsDialog({
       className="max-w-xl"
       ref={dialogRef}
       trigger={children}
-      title={__("Publish documents")}
+      title={t("publishDocumentsDialog.title")}
     >
       <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
         <DialogContent padded>
@@ -133,20 +141,20 @@ export function PublishDocumentsDialog({
             <div className="flex items-start gap-2 rounded-lg bg-bg-warning/10 border border-border-warning p-3">
               <IconWarning size={16} className="text-txt-warning shrink-0 mt-0.5" />
               <div className="text-sm text-txt-warning space-y-1">
-                <p>{__("Publishing as major will request approval for documents that have default approvers configured. Approvers will receive an email notification.")}</p>
-                <p>{__("Documents already published and pending approval will be skipped.")}</p>
+                <p>{t("publishDocumentsDialog.warning.approval")}</p>
+                <p>{t("publishDocumentsDialog.warning.skipped")}</p>
               </div>
             </div>
             <div>
               <label htmlFor="changelog" className="text-sm font-medium text-txt-primary mb-1 block">
-                {__("Changelog")}
+                {t("publishDocumentsDialog.fields.changelog")}
               </label>
               <Textarea
                 id="changelog"
-                aria-label={__("Changelog")}
+                aria-label={t("publishDocumentsDialog.fields.changelog")}
                 required
                 autogrow
-                placeholder={__("Describe what changed in this version...")}
+                placeholder={t("publishDocumentsDialog.fields.changelogPlaceholder")}
                 {...register("changelog")}
               />
               {errors.changelog?.message && (
@@ -163,14 +171,14 @@ export function PublishDocumentsDialog({
             disabled={isPublishing}
             onClick={() => { minorRef.current = true; }}
           >
-            {__("Publish as minor")}
+            {t("publishDocumentsDialog.actions.publishMinor")}
           </Button>
           <Button
             type="submit"
             disabled={isPublishing}
             onClick={() => { minorRef.current = false; }}
           >
-            {sprintf(__("Publish %s documents"), documentIds.length)}
+            {t("publishDocumentsDialog.actions.publish", { count: documentIds.length })}
           </Button>
         </DialogFooter>
       </form>

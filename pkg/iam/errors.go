@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package iam
 
@@ -52,19 +58,6 @@ func (e ErrExpiredToken) Error() string {
 	return e.message
 }
 
-// ErrNoActiveAccount is returned when a magic link is redeemed for an address
-// that has no active membership: never invited, invitation still pending, or
-// since deactivated.
-type ErrNoActiveAccount struct{ message string }
-
-func NewNoActiveAccountError() error {
-	return &ErrNoActiveAccount{"no active account for this email address"}
-}
-
-func (e ErrNoActiveAccount) Error() string {
-	return e.message
-}
-
 type ErrInvitationAlreadyAccepted struct{ InvitationID gid.GID }
 
 func NewInvitationAlreadyAcceptedError(invitationID gid.GID) error {
@@ -91,6 +84,16 @@ func NewInvitationExpiredError(invitationID gid.GID) error {
 	return &ErrInvitationExpired{InvitationID: invitationID}
 }
 
+type ErrPendingInvitationNotFound struct{}
+
+func NewPendingInvitationNotFoundError() error {
+	return &ErrPendingInvitationNotFound{}
+}
+
+func (e ErrPendingInvitationNotFound) Error() string {
+	return "pending invitation not found"
+}
+
 func (e ErrInvitationExpired) Error() string {
 	return fmt.Sprintf("invitation %q expired", e.InvitationID)
 }
@@ -105,13 +108,13 @@ func (e ErrIdentityAlreadyExists) Error() string {
 	return fmt.Sprintf("identity %q already exists", e.EmailAddress.String())
 }
 
-type ErrEmailAlreadyVerified struct{ message string }
+type ErrEmailNotVerified struct{ message string }
 
-func NewEmailAlreadyVerifiedError() error {
-	return &ErrEmailAlreadyVerified{"email already verified"}
+func NewEmailNotVerifiedError() error {
+	return &ErrEmailNotVerified{"email address not verified"}
 }
 
-func (e ErrEmailAlreadyVerified) Error() string {
+func (e ErrEmailNotVerified) Error() string {
 	return e.message
 }
 
@@ -167,6 +170,19 @@ func NewUserInactiveError(profileID gid.GID) error {
 
 func (e ErrUserInactive) Error() string {
 	return fmt.Sprintf("user %q is inactive", e.ProfileID)
+}
+
+type ErrActivationNotRequired struct {
+	ProfileID gid.GID
+	Source    coredata.ProfileSource
+}
+
+func NewActivationNotRequiredError(profileID gid.GID, source coredata.ProfileSource) error {
+	return &ErrActivationNotRequired{ProfileID: profileID, Source: source}
+}
+
+func (e ErrActivationNotRequired) Error() string {
+	return fmt.Sprintf("profile %q does not need activation: verified by %s", e.ProfileID, e.Source)
 }
 
 type ErrUserManagedBySCIM struct {
@@ -363,16 +379,6 @@ func (e ErrSAMLConfigurationNotFound) Error() string {
 	return fmt.Sprintf("SAML configuration %q not found", e.ConfigID)
 }
 
-type ErrPersonalAPIKeyNotFound struct{ PersonalAPIKeyID gid.GID }
-
-func NewPersonalAPIKeyNotFoundError(personalAPIKeyID gid.GID) error {
-	return &ErrPersonalAPIKeyNotFound{PersonalAPIKeyID: personalAPIKeyID}
-}
-
-func (e ErrPersonalAPIKeyNotFound) Error() string {
-	return fmt.Sprintf("personal API key %q not found", e.PersonalAPIKeyID)
-}
-
 type ErrProfileNotFound struct{ ProfileID gid.GID }
 
 func NewProfileNotFoundError(profileID gid.GID) error {
@@ -381,26 +387,6 @@ func NewProfileNotFoundError(profileID gid.GID) error {
 
 func (e ErrProfileNotFound) Error() string {
 	return fmt.Sprintf("profile %q not found", e.ProfileID)
-}
-
-type ErrPersonalAPIKeyExpired struct{ PersonalAPIKeyID gid.GID }
-
-func NewPersonalAPIKeyExpiredError(personalAPIKeyID gid.GID) error {
-	return &ErrPersonalAPIKeyExpired{PersonalAPIKeyID: personalAPIKeyID}
-}
-
-func (e ErrPersonalAPIKeyExpired) Error() string {
-	return fmt.Sprintf("personal API key %q expired", e.PersonalAPIKeyID)
-}
-
-type ErrSAMLConfigurationDomainNotVerified struct{ ConfigID gid.GID }
-
-func NewSAMLConfigurationDomainNotVerifiedError(configID gid.GID) error {
-	return &ErrSAMLConfigurationDomainNotVerified{ConfigID: configID}
-}
-
-func (e ErrSAMLConfigurationDomainNotVerified) Error() string {
-	return fmt.Sprintf("SAML configuration %q domain not verified", e.ConfigID)
 }
 
 type ErrUnsupportedPrincipalType struct{ EntityType uint16 }
@@ -487,6 +473,18 @@ func (e ErrSCIMBridgeNotFound) Error() string {
 	return fmt.Sprintf("SCIM bridge %q not found", e.BridgeID)
 }
 
+type ErrSCIMBridgeProviderNotSupported struct {
+	Provider coredata.ConnectorProvider
+}
+
+func NewSCIMBridgeProviderNotSupportedError(provider coredata.ConnectorProvider) error {
+	return &ErrSCIMBridgeProviderNotSupported{Provider: provider}
+}
+
+func (e ErrSCIMBridgeProviderNotSupported) Error() string {
+	return fmt.Sprintf("connector provider %s is not supported for SCIM bridge", e.Provider)
+}
+
 type ErrConnectorNotFound struct{ ConnectorID gid.GID }
 
 func NewConnectorNotFoundError(connectorID gid.GID) error {
@@ -495,4 +493,25 @@ func NewConnectorNotFoundError(connectorID gid.GID) error {
 
 func (e ErrConnectorNotFound) Error() string {
 	return fmt.Sprintf("connector %q not found", e.ConnectorID)
+}
+
+type ErrInvalidLogExportTimeRange struct{ message string }
+
+const maxLogExportTimeRangeYears = 1
+
+func NewInvalidLogExportTimeRangeError() error {
+	return &ErrInvalidLogExportTimeRange{message: "from_time must be before to_time"}
+}
+
+func NewLogExportTimeRangeTooLargeError() error {
+	return &ErrInvalidLogExportTimeRange{
+		message: fmt.Sprintf(
+			"export time range must not exceed %d year",
+			maxLogExportTimeRangeYears,
+		),
+	}
+}
+
+func (e ErrInvalidLogExportTimeRange) Error() string {
+	return e.message
 }

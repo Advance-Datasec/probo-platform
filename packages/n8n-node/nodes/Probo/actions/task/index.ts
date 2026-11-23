@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import type { INodeProperties } from 'n8n-workflow';
 import * as createOp from './create.operation';
@@ -18,6 +24,20 @@ import * as updateOp from './update.operation';
 import * as deleteOp from './delete.operation';
 import * as getOp from './get.operation';
 import * as getAllOp from './getAll.operation';
+import * as getAsanaProjectSetupOp from './getAsanaProjectSetup.operation';
+import * as linkToAsanaOp from './linkToAsana.operation';
+import * as linkToLinearOp from './linkToLinear.operation';
+import * as listAsanaProjectsOp from './listAsanaProjects.operation';
+import * as listAsanaTasksOp from './listAsanaTasks.operation';
+import * as listAsanaTeamsOp from './listAsanaTeams.operation';
+import * as listLinearIssuesOp from './listLinearIssues.operation';
+import * as listLinearTeamsOp from './listLinearTeams.operation';
+import * as publishToAsanaOp from './publishToAsana.operation';
+import * as publishToLinearOp from './publishToLinear.operation';
+import * as updateAsanaProjectMappingOp from './updateAsanaProjectMapping.operation';
+import * as updateAsanaSettingsOp from './updateAsanaSettings.operation';
+import * as updateLinearSettingsOp from './updateLinearSettings.operation';
+import * as unlinkExternalOp from './unlinkExternal.operation';
 
 export const description: INodeProperties[] = [
 	{
@@ -50,16 +70,100 @@ export const description: INodeProperties[] = [
 				action: 'Get a task',
 			},
 			{
+				name: 'Get Asana Project Setup',
+				value: 'getAsanaProjectSetup',
+				description: 'Read an Asana project sections, enum fields, and saved mapping',
+				action: 'Get asana project setup',
+			},
+			{
 				name: 'Get Many',
 				value: 'getAll',
 				description: 'Get many tasks',
 				action: 'Get many tasks',
 			},
 			{
+				name: 'Link To Asana',
+				value: 'linkToAsana',
+				description: 'Link a task to an existing Asana task. This updates the Probo task with the Asana task.',
+				action: 'Link a task to asana',
+			},
+			{
+				name: 'Link To Linear',
+				value: 'linkToLinear',
+				description: 'Link a task to an existing Linear issue. This updates the Probo task with the Linear issue.',
+				action: 'Link a task to linear',
+			},
+			{
+				name: 'List Asana Projects',
+				value: 'listAsanaProjects',
+				description: 'Search Asana projects for an organization',
+				action: 'List asana projects',
+			},
+			{
+				name: 'List Asana Tasks',
+				value: 'listAsanaTasks',
+				description: 'Search Asana tasks in a project',
+				action: 'List asana tasks',
+			},
+			{
+				name: 'List Asana Teams',
+				value: 'listAsanaTeams',
+				description: 'Search Asana teams for an organization',
+				action: 'List asana teams',
+			},
+			{
+				name: 'List Linear Issues',
+				value: 'listLinearIssues',
+				description: 'Search Linear issues in a team',
+				action: 'List linear issues',
+			},
+			{
+				name: 'List Linear Teams',
+				value: 'listLinearTeams',
+				description: 'Search Linear teams for an organization',
+				action: 'List linear teams',
+			},
+			{
+				name: 'Publish To Asana',
+				value: 'publishToAsana',
+				description: 'Publish a task as a new Asana task',
+				action: 'Publish a task to asana',
+			},
+			{
+				name: 'Publish To Linear',
+				value: 'publishToLinear',
+				description: 'Publish a task as a new Linear issue',
+				action: 'Publish a task to linear',
+			},
+			{
+				name: 'Unlink External',
+				value: 'unlinkExternal',
+				description: 'Unlink a task from its external issue',
+				action: 'Unlink a task external issue',
+			},
+			{
 				name: 'Update',
 				value: 'update',
 				description: 'Update an existing task',
 				action: 'Update a task',
+			},
+			{
+				name: 'Update Asana Project Mapping',
+				value: 'updateAsanaProjectMapping',
+				description: 'Save how an Asana project sections and priority field map onto Probo',
+				action: 'Update asana project mapping',
+			},
+			{
+				name: 'Update Asana Settings',
+				value: 'updateAsanaSettings',
+				description: 'Update the organization default Asana project and task import',
+				action: 'Update asana settings',
+			},
+			{
+				name: 'Update Linear Settings',
+				value: 'updateLinearSettings',
+				description: 'Update the organization default Linear team and issue import',
+				action: 'Update linear settings',
 			},
 		],
 		default: 'create',
@@ -69,6 +173,40 @@ export const description: INodeProperties[] = [
 	...deleteOp.description,
 	...getOp.description,
 	...getAllOp.description,
+	...linkToLinearOp.description,
+	...listLinearIssuesOp.description,
+	...listLinearTeamsOp.description,
+	...getAsanaProjectSetupOp.description,
+	...linkToAsanaOp.description,
+	...listAsanaProjectsOp.description,
+	...listAsanaTasksOp.description,
+	...listAsanaTeamsOp.description,
+	...publishToAsanaOp.description,
+	...publishToLinearOp.description,
+	...updateAsanaProjectMappingOp.description,
+	...updateAsanaSettingsOp.description,
+	...updateLinearSettingsOp.description,
+	...unlinkExternalOp.description,
 ];
 
-export { createOp as create, updateOp as update, deleteOp as delete, getOp as get, getAllOp as getAll };
+export {
+	createOp as create,
+	updateOp as update,
+	deleteOp as delete,
+	getOp as get,
+	getAllOp as getAll,
+	linkToLinearOp as linkToLinear,
+	listLinearIssuesOp as listLinearIssues,
+	listLinearTeamsOp as listLinearTeams,
+	getAsanaProjectSetupOp as getAsanaProjectSetup,
+	linkToAsanaOp as linkToAsana,
+	listAsanaProjectsOp as listAsanaProjects,
+	listAsanaTasksOp as listAsanaTasks,
+	listAsanaTeamsOp as listAsanaTeams,
+	publishToAsanaOp as publishToAsana,
+	publishToLinearOp as publishToLinear,
+	updateAsanaProjectMappingOp as updateAsanaProjectMapping,
+	updateAsanaSettingsOp as updateAsanaSettings,
+	updateLinearSettingsOp as updateLinearSettings,
+	unlinkExternalOp as unlinkExternal,
+};

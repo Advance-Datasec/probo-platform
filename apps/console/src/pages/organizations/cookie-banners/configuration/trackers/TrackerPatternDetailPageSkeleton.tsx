@@ -1,39 +1,65 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import { TableSkeleton } from "@probo/ui/src/v2/Table/TableSkeleton";
 
 export function TrackerPatternDetailPageSkeleton() {
   return (
-    <div className="space-y-6 animate-pulse">
-      <div className="rounded-2xl border border-border-low p-6 space-y-4">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <div key={i} className="flex items-center justify-between py-3 border-b border-border-low last:border-b-0">
-            <div className="h-4 w-28 rounded bg-bg-subtle" />
-            <div className="h-4 w-48 rounded bg-bg-subtle" />
+    <div className="flex flex-col gap-6 animate-pulse">
+      <div className="flex flex-col gap-4">
+        <div className="h-4 w-20 rounded bg-sand-a4" />
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <div className="h-8 w-48 rounded bg-sand-a4" />
+              <div className="h-5 w-16 rounded bg-sand-a4" />
+              <div className="h-5 w-12 rounded bg-sand-a4" />
+            </div>
+            <div className="h-4 w-32 rounded bg-sand-a4" />
           </div>
-        ))}
+          <div className="h-8 w-24 rounded bg-sand-a4" />
+        </div>
       </div>
-      <div className="rounded-2xl border border-border-low p-6 space-y-4">
-        <div className="h-5 w-48 rounded bg-bg-subtle" />
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="flex items-center gap-4 py-3 border-b border-border-low last:border-b-0">
-            <div className="h-4 w-32 rounded bg-bg-subtle" />
-            <div className="h-4 w-48 rounded bg-bg-subtle" />
-            <div className="h-4 w-16 rounded bg-bg-subtle" />
-            <div className="h-4 w-20 rounded bg-bg-subtle" />
-            <div className="h-4 w-28 rounded bg-bg-subtle" />
+      <div className="flex flex-col gap-3 rounded-4 bg-sand-a2 p-4">
+        <div className="h-5 w-28 rounded bg-sand-a4" />
+        <div className="h-4 w-56 rounded bg-sand-a4" />
+        <div className="flex gap-4">
+          <div className="h-4 w-24 rounded bg-sand-a4" />
+          <div className="h-4 w-24 rounded bg-sand-a4" />
+          <div className="h-4 w-24 rounded bg-sand-a4" />
+        </div>
+      </div>
+      <div className="flex flex-col gap-4">
+        <div className="h-5 w-24 rounded bg-sand-a4" />
+        <div className="flex flex-col gap-4 rounded-4 bg-sand-a2 p-4">
+          <div className="h-16 rounded bg-sand-a4" />
+          <div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
+            <div className="h-8 rounded bg-sand-a4" />
+            <div className="h-8 rounded bg-sand-a4" />
           </div>
-        ))}
+        </div>
+      </div>
+      <div className="flex flex-col gap-4">
+        <div className="h-5 w-28 rounded bg-sand-a4" />
+        <div className="h-4 w-56 rounded bg-sand-a4" />
+        <TableSkeleton variant="surface" columns={6} count={4} />
       </div>
     </div>
   );

@@ -1,30 +1,36 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package list
 
 import (
-	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/spf13/cobra"
 	"go.probo.inc/probo/pkg/cli/api"
 	"go.probo.inc/probo/pkg/cmd/cmdutil"
 )
 
-const listQuery = `
-query($id: ID!, $first: Int, $after: CursorKey, $orderBy: RiskOrder, $filter: RiskFilter) {
+const listByOrgQuery = `
+query RiskListByOrg($id: ID!, $first: Int, $after: CursorKey, $orderBy: RiskOrder, $filter: RiskFilter) {
   node(id: $id) {
     __typename
     ... on Organization {
@@ -33,6 +39,35 @@ query($id: ID!, $first: Int, $after: CursorKey, $orderBy: RiskOrder, $filter: Ri
         edges {
           node {
             id
+            referenceId
+            name
+            category
+            treatment
+            inherentRiskScore
+            residualRiskScore
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}
+`
+
+const listByAnalysisQuery = `
+query RiskListByAnalysis($id: ID!, $first: Int, $after: CursorKey, $orderBy: RiskOrder, $filter: RiskFilter) {
+  node(id: $id) {
+    __typename
+    ... on RiskAnalysis {
+      scenarioRisks(first: $first, after: $after, orderBy: $orderBy, filter: $filter) {
+        totalCount
+        edges {
+          node {
+            id
+            referenceId
             name
             category
             treatment
@@ -51,33 +86,39 @@ query($id: ID!, $first: Int, $after: CursorKey, $orderBy: RiskOrder, $filter: Ri
 `
 
 type risk struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	Category          string `json:"category"`
-	Treatment         string `json:"treatment"`
-	InherentRiskScore int    `json:"inherentRiskScore"`
-	ResidualRiskScore int    `json:"residualRiskScore"`
+	ID                string  `json:"id"`
+	ReferenceID       string  `json:"referenceId"`
+	Name              string  `json:"name"`
+	Category          string  `json:"category"`
+	Treatment         *string `json:"treatment"`
+	InherentRiskScore *int    `json:"inherentRiskScore"`
+	ResidualRiskScore *int    `json:"residualRiskScore"`
 }
 
 func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	var (
-		flagOrg      string
-		flagLimit    int
-		flagOrderBy  string
-		flagOrderDir string
-		flagFilter   string
-		flagOutput   *string
+		flagOrg          string
+		flagRiskAnalysis string
+		flagLimit        int
+		flagAfter        string
+		flagOrderBy      string
+		flagOrderDir     string
+		flagFilter       string
+		flagOutput       *string
 	)
 
 	cmd := &cobra.Command{
 		Use:     "list",
-		Short:   "List risks in an organization",
+		Short:   "List risks in an organization or unplanned risks on an analysis",
 		Aliases: []string{"ls"},
 		Example: `  # List risks in the default organization
   prb risk list
 
   # Filter risks by name
   prb risk list --filter "data breach"
+
+  # List unplanned scenario-linked risks on an analysis
+  prb risk ls --risk-analysis <id>
 
   # List risks sorted by inherent score
   prb risk ls --order-by INHERENT_RISK_SCORE --json`,
@@ -87,38 +128,39 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
-			cfg, err := f.Config()
+			if err := cmdutil.ValidateLimit(flagLimit); err != nil {
+				return err
+			}
+
+			client, hc, err := f.GraphQLClient(cmdutil.ConsoleEndpoint)
 			if err != nil {
 				return err
 			}
 
-			host, hc, err := cfg.DefaultHost()
-			if err != nil {
-				return err
+			query := listByOrgQuery
+			parentID := flagOrg
+			expectedType := "Organization"
+			missingParent := cmdutil.OrganizationRequiredMessage
+
+			if flagRiskAnalysis != "" {
+				query = listByAnalysisQuery
+				parentID = flagRiskAnalysis
+				expectedType = "RiskAnalysis"
+				missingParent = "risk analysis is required; pass --risk-analysis"
+			} else if parentID == "" {
+				parentID = hc.Organization
 			}
 
-			client := api.NewClient(
-				host,
-				hc.Token,
-				"/api/console/v1/graphql",
-				cfg.HTTPTimeoutDuration(),
-				cmdutil.TokenRefreshOption(cfg, host, hc),
-			)
-
-			if flagOrg == "" {
-				flagOrg = hc.Organization
-			}
-
-			if flagOrg == "" {
-				return fmt.Errorf("organization is required; pass --org or set a default with 'prb auth login'")
+			if parentID == "" {
+				return fmt.Errorf("%s", missingParent)
 			}
 
 			variables := map[string]any{
-				"id": flagOrg,
+				"id": parentID,
 			}
 
 			if flagOrderBy != "" {
-				if err := cmdutil.ValidateEnum("order-by", flagOrderBy, []string{"CREATED_AT", "NAME", "CATEGORY", "TREATMENT", "INHERENT_RISK_SCORE", "RESIDUAL_RISK_SCORE"}); err != nil {
+				if err := cmdutil.ValidateEnum("order-by", flagOrderBy, []string{"CREATED_AT", "REFERENCE_ID", "NAME", "CATEGORY", "TREATMENT", "INHERENT_RISK_SCORE", "RESIDUAL_RISK_SCORE"}); err != nil {
 					return err
 				}
 
@@ -134,81 +176,77 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				}
 			}
 
-			risks, totalCount, err := api.Paginate(
+			field := "risks"
+			if expectedType == "RiskAnalysis" {
+				field = "scenarioRisks"
+			}
+
+			risks, totalCount, nextCursor, err := api.Paginate(
 				client,
-				listQuery,
+				query,
 				variables,
 				flagLimit,
-				func(data json.RawMessage) (*api.Connection[risk], error) {
-					var resp struct {
-						Node *struct {
-							Typename string               `json:"__typename"`
-							Risks    api.Connection[risk] `json:"risks"`
-						} `json:"node"`
-					}
-					if err := json.Unmarshal(data, &resp); err != nil {
-						return nil, err
-					}
-
-					if resp.Node == nil {
-						return nil, fmt.Errorf("organization %s not found", flagOrg)
-					}
-
-					if resp.Node.Typename != "Organization" {
-						return nil, fmt.Errorf("expected Organization node, got %s", resp.Node.Typename)
-					}
-
-					return &resp.Node.Risks, nil
-				},
+				flagAfter,
+				api.NodeConnectionOrMissing[risk](
+					field,
+					expectedType,
+					fmt.Sprintf("%s %s not found", expectedType, parentID),
+				),
 			)
 			if err != nil {
 				return err
 			}
 
-			if *flagOutput == cmdutil.OutputJSON {
-				return cmdutil.PrintJSON(f.IOStreams.Out, risks)
-			}
-
-			if len(risks) == 0 {
-				_, _ = fmt.Fprintln(f.IOStreams.Out, "No risks found.")
-				return nil
-			}
-
-			rows := make([][]string, 0, len(risks))
-			for _, r := range risks {
-				rows = append(rows, []string{
-					r.ID,
-					r.Name,
-					r.Category,
-					r.Treatment,
-					fmt.Sprintf("%d", r.InherentRiskScore),
-					fmt.Sprintf("%d", r.ResidualRiskScore),
-				})
-			}
-
-			t := cmdutil.NewTable("ID", "NAME", "CATEGORY", "TREATMENT", "INHERENT", "RESIDUAL").Rows(rows...)
-
-			_, _ = fmt.Fprintln(f.IOStreams.Out, t)
-
-			if totalCount > len(risks) {
-				_, _ = fmt.Fprintf(
-					f.IOStreams.ErrOut,
-					"\nShowing %d of %d risks\n",
-					len(risks),
-					totalCount,
-				)
-			}
-
-			return nil
+			return cmdutil.PrintList(
+				f.IOStreams,
+				*flagOutput,
+				risks,
+				totalCount,
+				cmdutil.ListView[risk]{
+					Empty:      "No risks found.",
+					Noun:       "risks",
+					NextCursor: nextCursor,
+					Headers:    []string{"ID", "REFERENCE", "NAME", "CATEGORY", "TREATMENT", "INHERENT", "RESIDUAL"},
+					Row: func(r risk) ([]string, error) {
+						return []string{
+							r.ID,
+							r.ReferenceID,
+							r.Name,
+							r.Category,
+							formatOptionalString(r.Treatment),
+							formatOptionalInt(r.InherentRiskScore),
+							formatOptionalInt(r.ResidualRiskScore),
+						}, nil
+					},
+				},
+			)
 		},
 	}
 
-	cmd.Flags().StringVar(&flagOrg, "org", "", "Organization ID")
+	cmdutil.AddOrganizationFlag(cmd, &flagOrg, "Organization ID")
+	cmd.Flags().StringVar(&flagRiskAnalysis, "risk-analysis", "", "List unplanned scenario-linked risks on a risk analysis")
 	cmd.Flags().IntVarP(&flagLimit, "limit", "L", 30, "Maximum number of risks to list")
-	cmd.Flags().StringVar(&flagOrderBy, "order-by", "", "Order by field (CREATED_AT, NAME, CATEGORY, TREATMENT, INHERENT_RISK_SCORE, RESIDUAL_RISK_SCORE)")
-	cmd.Flags().StringVar(&flagOrderDir, "order-direction", "DESC", "Sort direction (ASC, DESC)")
+	cmdutil.AddAfterFlag(cmd, &flagAfter)
+	cmd.Flags().StringVar(&flagOrderBy, "order-by", "", "Order by field (CREATED_AT, REFERENCE_ID, NAME, CATEGORY, TREATMENT, INHERENT_RISK_SCORE, RESIDUAL_RISK_SCORE)")
+	cmdutil.AddOrderDirectionFlag(cmd, &flagOrderDir, "DESC")
 	cmd.Flags().StringVarP(&flagFilter, "filter", "q", "", "Filter risks by search query")
 	flagOutput = cmdutil.AddOutputFlag(cmd)
 
 	return cmd
+}
+
+func formatOptionalString(v *string) string {
+	if v == nil || *v == "" {
+		return "-"
+	}
+
+	return *v
+}
+
+func formatOptionalInt(v *int) string {
+	if v == nil {
+		return "-"
+	}
+
+	return strconv.Itoa(*v)
 }

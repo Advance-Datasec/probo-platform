@@ -1,27 +1,40 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
+import { ButtonLink } from "@probo/ui/src/v2/Button/ButtonLink";
+import { ErrorBoundary } from "@probo/ui/src/v2/ErrorBoundary/ErrorBoundary";
 import { useTranslation } from "react-i18next";
 import { graphql, useFragment } from "react-relay";
 
+import { InlineErrorCard } from "#/components/errors/InlineErrorCard";
 import { HomeSection } from "#/components/HomeSection/HomeSection";
+import { useLocalizedPath } from "#/lib/i18n/useLocale";
 
-import type { ComplianceFrameworksSection_trustCenter$key } from "./__generated__/ComplianceFrameworksSection_trustCenter.graphql";
+import type { ComplianceFrameworksSection_compliancePortal$key } from "./__generated__/ComplianceFrameworksSection_compliancePortal.graphql";
 import { ComplianceFrameworkListItem } from "./ComplianceFrameworkListItem";
 
+// @throwOnFieldError makes a field error in this fragment throw at the read
+// below, where the section's ErrorBoundary contains it. See
+// contrib/claude/error-handling.md.
 const complianceFrameworksSectionFragment = graphql`
-  fragment ComplianceFrameworksSection_trustCenter on TrustCenter {
+  fragment ComplianceFrameworksSection_compliancePortal on CompliancePortal @throwOnFieldError {
     complianceFrameworks(first: 8) {
       edges {
         node {
@@ -34,26 +47,55 @@ const complianceFrameworksSectionFragment = graphql`
 `;
 
 interface ComplianceFrameworksSectionProps {
-  trustCenterKey: ComplianceFrameworksSection_trustCenter$key;
+  compliancePortalKey: ComplianceFrameworksSection_compliancePortal$key;
 }
 
-// "Compliance" section: the grid of certification frameworks the trust center
-// covers.
-export function ComplianceFrameworksSection({ trustCenterKey }: ComplianceFrameworksSectionProps) {
+// "Compliance" section: the grid of certification frameworks the compliance portal
+// covers. Wraps its data-reading content in a boundary so a load failure
+// degrades to an inline error instead of taking down the page.
+export function ComplianceFrameworksSection({ compliancePortalKey }: ComplianceFrameworksSectionProps) {
   const { t } = useTranslation();
-  const data = useFragment(complianceFrameworksSectionFragment, trustCenterKey);
-  const frameworks = data.complianceFrameworks.edges.map(edge => edge.node);
 
-  if (frameworks.length === 0) {
-    return null;
-  }
+  return (
+    <ErrorBoundary
+      fallback={(
+        // The data comes from the preloaded HomePageQuery, so there is no local
+        // refetch to clear a field error — reload the page to recover.
+        <HomeSection title={t("home.sections.compliance")}>
+          <InlineErrorCard onRetry={() => window.location.reload()} />
+        </HomeSection>
+      )}
+    >
+      <ComplianceFrameworksSectionContent compliancePortalKey={compliancePortalKey} />
+    </ErrorBoundary>
+  );
+}
+
+function ComplianceFrameworksSectionContent({ compliancePortalKey }: ComplianceFrameworksSectionProps) {
+  const { t } = useTranslation();
+  const localizedPath = useLocalizedPath();
+  const data = useFragment(complianceFrameworksSectionFragment, compliancePortalKey);
+  const frameworks = data.complianceFrameworks.edges.map(edge => edge.node);
 
   return (
     <HomeSection title={t("home.sections.compliance")}>
-      <div className="grid grid-cols-6 gap-4">
-        {frameworks.map(framework => (
-          <ComplianceFrameworkListItem key={framework.id} complianceFrameworkKey={framework} />
-        ))}
+      {frameworks.length > 0 && (
+        <div className="grid grid-cols-6 gap-4 max-lg:grid-cols-3 max-sm:grid-cols-2">
+          {frameworks.map(framework => (
+            <ComplianceFrameworkListItem key={framework.id} complianceFrameworkKey={framework} />
+          ))}
+        </div>
+      )}
+      <div className="flex justify-center">
+        <ButtonLink
+          to={localizedPath("/documents")}
+          variant="soft"
+          color="neutral"
+          highContrast
+          size={2}
+        >
+          {t("home.compliance.viewDocuments")}
+        </ButtonLink>
       </div>
     </HomeSection>
   );

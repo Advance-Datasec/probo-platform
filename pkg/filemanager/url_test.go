@@ -1,21 +1,28 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package filemanager_test
 
 import (
 	"context"
+	"io"
 	"net/url"
 	"testing"
 	"time"
@@ -25,6 +32,7 @@ import (
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.gearno.de/kit/log"
 	"go.probo.inc/probo/pkg/baseurl"
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/filemanager"
@@ -39,7 +47,7 @@ func TestGenerateFileURL_PublicFile(t *testing.T) {
 		t.Fatalf("cannot parse base URL: %v", err)
 	}
 
-	svc := filemanager.NewService(nil, base, nil)
+	svc := filemanager.NewService(nil, base, nil, log.NewLogger(log.WithOutput(io.Discard)))
 	file := &coredata.File{
 		ID:         gid.New(gid.NilTenant, coredata.FileEntityType),
 		Visibility: coredata.FileVisibilityPublic,
@@ -60,7 +68,7 @@ func TestGenerateFileURL_PrivateFile(t *testing.T) {
 		t.Fatalf("cannot parse base URL: %v", err)
 	}
 
-	svc := filemanager.NewService(nil, base, nil)
+	svc := filemanager.NewService(nil, base, nil, log.NewLogger(log.WithOutput(io.Discard)))
 	file := &coredata.File{
 		ID:         gid.New(gid.NilTenant, coredata.FileEntityType),
 		Visibility: coredata.FileVisibilityPrivate,
@@ -82,7 +90,7 @@ func TestGeneratePresignedURL_EscapesContentDispositionFilename(t *testing.T) {
 			Credentials: credentials.NewStaticCredentialsProvider("access-key", "secret-key", ""),
 		},
 	)
-	svc := filemanager.NewService(nil, nil, s3Client)
+	svc := filemanager.NewService(nil, nil, s3Client, log.NewLogger(log.WithOutput(io.Discard)))
 	file := &coredata.File{
 		BucketName: "uploads",
 		FileKey:    "tenant/file",
@@ -101,4 +109,36 @@ func TestGeneratePresignedURL_EscapesContentDispositionFilename(t *testing.T) {
 		`attachment; filename="report \"Q2\"/r_sum_ 100%.pdf"; filename*=UTF-8''report%20%22Q2%22%2Fr%C3%A9sum%C3%A9%20100%25.pdf`,
 		parsedURL.Query().Get("response-content-disposition"),
 	)
+}
+
+// A presigned URL is followed by a browser, an email client or curl, none of
+// which send x-amz-checksum-mode. Signing that header — which the SDK adds on
+// every GetObject when ResponseChecksumValidation resolves to WHEN_SUPPORTED,
+// the default of config.LoadDefaultConfig — makes S3 reject the download with
+// 403 SignatureDoesNotMatch.
+func TestGeneratePresignedURL_DoesNotSignChecksumMode(t *testing.T) {
+	t.Parallel()
+
+	s3Client := awss3.NewFromConfig(
+		aws.Config{
+			Region:                     "us-east-1",
+			Credentials:                credentials.NewStaticCredentialsProvider("access-key", "secret-key", ""),
+			ResponseChecksumValidation: aws.ResponseChecksumValidationWhenSupported,
+		},
+	)
+	svc := filemanager.NewService(nil, nil, s3Client, log.NewLogger(log.WithOutput(io.Discard)))
+	file := &coredata.File{
+		BucketName: "uploads",
+		FileKey:    "tenant/file",
+		FileName:   "report.pdf",
+		MimeType:   "application/pdf",
+	}
+
+	rawURL, err := svc.GeneratePresignedURL(context.Background(), file, time.Hour)
+	require.NoError(t, err)
+
+	parsedURL, err := url.Parse(rawURL)
+	require.NoError(t, err)
+
+	assert.Equal(t, "host", parsedURL.Query().Get("X-Amz-SignedHeaders"))
 }

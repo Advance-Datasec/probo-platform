@@ -11,23 +11,31 @@ Detailed guides for specific subsystems live in `contrib/claude/`:
 - [`contrib/claude/go-worker.md`](contrib/claude/go-worker.md) — Go worker pattern (poll-based, bounded concurrency, FOR UPDATE SKIP LOCKED)
 - [`contrib/claude/httpclient.md`](contrib/claude/httpclient.md) — HTTP client (kit/httpclient, SSRF protection by default, connector wiring)
 - [`contrib/claude/gid.md`](contrib/claude/gid.md) — Global identifiers (GID layout, TenantID, entity type registry)
-- [`contrib/claude/coredata.md`](contrib/claude/coredata.md) — Data access layer (Scoper, SQL patterns, filters, order fields, migrations)
+- [`contrib/claude/coredata.md`](contrib/claude/coredata.md) — Data access layer (Scoper, SQL patterns, filters, text search, order fields, migrations)
+- [`contrib/claude/ownership.md`](contrib/claude/ownership.md) — Resource ownership (membership profile vs identity; provisional)
 - [`contrib/claude/logging.md`](contrib/claude/logging.md) — Structured logging (PII-free rules, field helpers, logger wiring)
 - [`contrib/claude/graphql.md`](contrib/claude/graphql.md) — Go GraphQL backend (gqlgen, @goModel, connection types, cursor pagination)
 - [`contrib/claude/mcp.md`](contrib/claude/mcp.md) — MCP API patterns (specification.yaml, mcpgen, resolvers, type helpers)
 - [`contrib/claude/cli.md`](contrib/claude/cli.md) — CLI command patterns (cobra, huh prompts, pagination, output formatting)
 - [`contrib/claude/authorization.md`](contrib/claude/authorization.md) — IAM policy-based authorization (policies, conditions, roles, AuthorizationAttributer)
 - [`contrib/claude/validation.md`](contrib/claude/validation.md) — Validation framework (fluent API, validators, error codes, propagation)
+- [`contrib/claude/prosemirror.md`](contrib/claude/prosemirror.md) — ProseMirror schemas (extensions, HTML/Markdown renderers, DocumentSchema, Automerge codecs, append-only + perf rules)
+- `pkg/richtext` — product ProseMirror schemas (`DocumentSchema`, `CommentSchema`, `DocumentHTML`, `DocumentMarkdown`), validated markdown import
+- `pkg/richtext/attachment` — image/file specs, renderers, import rule, file URL helpers
+- `pkg/richtext/mention` — document/profile mention specs, renderers, profile-id helpers
 - [`contrib/claude/e2e.md`](contrib/claude/e2e.md) — End-to-end testing (factory builders, RBAC tests, tenant isolation, assertions)
+- [`contrib/claude/e2e-refactor.md`](contrib/claude/e2e-refactor.md) — E2E suite migration plan, fixture isolation, batch acceptance
 - [`contrib/claude/agent.md`](contrib/claude/agent.md) — Agent orchestration framework (tools, handoffs, execution)
+- [`contrib/claude/probot.md`](contrib/claude/probot.md) — Probot layers, Slack workers, identity binding, replay
 - [`contrib/claude/app-arborescence.md`](contrib/claude/app-arborescence.md) — Frontend app folder layout (pages, routes at resource folders, loaders, skeletons, _components, _lib, _locales)
 - [`contrib/claude/relay.md`](contrib/claude/relay.md) — Frontend Relay client (queries, fragments, mutations, pagination)
+- [`contrib/claude/pagination.md`](contrib/claude/pagination.md) — Cursor previous/next (Relay null defaults, `before` over `first`)
 - [`contrib/claude/hooks.md`](contrib/claude/hooks.md) — Custom hooks (_lib placement, awaitable useMutation primitive, auto error handling)
 - [`contrib/claude/react-components.md`](contrib/claude/react-components.md) — React component shape (file/export, props, configure vs data via hooks, naming/suffix taxonomy, error props)
 - [`contrib/claude/ui.md`](contrib/claude/ui.md) — @probo/ui v2 kit (Base UI headless, Tailwind, tailwind-variants, flat folders, bundle-safe skeletons)
-- [`contrib/claude/v2-tokens.md`](contrib/claude/v2-tokens.md) — v2 design tokens (color, typography, radius, shadow scales; native spacing)
+- [`contrib/claude/v2-tokens.md`](contrib/claude/v2-tokens.md) — v2 design tokens (color, typography, radius, shadow, z-index scales; native spacing)
 - [`contrib/claude/forms.md`](contrib/claude/forms.md) — Frontend forms (Base UI Field/Form tiers, native vs zod vs react-hook-form, server errors)
-- [`contrib/claude/routing.md`](contrib/claude/routing.md) — Frontend routing (@probo/routes, navigation, typed params, URL state, auth/protected routes)
+- [`contrib/claude/routing.md`](contrib/claude/routing.md) — Frontend routing (@probo/routes, navigation, typed params, URL state, auth/protected routes). A new console page must register its nav entries.
 - [`contrib/claude/state-management.md`](contrib/claude/state-management.md) — Client state decision order (Relay, URL, local, context, zustand)
 - [`contrib/claude/permissions.md`](contrib/claude/permissions.md) — Permission-gated UI (canUpdate/canDelete permission(action:) fields)
 - [`contrib/claude/error-handling.md`](contrib/claude/error-handling.md) — Frontend error handling (ErrorBoundary at any level, error/fallback props, async try/catch)
@@ -37,7 +45,8 @@ Detailed guides for specific subsystems live in `contrib/claude/`:
 - [`contrib/claude/prompt-style.md`](contrib/claude/prompt-style.md) — Agent prompt template structure (role/task/instructions XML style)
 - [`contrib/claude/prompt-style.md`](contrib/claude/prompt-style.md) — Agent prompt template structure (role/task/instructions XML style)
 - [`contrib/claude/commit.md`](contrib/claude/commit.md) — Commit message conventions
-- [`contrib/claude/license.md`](contrib/claude/license.md) — ISC license header (all file types)
+- [`contrib/claude/license.md`](contrib/claude/license.md) — MIT license header (all file types)
 - [`contrib/claude/release/README.md`](contrib/claude/release/README.md) — Release process (per-track version bump, changelog, tag, push)
 - [`contrib/claude/sandbox.md`](contrib/claude/sandbox.md) — Lima sandbox environments (create, manage, access services)
 - [`contrib/claude/n8n.md`](contrib/claude/n8n.md) — n8n community node (resources, operations, GraphQL helpers)
+- [`contrib/claude/skills.md`](contrib/claude/skills.md) — Agent skills package (`@probo/skills`, compliance workflows, Probo MCP)

@@ -1,18 +1,24 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
+import { usePageTitle } from "@probo/hooks";
 import {
   Button,
   Card,
@@ -20,15 +26,18 @@ import {
   IconCrossLargeX,
   IconPencil,
   Markdown,
+  PageHeader,
   Textarea,
 } from "@probo/ui";
 import { useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useFragment } from "react-relay";
 import { graphql } from "relay-runtime";
 
 import type { ContextPage_UpdateMutation } from "#/__generated__/core/ContextPage_UpdateMutation.graphql";
 import type { ContextPageFragment$key } from "#/__generated__/core/ContextPageFragment.graphql";
 import { useMutationWithToasts } from "#/hooks/useMutationWithToasts";
+import { consoleMarkdownImageOrigins } from "#/lib/markdownImageOrigins";
 
 const fragment = graphql`
   fragment ContextPageFragment on Organization {
@@ -74,41 +83,43 @@ type Props = {
   organization: ContextPageFragment$key;
 };
 
-export default function ContextPage(props: Props) {
-  const { __ } = useTranslate();
+export function ContextPage(props: Props) {
+  const { t } = useTranslation();
   const organization = useFragment(fragment, props.organization);
   const context = organization.context;
+
+  usePageTitle(t("context.title"));
 
   const sections: SectionConfig[] = [
     {
       key: "product",
-      title: __("Product"),
-      description: __("Describe what your product does, its main features, and value proposition."),
-      placeholder: __("Describe your product in markdown format..."),
+      title: t("context.sections.product.title"),
+      description: t("context.sections.product.description"),
+      placeholder: t("context.sections.product.placeholder"),
     },
     {
       key: "architecture",
-      title: __("Architecture"),
-      description: __("Describe your technical architecture, infrastructure, and key design decisions."),
-      placeholder: __("Describe your architecture in markdown format..."),
+      title: t("context.sections.architecture.title"),
+      description: t("context.sections.architecture.description"),
+      placeholder: t("context.sections.architecture.placeholder"),
     },
     {
       key: "team",
-      title: __("Team"),
-      description: __("Describe your team structure, roles, and responsibilities."),
-      placeholder: __("Describe your team in markdown format..."),
+      title: t("context.sections.team.title"),
+      description: t("context.sections.team.description"),
+      placeholder: t("context.sections.team.placeholder"),
     },
     {
       key: "processes",
-      title: __("Processes"),
-      description: __("Describe your key processes, workflows, and operational procedures."),
-      placeholder: __("Describe your processes in markdown format..."),
+      title: t("context.sections.processes.title"),
+      description: t("context.sections.processes.description"),
+      placeholder: t("context.sections.processes.placeholder"),
     },
     {
       key: "customers",
-      title: __("Customers"),
-      description: __("Describe your target market, customer segments, and use cases."),
-      placeholder: __("Describe your customers in markdown format..."),
+      title: t("context.sections.customers.title"),
+      description: t("context.sections.customers.description"),
+      placeholder: t("context.sections.customers.placeholder"),
     },
   ];
 
@@ -122,6 +133,10 @@ export default function ContextPage(props: Props) {
 
   return (
     <div className="space-y-6">
+      <PageHeader
+        title={t("context.title")}
+        description={t("context.description")}
+      />
       {sections.map(section => (
         <ContextSection
           key={section.key}
@@ -146,7 +161,7 @@ function ContextSection({
   value: string | null;
   canEdit: boolean;
 }) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [isEditing, setIsEditing] = useState(false);
   const [text, setText] = useState(value ?? "");
   const [displayedValue, setDisplayedValue] = useState(value ?? "");
@@ -156,8 +171,8 @@ function ContextSection({
     = useMutationWithToasts<ContextPage_UpdateMutation>(
       updateMutation,
       {
-        successMessage: __("Context updated successfully"),
-        errorMessage: __("Failed to update context"),
+        successMessage: t("context.messages.updated"),
+        errorMessage: t("context.errors.update"),
       },
     );
 
@@ -221,14 +236,14 @@ function ContextSection({
                   onClick={handleCancel}
                   disabled={isUpdating}
                 >
-                  {__("Cancel")}
+                  {t("context.actions.cancel")}
                 </Button>
                 <Button
                   icon={IconCheckmark1}
                   onClick={() => void handleSave()}
                   disabled={isUpdating}
                 >
-                  {__("Save")}
+                  {t("context.actions.save")}
                 </Button>
               </div>
             </div>
@@ -251,7 +266,7 @@ function ContextSection({
                       setIsEditing(true);
                     }}
                   >
-                    {__("Edit")}
+                    {t("context.actions.edit")}
                   </Button>
                 )}
               </div>
@@ -259,12 +274,15 @@ function ContextSection({
                 {displayedValue
                   ? (
                       <div className="prose prose-sm max-w-none w-full [&_.prose]:max-w-none">
-                        <Markdown content={displayedValue} />
+                        <Markdown
+                          content={displayedValue}
+                          allowedImageOrigins={consoleMarkdownImageOrigins()}
+                        />
                       </div>
                     )
                   : (
                       <div className="text-txt-tertiary text-sm italic">
-                        {__("No content yet. Click Edit to add one.")}
+                        {t("context.empty")}
                       </div>
                     )}
               </div>

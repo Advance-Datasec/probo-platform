@@ -1,3 +1,24 @@
+/* Copyright (c) 2026 Probo Inc <hello@probo.com>.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
 .ProseMirror-focused {
     outline-width: 0 !important;
     outline-color: transparent !important;
@@ -27,11 +48,44 @@
         @apply list-decimal list-outside my-2 pl-4;
     }
 
-    a { @apply text-txt-info underline font-normal; }
+    ul[data-type="taskList"] {
+        @apply list-none my-2 pl-0;
 
-    &.pointer-on-hovered-link {
-        a:hover { cursor: pointer; }
+        > li {
+            @apply flex items-start gap-2;
+
+            > label {
+                @apply mt-0.5 flex shrink-0;
+
+                input {
+                    @apply h-4 w-4 cursor-pointer;
+                }
+            }
+
+            > div {
+                @apply min-w-0 flex-1;
+
+                > p {
+                    @apply my-0;
+                }
+            }
+        }
+
+        > li[data-checked="true"] > div > p {
+            @apply line-through text-txt-tertiary;
+        }
     }
+
+    /* Blocks mouse interaction with a read-only document's checkboxes.
+       TaskItemFocusExtension removes them from the tab order too, since
+       pointer-events does not affect keyboard focus. */
+    &[contenteditable="false"] ul[data-type="taskList"] > li > label input {
+        @apply pointer-events-none;
+    }
+
+    a { @apply text-txt-info underline font-normal cursor-pointer; }
+
+    &.ProseMirror-focused a { cursor: text; }
 
     blockquote {
         @apply my-2 pl-4 border-l-4 border-l-border-solid;
@@ -49,6 +103,10 @@
         @apply text-txt-tertiary pointer-events-none float-left h-0;
     }
 
+    p.is-empty-focused.slash-command-active::before {
+        content: none;
+    }
+
     .slash-search {
         @apply bg-subtle rounded px-1.5 py-0.5;
     }
@@ -58,8 +116,21 @@
         @apply text-txt-tertiary;
     }
 
+    .node-mention,
+    .node-mention [data-node-view-wrapper] {
+        @apply inline whitespace-nowrap align-baseline;
+    }
+
+    .mention {
+        @apply inline-flex items-center rounded-1 bg-indigo-3 px-1.5 py-0.5 align-middle text-1 font-medium whitespace-nowrap text-indigo-11;
+    }
+
+    .mention-suggestion {
+        @apply rounded-1 bg-sand-3 px-0.5;
+    }
+
     table {
-        @apply border border-border-mid border-collapse w-max;
+        @apply border border-border-mid border-collapse w-max max-w-full;
         tbody {
             @apply border border-border-mid border-collapse;
         }
@@ -137,5 +208,81 @@
 
     .mermaid-empty {
         @apply p-4 text-sm text-txt-tertiary text-center;
+    }
+
+    .rich-image-slot {
+        @apply my-2 w-full;
+    }
+
+    .rich-image-frame {
+        @apply relative mx-auto w-fit max-w-full;
+    }
+
+    .rich-image {
+        @apply block h-auto w-full max-w-full rounded-md;
+    }
+
+    .rich-image-sized {
+        @apply w-full;
+    }
+
+    .rich-image-handle {
+        @apply absolute top-1/2 z-10 flex h-10 w-5 -translate-y-1/2 cursor-ew-resize items-center justify-center border-0 bg-transparent p-0 opacity-0 touch-none transition-opacity;
+    }
+
+    .rich-image-handle::before {
+        content: "";
+        @apply h-6 w-1.5 rounded-full border border-border-strong bg-txt-invert shadow-mid;
+    }
+
+    .rich-image-slot:hover .rich-image-handle,
+    .ProseMirror-selectednode .rich-image-handle,
+    .rich-image-handle:focus-visible {
+        @apply opacity-100;
+    }
+
+    .rich-image-handle-left {
+        @apply left-0 -translate-x-1/2;
+    }
+
+    .rich-image-handle-right {
+        @apply right-0 translate-x-1/2;
+    }
+
+    .rich-image-missing {
+        @apply my-2 flex items-center gap-2 rounded-lg border border-dashed border-border-solid px-3 py-2 text-sm text-txt-tertiary;
+    }
+
+    .ProseMirror-selectednode .rich-image-missing {
+        @apply bg-subtle;
+    }
+
+    .rich-file {
+        @apply my-2 flex items-center gap-2 rounded-lg border border-border-solid px-3 py-2 text-sm no-underline;
+    }
+
+    .rich-file-name {
+        @apply min-w-0 flex-1 truncate font-normal text-txt-primary;
+    }
+
+    .rich-file-size {
+        @apply shrink-0 text-txt-tertiary;
+    }
+
+    .rich-upload {
+        @apply my-2 rounded-lg border border-dashed border-border-solid px-3 py-2 text-sm text-txt-tertiary;
+    }
+
+    .suggestion-deleted-line::before {
+        content: "¶";
+        @apply mr-0.5 text-red-11 line-through;
+    }
+
+    .suggestion-inserted-block {
+        @apply bg-green-2;
+    }
+
+    .suggestion-deleted-block {
+        @apply bg-red-2 text-red-11 line-through;
     }
 }

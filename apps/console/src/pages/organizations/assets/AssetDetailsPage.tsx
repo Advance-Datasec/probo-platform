@@ -1,35 +1,39 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { getAssetTypeVariant } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   ActionDropdown,
   Badge,
-  Breadcrumb,
   Button,
   DropdownItem,
   Field,
   IconTrashCan,
   Option,
 } from "@probo/ui";
+import { useTranslation } from "react-i18next";
 import {
   ConnectionHandler,
   type PreloadedQuery,
   usePreloadedQuery,
 } from "react-relay";
-import { z } from "zod";
 
 import type { AssetGraphNodeQuery } from "#/__generated__/core/AssetGraphNodeQuery.graphql";
 import { ControlledField } from "#/components/form/ControlledField";
@@ -37,21 +41,13 @@ import { PeopleSelectField } from "#/components/form/PeopleSelectField";
 import { ThirdPartiesMultiSelectField } from "#/components/form/ThirdPartiesMultiSelectField";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
 import { useOrganizationId } from "#/hooks/useOrganizationId";
+import { z } from "#/lib/zod";
 
 import {
   assetNodeQuery,
   useDeleteAsset,
   useUpdateAsset,
 } from "../../../hooks/graph/AssetGraph";
-
-const updateAssetSchema = z.object({
-  name: z.string().min(1, "Name is required"),
-  amount: z.number().min(1, "Amount is required"),
-  assetType: z.enum(["PHYSICAL", "VIRTUAL"]),
-  dataTypesStored: z.string().min(1, "Data types stored is required"),
-  ownerId: z.string().min(1, "Owner is required"),
-  thirdPartyIds: z.array(z.string()).optional(),
-});
 
 type Props = {
   queryRef: PreloadedQuery<AssetGraphNodeQuery>;
@@ -63,8 +59,20 @@ export default function AssetDetailsPage(props: Props) {
     props.queryRef,
   );
   const assetEntry = asset.node;
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const organizationId = useOrganizationId();
+
+  const updateAssetSchema = z.object({
+    name: z.string().min(1, t("assetDetailsPage.validation.nameRequired")),
+    amount: z.number().min(1, t("assetDetailsPage.validation.amountRequired")),
+    assetType: z.enum(["PHYSICAL", "VIRTUAL"]),
+    dataTypesStored: z.string().min(
+      1,
+      t("assetDetailsPage.validation.dataTypesStoredRequired"),
+    ),
+    ownerId: z.string().min(1, t("assetDetailsPage.validation.ownerRequired")),
+    thirdPartyIds: z.array(z.string()).optional(),
+  });
 
   const connectionId = ConnectionHandler.getConnectionID(
     organizationId,
@@ -97,20 +105,8 @@ export default function AssetDetailsPage(props: Props) {
     reset(formData);
   });
 
-  const breadcrumbItems = [
-    {
-      label: __("Assets"),
-      to: `/organizations/${organizationId}/assets`,
-    },
-    {
-      label: assetEntry?.name ?? "",
-    },
-  ];
-
   return (
     <div className="space-y-6">
-      <Breadcrumb items={breadcrumbItems} />
-
       <div className="flex justify-between items-start">
         <div className="flex items-center gap-4">
           <div className="text-2xl">{assetEntry?.name}</div>
@@ -118,8 +114,8 @@ export default function AssetDetailsPage(props: Props) {
             variant={getAssetTypeVariant(assetEntry?.assetType ?? "VIRTUAL")}
           >
             {assetEntry?.assetType === "PHYSICAL"
-              ? __("Physical")
-              : __("Virtual")}
+              ? t("assetDetailsPage.assetTypes.physical")
+              : t("assetDetailsPage.assetTypes.virtual")}
           </Badge>
         </div>
         {asset.node.canDelete && (
@@ -129,7 +125,7 @@ export default function AssetDetailsPage(props: Props) {
               icon={IconTrashCan}
               onClick={deleteAsset}
             >
-              {__("Delete")}
+              {t("assetDetailsPage.actions.delete")}
             </DropdownItem>
           </ActionDropdown>
         )}
@@ -137,14 +133,14 @@ export default function AssetDetailsPage(props: Props) {
 
       <form onSubmit={e => void onSubmit(e)} className="space-y-6 max-w-2xl">
         <Field
-          label={__("Name")}
+          label={t("assetDetailsPage.fields.name")}
           {...register("name")}
           type="text"
           disabled={!assetEntry.canUpdate}
         />
 
         <Field
-          label={__("Amount")}
+          label={t("assetDetailsPage.fields.amount")}
           {...register("amount", { valueAsNumber: true })}
           type="number"
           disabled={!assetEntry.canUpdate}
@@ -154,15 +150,19 @@ export default function AssetDetailsPage(props: Props) {
           control={control}
           name="assetType"
           type="select"
-          label={__("Asset Type")}
+          label={t("assetDetailsPage.fields.assetType")}
           disabled={!assetEntry.canUpdate}
         >
-          <Option value="VIRTUAL">{__("Virtual")}</Option>
-          <Option value="PHYSICAL">{__("Physical")}</Option>
+          <Option value="VIRTUAL">
+            {t("assetDetailsPage.assetTypes.virtual")}
+          </Option>
+          <Option value="PHYSICAL">
+            {t("assetDetailsPage.assetTypes.physical")}
+          </Option>
         </ControlledField>
 
         <Field
-          label={__("Data Types Stored")}
+          label={t("assetDetailsPage.fields.dataTypesStored")}
           {...register("dataTypesStored")}
           type="text"
           disabled={!assetEntry.canUpdate}
@@ -172,7 +172,7 @@ export default function AssetDetailsPage(props: Props) {
           organizationId={organizationId}
           control={control}
           name="ownerId"
-          label={__("Owner")}
+          label={t("assetDetailsPage.fields.owner")}
           disabled={!assetEntry.canUpdate}
         />
 
@@ -181,14 +181,16 @@ export default function AssetDetailsPage(props: Props) {
           control={control}
           name="thirdPartyIds"
           selectedThirdParties={thirdParties}
-          label={__("Third parties")}
+          label={t("assetDetailsPage.fields.thirdParties")}
           disabled={!assetEntry.canUpdate}
         />
 
         <div className="flex justify-end">
           {formState.isDirty && assetEntry.canUpdate && (
             <Button type="submit" disabled={formState.isSubmitting}>
-              {formState.isSubmitting ? __("Updating...") : __("Update")}
+              {formState.isSubmitting
+                ? t("assetDetailsPage.actions.updating")
+                : t("assetDetailsPage.actions.update")}
             </Button>
           )}
         </div>

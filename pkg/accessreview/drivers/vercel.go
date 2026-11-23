@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -23,7 +29,22 @@ import (
 	"strconv"
 	"strings"
 
+	"go.probo.inc/probo/pkg/connectorprotocol"
 	"go.probo.inc/probo/pkg/coredata"
+)
+
+const (
+	// VercelTeamMissing is the code for a connector saved without a team.
+	VercelTeamMissing = "vercel_team_missing"
+
+	// Vercel path elements joined onto the driver's base URL. The members
+	// prefix/suffix pair is concatenated rather than joined because the team
+	// ID between them must reach url.URL.String() unescaped; see queryMembers.
+	vercelTeamMembersPathPrefix = "/v3/teams/"
+	vercelTeamMembersPathSuffix = "/members"
+
+	vercelV2Segment    = "v2"
+	vercelTeamsSegment = "teams"
 )
 
 // VercelDriver fetches team members from the Vercel REST API using a
@@ -42,14 +63,19 @@ import (
 type VercelDriver struct {
 	httpClient *http.Client
 	teamID     string
+	baseURL    string
 }
 
 var _ Driver = (*VercelDriver)(nil)
 
-func NewVercelDriver(httpClient *http.Client, teamID string) *VercelDriver {
+// NewVercelDriver builds a driver against baseURL, the Vercel REST API
+// origin (e.g. https://api.vercel.com). The version segment is per-call:
+// members come from v3, the team lookup from v2.
+func NewVercelDriver(httpClient *http.Client, teamID, baseURL string) *VercelDriver {
 	return &VercelDriver{
 		httpClient: httpClient,
 		teamID:     teamID,
+		baseURL:    baseURL,
 	}
 }
 
@@ -106,7 +132,7 @@ func (d *VercelDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error
 				FullName:    fullName,
 				Roles:       roles,
 				Active:      &confirmed,
-				IsAdmin:     m.Role == "OWNER" || m.Role == "owner",
+				IsAdmin:     new(m.Role == "OWNER" || m.Role == "owner"),
 				MFAStatus:   coredata.MFAStatusUnknown,
 				AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
 				AccountType: coredata.AccessReviewEntryAccountTypeUser,
@@ -134,10 +160,18 @@ func (d *VercelDriver) queryMembers(ctx context.Context, cursor string) (*vercel
 		q.Set("until", cursor)
 	}
 
+	base, err := url.Parse(d.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse vercel base URL: %w", err)
+	}
+
+	// The team ID is concatenated, not url.PathEscape'd: url.URL.String()
+	// escapes the assembled Path on its own, and escaping here first would
+	// change the emitted URL.
 	u := url.URL{
-		Scheme:   "https",
-		Host:     "api.vercel.com",
-		Path:     "/v3/teams/" + d.teamID + "/members",
+		Scheme:   base.Scheme,
+		Host:     base.Host,
+		Path:     base.Path + vercelTeamMembersPathPrefix + d.teamID + vercelTeamMembersPathSuffix,
 		RawQuery: q.Encode(),
 	}
 
@@ -165,4 +199,78 @@ func (d *VercelDriver) queryMembers(ctx context.Context, cursor string) (*vercel
 	}
 
 	return &page, nil
+}
+
+// vercelNameResolver resolves the Vercel team name. When the captured
+// TeamID is a personal-account UID, the v2 teams endpoint returns 404;
+// the resolver falls back to /v2/user and uses `username` (or `name`)
+// as the display name.
+type vercelNameResolver struct {
+	httpClient *http.Client
+	teamID     string
+	baseURL    string
+}
+
+// NewVercelNameResolver resolves the team name against baseURL, the Vercel
+// REST API origin (e.g. https://api.vercel.com).
+func NewVercelNameResolver(httpClient *http.Client, teamID, baseURL string) NameResolver {
+	return &vercelNameResolver{httpClient: httpClient, teamID: teamID, baseURL: baseURL}
+}
+
+func (r *vercelNameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
+	if r.teamID == "" {
+		return "", nil
+	}
+
+	teamURL, err := url.JoinPath(r.baseURL, vercelV2Segment, vercelTeamsSegment, url.PathEscape(r.teamID))
+	if err != nil {
+		return "", fmt.Errorf("cannot build vercel team URL: %w", err)
+	}
+
+	teamReq, err := http.NewRequestWithContext(ctx, http.MethodGet, teamURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("cannot create vercel team request: %w", err)
+	}
+
+	teamReq.Header.Set("Accept", "application/json")
+
+	teamResp, err := r.httpClient.Do(teamReq)
+	if err != nil {
+		return "", fmt.Errorf("cannot execute vercel team request: %w", err)
+	}
+
+	defer func() { _ = teamResp.Body.Close() }()
+
+	if teamResp.StatusCode == http.StatusOK {
+		var body struct {
+			Name string `json:"name"`
+			Slug string `json:"slug"`
+		}
+		if err := json.NewDecoder(teamResp.Body).Decode(&body); err != nil {
+			return "", fmt.Errorf("cannot decode vercel team response: %w", err)
+		}
+
+		if body.Name != "" {
+			return body.Name, nil
+		}
+
+		return body.Slug, nil
+	}
+
+	if teamResp.StatusCode != http.StatusNotFound {
+		return "", nameStatusError("vercel team", teamResp.StatusCode)
+	}
+
+	// Personal-account fallback: /v2/teams/<uid> returns 404, but
+	// /v2/user works with the same Bearer token.
+	user, err := connectorprotocol.FetchVercelUser(ctx, r.httpClient, r.baseURL)
+	if err != nil {
+		return "", err
+	}
+
+	if user.Username != "" {
+		return user.Username, nil
+	}
+
+	return user.Name, nil
 }

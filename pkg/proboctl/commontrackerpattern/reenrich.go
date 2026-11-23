@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package commontrackerpattern
 
@@ -34,6 +40,7 @@ func newCmdReenrich(f *cmdutil.Factory) *cobra.Command {
 		flagCommonThirdParty   string
 		flagTrackerType        string
 		flagKeyword            string
+		flagPatternKeyword     string
 		flagState              string
 		flagWithoutDescription bool
 		flagDryRun             bool
@@ -56,6 +63,7 @@ func newCmdReenrich(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&flagCommonThirdParty, "common-third-party", "", "Select patterns linked to a common third party (slug or GID)")
 	cmd.Flags().StringVar(&flagTrackerType, "tracker-type", "", "Filter selected patterns by tracker type")
 	cmd.Flags().StringVar(&flagKeyword, "keyword", "", "Filter selected patterns by a pattern/description substring")
+	cmd.Flags().StringVar(&flagPatternKeyword, "pattern-keyword", "", "Filter selected patterns by a substring of the pattern key only (stable: unlike --keyword it ignores descriptions)")
 	cmd.Flags().StringVar(&flagState, "state", "", "Filter selected patterns by enrichment state (queued, enriched, unenriched)")
 	cmd.Flags().BoolVar(&flagWithoutDescription, "without-description", false, "Only patterns with a blank description")
 	cmd.Flags().BoolVar(&flagDryRun, "dry-run", false, "Print the selected patterns without enriching")
@@ -78,6 +86,7 @@ func newCmdReenrich(f *cmdutil.Factory) *cobra.Command {
 			flagCommonThirdParty,
 			flagTrackerType,
 			flagKeyword,
+			flagPatternKeyword,
 			flagState,
 			flagWithoutDescription,
 		)
@@ -139,7 +148,7 @@ func resolveReenrichIDs(
 	pgClient *pg.Client,
 	rawIDs []string,
 	linkedBanner, linkedOrg, commonThirdParty string,
-	trackerType, keyword, state string,
+	trackerType, keyword, patternKeyword, state string,
 	withoutDescription bool,
 ) ([]gid.GID, error) {
 	anchors := 0
@@ -175,7 +184,7 @@ func resolveReenrichIDs(
 	err := pgClient.WithConn(
 		ctx,
 		func(ctx context.Context, conn pg.Querier) error {
-			filter, err := buildReenrichFilter(trackerType, keyword, state, withoutDescription)
+			filter, err := buildReenrichFilter(trackerType, keyword, patternKeyword, state, withoutDescription)
 			if err != nil {
 				return err
 			}
@@ -240,7 +249,7 @@ func resolveReenrichIDs(
 	return ids, nil
 }
 
-func buildReenrichFilter(trackerType, keyword, state string, withoutDescription bool) (*coredata.CommonTrackerPatternFilter, error) {
+func buildReenrichFilter(trackerType, keyword, patternKeyword, state string, withoutDescription bool) (*coredata.CommonTrackerPatternFilter, error) {
 	filter := coredata.NewCommonTrackerPatternFilter()
 
 	if trackerType != "" {
@@ -254,6 +263,10 @@ func buildReenrichFilter(trackerType, keyword, state string, withoutDescription 
 
 	if keyword != "" {
 		filter.WithKeyword(&keyword)
+	}
+
+	if patternKeyword != "" {
+		filter.WithPatternKeyword(&patternKeyword)
 	}
 
 	if state != "" {

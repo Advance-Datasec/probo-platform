@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package view
 
@@ -25,7 +31,7 @@ import (
 )
 
 const viewQuery = `
-query($id: ID!) {
+query TrackerResourceView($id: ID!) {
   node(id: $id) {
     __typename
     ... on TrackerResource {
@@ -36,7 +42,6 @@ query($id: ID!) {
       displayName
       description
       excluded
-      lastDetectedAt
       createdAt
       updatedAt
     }
@@ -46,17 +51,16 @@ query($id: ID!) {
 
 type viewResponse struct {
 	Node *struct {
-		Typename       string  `json:"__typename"`
-		ID             string  `json:"id"`
-		Type           string  `json:"type"`
-		Origin         string  `json:"origin"`
-		Path           string  `json:"path"`
-		DisplayName    string  `json:"displayName"`
-		Description    string  `json:"description"`
-		Excluded       bool    `json:"excluded"`
-		LastDetectedAt *string `json:"lastDetectedAt"`
-		CreatedAt      string  `json:"createdAt"`
-		UpdatedAt      string  `json:"updatedAt"`
+		Typename    string `json:"__typename"`
+		ID          string `json:"id"`
+		Type        string `json:"type"`
+		Origin      string `json:"origin"`
+		Path        string `json:"path"`
+		DisplayName string `json:"displayName"`
+		Description string `json:"description"`
+		Excluded    bool   `json:"excluded"`
+		CreatedAt   string `json:"createdAt"`
+		UpdatedAt   string `json:"updatedAt"`
 	} `json:"node"`
 }
 
@@ -123,10 +127,6 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 			_, _ = fmt.Fprintf(out, "%s%v\n", label.Render("Excluded:"), v.Excluded)
 			if v.Description != "" {
 				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Description:"), v.Description)
-			}
-
-			if v.LastDetectedAt != nil {
-				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Last Detected:"), cmdutil.FormatTime(*v.LastDetectedAt))
 			}
 
 			_, _ = fmt.Fprintln(out)

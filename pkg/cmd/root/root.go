@@ -1,58 +1,73 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package root
 
 import (
 	"github.com/spf13/cobra"
 	accessreview "go.probo.inc/probo/pkg/cmd/access-review"
+	"go.probo.inc/probo/pkg/cmd/aisystem"
 	cmdapi "go.probo.inc/probo/pkg/cmd/api"
 	"go.probo.inc/probo/pkg/cmd/asset"
+	"go.probo.inc/probo/pkg/cmd/attachment"
 	"go.probo.inc/probo/pkg/cmd/audit"
 	"go.probo.inc/probo/pkg/cmd/auditlog"
 	"go.probo.inc/probo/pkg/cmd/auth"
 	"go.probo.inc/probo/pkg/cmd/browse"
+	"go.probo.inc/probo/pkg/cmd/businessfunction"
 	"go.probo.inc/probo/pkg/cmd/cmdutil"
 	"go.probo.inc/probo/pkg/cmd/completion"
+	complianceportal "go.probo.inc/probo/pkg/cmd/compliance-portal"
 	cmdconfig "go.probo.inc/probo/pkg/cmd/config"
+	"go.probo.inc/probo/pkg/cmd/connector"
 	consentrecord "go.probo.inc/probo/pkg/cmd/consent-record"
 	cmdcontext "go.probo.inc/probo/pkg/cmd/context"
 	"go.probo.inc/probo/pkg/cmd/control"
 	cookiebanner "go.probo.inc/probo/pkg/cmd/cookie-banner"
 	cookiecategory "go.probo.inc/probo/pkg/cmd/cookie-category"
 	"go.probo.inc/probo/pkg/cmd/datum"
+	"go.probo.inc/probo/pkg/cmd/device"
 	"go.probo.inc/probo/pkg/cmd/document"
 	"go.probo.inc/probo/pkg/cmd/dpia"
+	employeeportal "go.probo.inc/probo/pkg/cmd/employee-portal"
 	"go.probo.inc/probo/pkg/cmd/evidence"
 	"go.probo.inc/probo/pkg/cmd/finding"
 	"go.probo.inc/probo/pkg/cmd/framework"
-	"go.probo.inc/probo/pkg/cmd/measure"
+	internalcontrol "go.probo.inc/probo/pkg/cmd/internal-control"
 	"go.probo.inc/probo/pkg/cmd/obligation"
 	"go.probo.inc/probo/pkg/cmd/org"
 	processingactivity "go.probo.inc/probo/pkg/cmd/processing-activity"
 	resourcealias "go.probo.inc/probo/pkg/cmd/resource-alias"
 	rightsrequest "go.probo.inc/probo/pkg/cmd/rights-request"
 	"go.probo.inc/probo/pkg/cmd/risk"
-	riskassessment "go.probo.inc/probo/pkg/cmd/risk-assessment"
+	riskanalysis "go.probo.inc/probo/pkg/cmd/risk-analysis"
 	"go.probo.inc/probo/pkg/cmd/scim"
+	"go.probo.inc/probo/pkg/cmd/search"
 	"go.probo.inc/probo/pkg/cmd/soa"
+	"go.probo.inc/probo/pkg/cmd/tag"
 	"go.probo.inc/probo/pkg/cmd/task"
 	"go.probo.inc/probo/pkg/cmd/thirdpartymgmt"
 	"go.probo.inc/probo/pkg/cmd/tia"
 	trackerpattern "go.probo.inc/probo/pkg/cmd/tracker-pattern"
 	trackerresource "go.probo.inc/probo/pkg/cmd/tracker-resource"
-	trustcenter "go.probo.inc/probo/pkg/cmd/trust-center"
+	treatmentplan "go.probo.inc/probo/pkg/cmd/treatment-plan"
 	"go.probo.inc/probo/pkg/cmd/user"
 	"go.probo.inc/probo/pkg/cmd/version"
 	"go.probo.inc/probo/pkg/cmd/webhook"
@@ -91,40 +106,49 @@ func NewCmdRoot(f *cmdutil.Factory) *cobra.Command {
 	)
 
 	cmd.AddCommand(accessreview.NewCmdAccessReview(f))
+	cmd.AddCommand(aisystem.NewCmdAiSystem(f))
 	cmd.AddCommand(cmdapi.NewCmdAPI(f))
 	cmd.AddCommand(asset.NewCmdAsset(f))
+	cmd.AddCommand(attachment.NewCmdAttachment(f))
 	cmd.AddCommand(audit.NewCmdAudit(f))
 	cmd.AddCommand(auditlog.NewCmdAuditLog(f))
 	cmd.AddCommand(auth.NewCmdAuth(f))
 	cmd.AddCommand(browse.NewCmdBrowse(f))
+	cmd.AddCommand(businessfunction.NewCmdBusinessFunction(f))
 	cmd.AddCommand(completion.NewCmdCompletion(f))
 	cmd.AddCommand(cmdconfig.NewCmdConfig(f))
 	cmd.AddCommand(consentrecord.NewCmdConsentRecord(f))
 	cmd.AddCommand(cmdcontext.NewCmdContext(f))
+	cmd.AddCommand(connector.NewCmdConnector(f))
 	cmd.AddCommand(control.NewCmdControl(f))
 	cmd.AddCommand(cookiebanner.NewCmdCookieBanner(f))
 	cmd.AddCommand(cookiecategory.NewCmdCookieCategory(f))
 	cmd.AddCommand(trackerpattern.NewCmdTrackerPattern(f))
 	cmd.AddCommand(trackerresource.NewCmdTrackerResource(f))
 	cmd.AddCommand(datum.NewCmdDatum(f))
+	cmd.AddCommand(device.NewCmdDevice(f))
 	cmd.AddCommand(document.NewCmdDocument(f))
 	cmd.AddCommand(dpia.NewCmdDPIA(f))
+	cmd.AddCommand(employeeportal.NewCmdEmployeePortal(f))
 	cmd.AddCommand(evidence.NewCmdEvidence(f))
 	cmd.AddCommand(finding.NewCmdFinding(f))
 	cmd.AddCommand(framework.NewCmdFramework(f))
-	cmd.AddCommand(measure.NewCmdMeasure(f))
+	cmd.AddCommand(internalcontrol.NewCmdInternalControl(f))
 	cmd.AddCommand(obligation.NewCmdObligation(f))
 	cmd.AddCommand(org.NewCmdOrg(f))
 	cmd.AddCommand(processingactivity.NewCmdProcessingActivity(f))
 	cmd.AddCommand(rightsrequest.NewCmdRightsRequest(f))
 	cmd.AddCommand(risk.NewCmdRisk(f))
-	cmd.AddCommand(riskassessment.NewCmdRiskAssessment(f))
+	cmd.AddCommand(riskanalysis.NewCmdRiskAnalysis(f))
 	cmd.AddCommand(resourcealias.NewCmdResourceAlias(f))
+	cmd.AddCommand(tag.NewCmdTag(f))
 	cmd.AddCommand(scim.NewCmdScim(f))
+	cmd.AddCommand(search.NewCmdSearch(f))
 	cmd.AddCommand(soa.NewCmdSoa(f))
 	cmd.AddCommand(task.NewCmdTask(f))
+	cmd.AddCommand(treatmentplan.NewCmdTreatmentPlan(f))
 	cmd.AddCommand(tia.NewCmdTIA(f))
-	cmd.AddCommand(trustcenter.NewCmdTrustCenter(f))
+	cmd.AddCommand(complianceportal.NewCmdCompliancePortal(f))
 	cmd.AddCommand(user.NewCmdUser(f))
 	cmd.AddCommand(thirdpartymgmt.NewCmdThirdParty(f))
 	cmd.AddCommand(version.NewCmdVersion(f))

@@ -1,0 +1,89 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+package collaboration_v1
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/coder/websocket"
+)
+
+func ReadMessages(
+	ctx context.Context,
+	connection *websocket.Conn,
+	incoming chan<- Incoming,
+) error {
+	for {
+		messageType, data, err := connection.Read(ctx)
+		// Cancellation unblocks Read with ctx.Err(). That is not a connection failure.
+		if err != nil && ctx.Err() != nil {
+			return nil
+		}
+
+		message := Incoming{
+			MessageType: messageType,
+			Data:        data,
+			Err:         err,
+		}
+		select {
+		case incoming <- message:
+		case <-ctx.Done():
+			return nil
+		}
+
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func writeTimeoutFor(nbytes int) time.Duration {
+	if nbytes < 0 {
+		nbytes = 0
+	}
+
+	transfer := time.Duration(nbytes) * time.Second / minWriteBytesPerSecond
+	timeout := WriteTimeoutFloor + transfer
+
+	if timeout > WriteTimeoutCeiling {
+		return WriteTimeoutCeiling
+	}
+
+	return timeout
+}
+
+func WriteMessage(
+	ctx context.Context,
+	connection *websocket.Conn,
+	messageType websocket.MessageType,
+	data []byte,
+) error {
+	writeCtx, cancel := context.WithTimeout(ctx, writeTimeoutFor(len(data)))
+	defer cancel()
+
+	if err := connection.Write(writeCtx, messageType, data); err != nil {
+		return fmt.Errorf("cannot write collaboration message: %w", err)
+	}
+
+	return nil
+}

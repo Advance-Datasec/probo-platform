@@ -4,6 +4,806 @@ All notable changes to the `@probo/n8n-nodes-probo` package will be documented i
 
 ## Unreleased
 
+### Added
+
+- Evidence Create Link uploads a `.uri` file containing an HTTP or
+  HTTPS URL, matching the console link form
+
+## [0.274.0] - 2026-11-20
+
+### Added
+
+- Tag resource with Create, Update, Delete, Attach, Detach, and List
+  operations. Tag names are unique in an organization, and a resource
+  can carry several. List shows the tags in an organization or on one
+  resource
+- Tag resource with a Search operation that returns one item per hit,
+  with its title. Bare words match titles as prefixes. Every `tag:name`
+  must match, and `type:name` is optional and repeatable
+
+## [0.273.0] - 2026-11-17
+
+### Added
+
+- Cookie Banner `Get` returns `dailyPageLoads`, one entry per UTC day
+  in the requested window, oldest first
+- Cookie Banner `Get` and Tracker Pattern `Get` take a `Days` field:
+  how many UTC days to count, today included. The default is 7 and
+  the maximum is 90
+- Tracker Pattern `Get` returns `dailyHits`, one entry per UTC day
+  in the requested window, oldest first
+
+### Changed
+
+- **Breaking**: Cookie Banner `Get` returns `dailyPageLoads` instead of
+  `latestSample`. Saved workflows that read `latestSample` must read
+  `dailyPageLoads`
+- **Breaking**: Tracker Pattern `Get` returns `dailyHits` instead of
+  `sampleHits`. Saved workflows that read `sampleHits` must read
+  `dailyHits`
+
+### Removed
+
+- **Breaking**: Cookie Banner `Start Sample`, `Stop Sample`, and
+  `Get Samples`. Page views are always counted, by UTC day. Saved
+  workflows that use these operations must remove them
+
+## [0.272.0] - 2026-11-17
+
+### Added
+
+- Risk Analysis `Create` takes a Score Levels mapping of level and
+  minimum score for the selected matrix size. It is prefilled with the
+  default bands, and `Update` replaces the mapping when it is set
+- Risk Analysis `Get`, `Get Many`, and `Fork` return the Score Levels
+  of each analysis
+
+## [0.271.0] - 2026-11-16
+
+### Added
+
+- Document Suggestion `Start` takes a quote, a replacement, a comment,
+  and a quote occurrence to start with a redline
+- Document Suggestion `Add Change`, `Add Table Change`, and
+  `Add Format Change` operations add redlines to an open suggestion
+- Document Suggestion `Change Text`, `Change Format`, `Change Table`,
+  and `Change Block` operations apply a change to a document, or
+  suggest it on an open suggestion
+
+## [0.270.0] - 2026-11-13
+
+### Added
+
+- Tracker Pattern `Get` and `Get Many` return the banner that promoted
+  a tracker source, as `sourceCookieBanner` with its `id` and `origin`
+
+## [0.269.0] - 2026-11-13
+
+### Added
+
+- Task `Publish To Asana` and `Link To Asana` operations
+- Task `List Asana Teams`, `List Asana Projects`, and `List Asana Tasks`
+  operations search Asana
+- Task `Get Asana Project Setup`, `Update Asana Project Mapping`, and
+  `Update Asana Settings` operations configure the Asana sync
+
+## [0.268.0] - 2026-11-12
+
+### Added
+
+- Document Comment resource with `Create`, `Get`, `Get Many`,
+  `Reply`, `Update`, `Delete`, `Resolve`, and `Reopen` operations.
+  `Get` returns every comment of the thread
+- Document Suggestion resource with `Start`, `Get`, `Get Many`,
+  `Reply`, `Accept`, and `Reject` operations
+
+### Removed
+
+- Document `Delete Draft Version` operation, which called a mutation
+  the API does not expose
+
+## [0.267.0] - 2026-11-11
+
+### Added
+
+- Finding `Link Task` and `Unlink Task` operations connect a task to
+  a finding
+- Finding `Get All` accepts a `Query` filter that searches by title or
+  reference ID
+- Finding `Create` and `Update` take a `Title`, and `Get` returns it
+
+### Changed
+
+- **Breaking**: finding `Create` requires `Title`
+
+## [0.266.0] - 2026-11-03
+
+### Added
+
+- Cookie Banner `Request Scan`, `Get Scan`, and `Get Scans`
+  operations
+- Cookie Banner `Get Scan Resources` and `Get Scan Trackers` list
+  what a scan found
+
+## [0.265.0] - 2026-11-02
+
+### Added
+
+- Access Review `Retry Source Fetch` queues a new fetch for a
+  campaign source whose fetch failed
+- People, organizations, documents, document versions, and other
+  named records can be picked from a searchable list. `By ID`
+  still takes an expression or a value from a previous node
+- Pending signature and approval operations report who is
+  waiting, on which document, and for how long
+
+### Changed
+
+- List operations return one item per record, with parent IDs
+  and the same person fields, including email. Version lists
+  omit the body unless Simplify is turned off
+- Signatory account status is labeled separately from
+  signature status, and document status defaults are shown
+
+### Removed
+
+- Connector `Create (Client Credentials)` no longer has a
+  `Token Endpoint` parameter. The server names the endpoint
+
+### Fixed
+
+- Pending lists with a small limit fetch a bounded page instead
+  of a 100-by-100 tree, and return-all is no longer cut off
+  after 100 pages. A fractional limit is rounded down instead
+  of being rejected
+
+## [0.264.0] - 2026-10-30
+
+### Added
+
+- Employee Portal `Add Document` shares a published document with
+  an employee portal. `List Documents` lists those documents.
+  `Delete Document` stops sharing one
+
+## [0.263.0] - 2026-10-28
+
+### Added
+
+- Internal Control `Get Many` filters by category, implementation
+  statuses, owner, and needs attention, and sorts by created at, name,
+  or next due date. Query matches the name or the code
+- Audit Log `Get Many` filters by action, actor, resource type, and
+  resource ID
+
+## [0.262.0] - 2026-10-27
+
+### Added
+
+- Cookie Banner Update accepts a Force Opt-In field, and Get and Get
+  Many return `forceOptIn`
+
+## [0.261.0] - 2026-10-26
+
+### Changed
+
+- The Probo API credential label is Access Token. It still sends the
+  value as a Bearer token, and the stored field name is unchanged, so
+  saved workflows still load. Create the token from the user menu
+  under OAuth tokens
+
+## [0.260.0] - 2026-10-22
+
+### Changed
+
+- Document operations return `content` as an object with a
+  `prosemirror` field. The `Draft` version status filter is replaced
+  by `Rejected` and `Voided`
+
+## [0.259.0] - 2026-10-22
+
+### Added
+
+- Compliance Portal `Get` returns the public URL, custom domain, and
+  Slack status, and `Create` returns the custom domain DNS records
+
+## [0.258.0] - 2026-10-22
+
+### Added
+
+- Cookie Banner `Start Sample`, `Stop Sample`, and `Get Samples` open,
+  freeze, and list sample windows
+- Probo Trigger payloads include `actor`: profile id, full name,
+  email address, and role. `actor` is null when no member can be
+  identified
+
+### Changed
+
+- Cookie Banner `Get` returns `latestSample` (id, created time, frozen
+  time, and page loads) instead of `discoveryPageLoads` and
+  `discoveryFrozenAt`. Saved workflows that read the old fields must
+  read `latestSample`
+- Tracker Pattern `Get` returns `sampleHits` instead of
+  `discoveryHits`. Saved workflows that read `discoveryHits` must read
+  `sampleHits`
+
+## [0.257.0] - 2026-10-21
+
+### Removed
+
+- Tracker Pattern `Create` no longer takes `Display Name`, and tracker
+  pattern operations no longer return `displayName`. Saved workflows
+  that set the field must remove it
+
+## [0.256.0] - 2026-10-20
+
+### Added
+
+- Connector `Update API Key` replaces a connector's customer API key
+  without deleting the connector or losing its enabled accounts
+
+## [0.255.0] - 2026-10-19
+
+### Changed
+
+- Risk `Create` and `Update` no longer take `Treatment`, likelihood,
+  impact, or `Owner ID`; these now live on treatment plans. Saved
+  workflows that set those fields must remove them
+
+## [0.254.0] - 2026-10-19
+
+### Changed
+
+- Device `Get Many` filters by several `States`, `Platforms`, and
+  `Agent Versions` (comma-separated). These options replace the single
+  `State`, `Platform`, and `Agent Version` fields, so saved workflows
+  that set the old fields must select the filters again
+
+## [0.253.0] - 2026-10-16
+
+### Added
+
+- Audit `Link Framework` and `Unlink Framework` operations
+
+### Changed
+
+- Audit `Create` takes `Framework IDs` instead of a single
+  `Framework ID`. Saved workflows that set the old field keep working
+
+## [0.252.0] - 2026-10-16
+
+### Added
+
+- Task `Create` accepts a Linear team ID. Leave it empty to use the
+  organization's default Linear team. Enter `none` to create the task
+  with no Linear team
+- Task `Update Linear Settings` sets the organization's default Linear
+  team and whether new issues on that team are imported
+
+### Changed
+
+- Task `Create` still returns the created task when the Linear publish
+  attempt fails. The GraphQL error is included in the node output
+
+### Fixed
+
+- Audit operations select `reportFile` instead of the removed
+  `reportUrl`, so those queries succeed and still return a download URL
+
+## [0.251.0] - 2026-10-15
+
+### Added
+
+- Device operation to download the PDF snapshot of device postures
+- Device list filters by owner, state, platform, and agent version
+- Revoke and delete several devices in a single all-or-nothing call
+
+## [0.250.0] - 2026-10-15
+
+### Changed
+
+- Access review source options show the account name
+
+## [0.249.0] - 2026-10-14
+
+### Added
+
+- Attachment `Upload` uploads a private file for an image or file in
+  rich text. Document, task, task comment, and risk analysis content
+  can reference that file
+
+## [0.248.0] - 2026-10-14
+
+### Removed
+
+- Last-seen timestamp from the Tracker Pattern `Get` and `Get Many`
+  operations
+
+## [0.247.0] - 2026-10-13
+
+### Added
+
+- Connector `Create API Key` and `Create Client Credentials` for providers
+  that need no extra setting, plus `Create AWS Workload Identity
+  Federation`, `Create GCP Workload Identity Federation`, and `Create
+  Azure Workload Identity Federation`
+
+### Changed
+
+- **Breaking**: Access Review Source `Create` no longer takes a cloud
+  provider and its credentials. Pass a connector that already exists, or
+  CSV data
+- Connector `Create Organization Connector` is marked deprecated. Saved
+  workflows that already use it keep working
+
+### Fixed
+
+- A node fails when the GraphQL response contains errors, instead of
+  continuing with an error payload
+
+## [0.246.0] - 2026-10-09
+
+### Added
+
+- Cookie Banner `Get` returns discovery page loads by browser family, and
+  Tracker Pattern `Get` returns discovery hits by browser family
+
+
+## [0.245.0] - 2026-10-09
+
+### Added
+
+- Connector `Update` operation renames a connector
+
+### Changed
+
+- **Breaking**: Connector `Create Org` and Access Review Source `Create` require a `Name` that identifies the connector, so several connections to one provider stay distinct. Connector `Get` and `Get Many` return it
+
+## [0.244.0] - 2026-10-08
+
+### Added
+
+- Employee Portal resource with `Get`, `Get Many`, and `Update`
+  operations
+
+## [0.243.0] - 2026-10-07
+
+### Changed
+
+- **Breaking**: Task `Create`, `Update`, `Get`, and `Get Many` treat `content` as a ProseMirror document JSON string, matching Document content. Plain text is no longer wrapped into a document, and reads return the stored JSON
+- **Breaking**: Task Comment `Create`, `Update`, `Get`, and `Get Many` treat `content` the same way. Risk Analysis `Create`, `Update`, `Fork`, `Get`, and `Get Many` treat `description` the same way
+
+## [0.242.0] - 2026-10-06
+
+### Changed
+
+- **Breaking**: the `Measure` resource is renamed to `Internal Control`
+  (resource value `measure` -> `internalControl`). Parameters named
+  `measureId` are now `internalControlId`, so saved values are dropped
+  and default to empty. `Get Many` returns `internalControls` instead
+  of `measures`. Existing workflows must reselect the resource and
+  parameters, and update expressions that read `measures`.
+- Task `Update` no longer returns the next occurrence. A recurring
+  task's next occurrence is created when its deadline passes, and the
+  interval stays on the current task until then
+
+## [0.241.0] - 2026-10-05
+
+### Added
+
+- Organization `Create` and `Update` accept a `Legal Name`, and `Update`
+  can remove it with `Clear Legal Name`. `Get` and `Get Many` return it
+- Cookie banner operations return the `corsless` capability
+- Cookie consent record `Get` and `Get Many` return the `origin`
+
+## [0.240.0] - 2026-10-05
+
+### Added
+
+- Measure `Create`, `Update`, `Get` and `Get Many` support the internal
+  control fields: `Code`, `Control Type`, `Nature`, `Operating Mode`,
+  `Operating Interval`, `Operating Event`, `Evidence Cadence`,
+  `Testing Cadence`, `Implementation Status`, `Owner ID` and
+  `Reviewer ID`
+
+## [0.239.0] - 2026-09-30
+
+### Added
+
+- Task `Get Many` can filter by `Assigned To ID`
+
+## [0.238.0] - 2026-09-25
+
+### Added
+
+- Task `Get Many` can filter by name and state
+
+## [0.237.0] - 2026-09-25
+
+### Added
+
+- Task `Link To Linear` links a task to an existing Linear issue
+- Task `List Linear Issues` searches Linear issues in a team
+
+### Changed
+
+- Task `List Linear Teams` searches and pages teams instead of returning
+  the full list
+
+## [0.236.0] - 2026-09-24
+
+### Added
+
+- Connector `Create Organization Connector`, `Discover Accounts`,
+  `Enable Accounts`, `Get`, and `Get Many` operations manage connector
+  accounts
+- Webhook `Get Events` includes Task and Task Comment event types
+- Finding `Get Many` accepts an Audit ID filter
+
+## [0.235.0] - 2026-09-23
+
+### Added
+
+- Task `List Linear Teams`, `Publish To Linear`, and `Unlink External`
+- Task `Get` returns `externalLink` (`provider`, `identifier`, `url`,
+  `origin`)
+
+### Changed
+
+- Webhook `Get Events` can filter by delivery status and returns the
+  outbound `payload`
+
+## [0.234.0] - 2026-09-22
+
+### Added
+
+- Cookie Banner `Get`/`Update` expose `tcfCmpId`
+- Cookie Banner `Get`/`Update` expose `publisherCountryCode`
+- Cookie Category `Get`/`Update` expose `tcfPurposeIds`
+- Cookie Consent Record `Get` returns the optional IAB TCF string (`tc`)
+- Risk Analysis `Publish` publishes an analysis as a document version
+
+## [0.233.0] - 2026-09-22
+
+### Changed
+
+- Risk `Delete` describes that deleting a risk also removes its history
+  in risk analyses
+
+## [0.232.0] - 2026-09-18
+
+### Changed
+
+- Risk Analysis `Create`, `Fork`, `Update`, `Get`, and `Get Many`
+  treat `description` as plaintext (converted to ProseMirror JSON on
+  write), matching Task operations
+
+## [0.231.0] - 2026-09-16
+
+### Added
+
+- Cookie Banner `Add GVL Vendor`, `Remove GVL Vendor`, `List GVL Catalog`,
+  `List GVL Vendors`, and `Get GVL Catalog` actions, to pick which IAB
+  Global Vendor List vendors a TCF-capable banner discloses
+- `List GVL Vendors` takes a `Membership` filter (`On Banner` /
+  `Not On Banner`); Cookie Banner `Get` returns the published version's
+  GVL vendor count and IDs
+- Risk `Create`, `Get`, `Get Many`, and `Update` expose `referenceId`, the
+  org-scoped `RSK-001` display ID; `Get Many` can order by `Reference ID`
+- Compliance Portal Access `Create`, `Activate`, and `Deactivate` return the
+  visitor's identity (full name and email)
+
+### Fixed
+
+- `List GVL Catalog` and `List GVL Vendors` paginate through every page and
+  offer `Return All` / `Limit` like other list actions, instead of silently
+  returning only the first 50 rows
+
+## [0.230.0] - 2026-09-15
+
+### Added
+
+- Compliance Portal Access `Create` action, to add a portal visitor by member or email
+- `Recurrence Interval` on Task `Create`/`Update`, an ISO-8601 duration (requires a deadline); `Update` also gets `Clear Recurrence`
+
+### Changed
+
+- Compliance Portal Access actions and labels say Add instead of Invite
+
+## [0.229.0] - 2026-09-14
+
+### Added
+
+- Task Activity resource with `Get` and `Get All` actions, listing a
+  task's field-level changes newest-first
+
+## [0.228.0] - 2026-09-10
+
+### Added
+
+- Device `Get` and `Get All` actions expose each posture's schema version and observing agent version
+
+## [0.227.0] - 2026-09-10
+
+### Added
+
+- Access Review Source `Create` now accepts GCP (`GCP Workload Identity
+  Provider`, `GCP Service Account Email`), including S3NS universe
+  suffixes
+- Access Review Source `Setup GCP`, to get the GCP connector setup
+  values (issuer, audience, subject, suggested service account name,
+  Terraform snippet)
+- `Firm` on Audit `Create` and `Update`, and `To Book` / `Audit Booked`
+  added to the Audit state options; an empty firm on update clears it
+
+### Changed
+
+- Task and Task Comment operations return `content` as plaintext
+  instead of ProseMirror JSON
+
+### Removed
+
+- Access Review `Read Entries` no longer returns `incrementalTag`
+
+## [0.226.0] - 2026-09-02
+
+### Added
+
+- `Task Comment` resource (`Create`, `Get`, `Get Many`, `Update`, `Delete`) for description-only comments on a task, owned by a membership profile (the author by default)
+
+## [0.225.0] - 2026-09-01
+
+### Added
+
+- Access Review Source `Create`, to create an AWS workload-identity access source
+- Access Review Source `Setup AWS`, to get the AWS connector setup values (issuer, audience, subject, suggested role name, Terraform snippet, CloudFormation quick-create URL)
+
+## [0.224.0] - 2026-09-01
+
+### Added
+
+- `As Of` on Risk Analysis `Get` and Treatment Plan `Get Many` reconstructs matrix cells and plans as of that instant; on Treatment Plan `Get Many` it requires `Risk Analysis ID`, and leaving it empty keeps reading live tables
+- `State` on Task `Create`, and `Backlog`, `Canceled`, and `Duplicate` added to the Task state options
+
+### Changed
+
+- Treatment Plan `Get` and `Get Many` return the plan's `category`
+
+## [0.223.0] - 2026-08-27
+
+### Added
+
+- Risk Analysis `Fork`, copying diagrams, treatment plans, and their relations into a new analysis; matrix size stays on the source and the period starts empty
+
+### Changed
+
+- Date ranges are returned as nested `Period` objects: Audit `validity` / `auditDates` replace `validFrom`, `validUntil`, `auditStartDate`, `auditEndDate`, and Vendor `contract` replaces `contractStartDate` / `contractEndDate`. Operation input fields are unchanged
+
+## [0.222.0] - 2026-08-26
+
+### Added
+
+- `Treatment Plan` resource (`Create`, `Get`, `Get Many`, `Update`, `Delete`) for plans that hold scores, treatment, and owner per (risk, analysis)
+- Measure `Link Treatment Plan` / `Unlink Treatment Plan`
+- Risk `Get Many`: `Risk Analysis ID` lists unplanned scenario-linked risks on that analysis
+- Risk Analysis `Get` now returns `matrixCells`
+
+### Changed
+
+- Risk Analysis `Update` no longer accepts `Matrix Size`; matrix size is set at create only
+
+## [0.221.0] - 2026-08-25
+
+### Added
+
+- Tracker Pattern `Get` / `Get Many`: `attribution` catalog verdict inherited from the linked common tracker pattern
+
+## [0.220.0] - 2026-08-14
+
+### Added
+
+- `Matrix Size` (`3×3`, `4×4`, `5×5`) option on Risk Analysis `Create` and `Update`, returned on `Get` / `Get Many`, so the likelihood/impact matrix size is explicit per analysis
+
+### Fixed
+
+- `Probo Trigger` no longer advertises itself as usable as an AI tool, which n8n could not honor for a trigger node
+
+## [0.219.0] - 2026-08-13
+
+### Added
+
+- `AI System` resource (`Create`, `Get`, `Get Many`, `Update`, `Delete`, `Publish`), for managing an organization's AI Systems register
+- `Period Start` / `Period End` fields on Risk Analysis `Create` and `Update`, and `period` on `Get` / `Get Many`
+- `Compliance Portal Manager` and `Compliance Portal Access Manager` membership roles, for delegating full compliance portal management or just visitor access approval without broader admin access
+- Cookie Banner `Update`: `Resource Reporting Enabled` option, to enable or disable resource detection on the banner
+
+## [0.218.0] - 2026-08-10
+
+### Changed
+
+- Risk Analysis `Scope` parameters are now called `Diagram` across all operations.
+
+## [0.217.0] - 2026-08-07
+
+### Changed
+
+- **Breaking**: the `Risk Assessment` resource is renamed to `Risk Analysis` (resource value `riskAssessment` -> `riskAnalysis`), along with its operations and parameters. Existing workflows using the Risk Assessment resource must reselect the Risk Analysis resource. Third-party assessments are unaffected.
+
+### Added
+
+- Document `Get Many`: `Published` filter option, to return only documents that have a published version
+
+## [0.216.0] - 2026-08-06
+
+### Added
+
+- Access Review: `Read Campaign Access Entries` operation, to read the access entries for an access review campaign
+- Compliance Portal `Update`: `Rights Requests Enabled` option, to enable or disable rights requests on the compliance portal
+
+## [0.215.1] - 2026-08-06
+
+### Fixed
+
+- Organization Get Many: send `states: ['ACTIVE']` instead of the removed `state` field so the operation works again against servers that only accept the multi-value `ProfileFilter`
+
+## [0.215.0] - 2026-08-05
+
+### Added
+
+- `subdivisionCode` (ISO 3166-2) returned by the Cookie Consent Record `Get` and `Get Many` operations, so workflows can branch on the detected state or province rather than country alone
+
+## [0.214.0] - 2026-08-05
+
+### Added
+
+- Access Review Source `Get Many` operation to list organization access review sources
+
+## [0.213.0] - 2026-08-05
+
+### Added
+
+- Business Function `Create`, `Get`, `Get Many`, `Update`, `Delete`, and `Publish` operations, for tracking DORA Critical ICT Functions
+
+## [0.212.0] - 2026-08-04
+
+### Added
+
+- Cookie Consent Record `Get Many`: new `Acknowledge` action filter option, matching the new `ACKNOWLEDGE` consent action recorded for notice-only banners
+
+## [0.211.0] - 2026-08-03
+
+### Added
+
+- Compliance Portal `Create`, `Delete`, `Get Many`, `Delete Audit`, `Delete Document`, `Delete Third Party`, `Update Audit Visibility`, `Update Document Visibility`, and `Update Third Party Published` operations
+
+### Changed
+
+- Third Party `Create`/`Update`: `Business Owner ID` and `Security Owner ID` fields replaced with a single `Administrator IDs` field (comma-separated)
+- Compliance Portal `Create Commitment Group`: `Trust Center ID` field renamed to `Compliance Portal ID`
+
+## [0.210.0] - 2026-07-31
+
+### Added
+
+- Device `Create`, `Get Many`, `Get`, `Revoke`, `Delete`, and `Set Owner` operations to manage ITAM devices
+- Organization `Delete Horizontal Logo` operation
+
+## [0.209.0] - 2026-07-30
+
+### Changed
+
+- User `Get Many` and Document `Get All Signatures` `State`/`Profile State` fields are now multi-select (`States`/`Profile States`), adding `Pending` alongside `Active` and `Deactivated`
+- User `Archive` operation renamed to `Deactivate`
+
+## [0.208.0] - 2026-07-28
+
+### Added
+
+- Audit `Create` and `Update` operations gained `Audit Start Date` and `Audit End Date` fields
+
+## [0.207.0] - 2026-07-27
+
+### Added
+
+- User `Get Many` gained `Filter` (search by name/email), `Role`, and `Kind` fields, with the default page size raised to 100
+
+### Changed
+
+- Access Review `Create` and `Update` operations gained a multi-select `Sources` field to configure scope sources in the same call, replacing the separate `Add Source` operation
+
+### Fixed
+
+- Access Review source loader now paginates through all scoped sources instead of stopping at the first 500, so organizations with more sources can select them all when creating or updating a campaign
+
+## [0.206.2] - 2026-07-24
+
+### Fixed
+
+- User Get no longer queries Connect `Organization.email`, which was removed and broke the operation; organization selection now matches User list/create/update
+
+## [0.206.1] - 2026-07-22
+
+### Fixed
+
+- Organization Get/Get Many/Create no longer query removed Connect `Organization` profile fields (`description`, `websiteUrl`, `email`, `headquarterAddress`), which broke Organization Get Many. Use Compliance Portal Get/Update for those fields instead
+- Compliance Portal Get now returns `entityName`, `description`, `websiteUrl`, `email`, and `headquarterAddress`, matching Compliance Portal Update, and selects `logo`/`darkLogo`/`nda` as File objects instead of removed URL scalars
+
+## [0.206.0] - 2026-07-22
+
+### Changed
+
+- Compliance Portal `Update` operation renamed the `Title` field to `Entity Name`, matching the compliance portal's short entity-name field
+
+## [0.205.0] - 2026-07-21
+
+### Added
+
+- Compliance Portal `Update` operation gained Title, Description, Website URL, Email, and Headquarter Address fields to manage the compliance page profile
+- Webhook event choices now include `RIGHT_REQUEST_CREATED`, `RIGHT_REQUEST_UPDATED`, and `RIGHT_REQUEST_DELETED`
+
+### Changed
+
+- Renamed the `Trust Center` resource to `Compliance Portal`, and its custom link operations to `Create Custom Link`/`Delete Custom Link`, matching the renamed GraphQL API
+
+### Removed
+
+- `Organization` > `Update` no longer exposes Description, Website URL, Email, and Headquarter Address fields; use `Compliance Portal` > `Update` instead
+
+## [0.204.0] - 2026-07-20
+
+### Added
+
+- Trust Center commitment and commitment group operations (create, get all, update, delete) so workflows can manage compliance portal commitments end to end
+
+## [0.203.0] - 2026-07-20
+
+### Changed
+
+- Renamed the risk operations' "Inherent" field label to "Initial", for consistency with the console and CLI
+
+## [0.202.1] - 2026-07-15
+
+### Fixed
+
+- Probo Trigger now logs webhook subscription delete failures instead of silently swallowing them
+- Corrected the Probo Trigger codex node identifier and replaced unsupported marketplace categories to satisfy the n8n community-node review
+
+## [0.202.0] - 2026-07-15
+
+### Added
+
+- Probo Trigger output for `*:updated` events now includes an `updatedFrom` object alongside `data`, holding the entity snapshot from before the update so workflows can diff old vs new values (for example `{{ $json.updatedFrom.membership.role }}` vs `{{ $json.data.membership.role }}`)
+
+## [0.201.0] - 2026-07-09
+
+### Added
+
+- `document.update` can now edit the current draft version's body, title, classification, and document type, creating a draft from the latest published version when none exists (empty fields are skipped)
+
+### Changed
+
+- Renamed the document-signature filter `state` field to `profileState`, matching the API rename and disambiguating it from the signature `states` field
+- Corrected the document operation help text to note the content/body field expects a ProseMirror document JSON string, not markdown
+
+### Removed
+
+- `document.createDraftVersion` operation — editing the body via `document.update` now covers draft creation
+
+## [0.200.0] - 2026-07-02
+
+### Added
+
+- `ProboTrigger` node that starts a workflow when Probo emits a webhook event; it owns the subscription lifecycle (creates it on activation, re-registers it when the webhook URL drifts, deletes it on deactivation) and verifies the HMAC-SHA256 signature constant-time
+- Document lifecycle webhook events — document created/updated/archived/unarchived/deleted, version created/updated/published/rejected/deleted, version signature requested/signed/cancelled, and version approval quorum requested/approved/rejected/updated/voided
+
+### Changed
+
+- Default Probo Server credential URL is now `https://us.probo.com` (was `https://us.console.getprobo.com`)
+- Update the node's codex metadata to satisfy n8n marketplace review — use supported `Development`/`Utility` categories and the scoped `@probo/n8n-nodes-probo.probo` node identifier
+
+### Removed
+
+- `MEETING_*` webhook event choices from the webhook create/update operations — they were never part of the backend event enum
+
 ## [0.199.0] - 2026-06-30
 
 ### Added

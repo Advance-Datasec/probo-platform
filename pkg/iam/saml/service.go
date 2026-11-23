@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package saml
 
@@ -33,6 +39,7 @@ import (
 	"go.probo.inc/probo/pkg/baseurl"
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/gid"
+	"go.probo.inc/probo/pkg/iam/identityname"
 )
 
 type (
@@ -124,7 +131,7 @@ func (s *Service) InitiateLogin(
 				return fmt.Errorf("cannot load SAML configuration: %w", err)
 			}
 
-			if config.EnforcementPolicy == coredata.SAMLEnforcementPolicyOff {
+			if !config.SSOEnabled() {
 				return NewSAMLDisabledError()
 			}
 
@@ -192,7 +199,7 @@ func (s *Service) HandleAssertion(
 				return fmt.Errorf("cannot load SAML configuration: %w", err)
 			}
 
-			if config.EnforcementPolicy == coredata.SAMLEnforcementPolicyOff {
+			if !config.SSOEnabled() {
 				return NewSAMLDisabledError()
 			}
 
@@ -251,14 +258,16 @@ func (s *Service) HandleAssertion(
 				return NewEmailDomainMismatchError(email, config.EmailDomain)
 			}
 
+			samlSubject := strings.TrimSpace(assertion.Subject.NameID.Value)
+
 			err = identity.LoadByEmail(ctx, tx, email)
-			if err == coredata.ErrResourceNotFound && !config.AutoSignupEnabled {
+			if errors.Is(err, coredata.ErrResourceNotFound) && !config.AutoSignupEnabled {
 				return NewSAMLAutoSignupDisabledError(config.ID)
-			} else if err == coredata.ErrResourceNotFound && config.AutoSignupEnabled {
+			} else if errors.Is(err, coredata.ErrResourceNotFound) && config.AutoSignupEnabled {
 				*identity = coredata.Identity{
 					ID:                   gid.New(gid.NilTenant, coredata.IdentityEntityType),
 					EmailAddress:         email,
-					SAMLSubject:          &assertion.Subject.NameID.Value,
+					SAMLSubject:          &samlSubject,
 					FullName:             fullname,
 					HashedPassword:       nil,
 					EmailAddressVerified: true,
@@ -266,26 +275,30 @@ func (s *Service) HandleAssertion(
 					UpdatedAt:            now,
 				}
 
-				err := identity.Insert(ctx, tx)
-				if err != nil {
+				if err := identity.Insert(ctx, tx); err != nil {
+					if errors.Is(err, coredata.ErrSAMLSubjectAlreadyExists) {
+						return NewSAMLSubjectAlreadyInUseError(assertion.ID)
+					}
+
 					return fmt.Errorf("cannot insert identity: %w", err)
 				}
 			} else if err != nil {
 				return fmt.Errorf("cannot load identity: %w", err)
 			} else {
 				identity.EmailAddress = email
-				identity.FullName = fullname
 
-				// Identity can exist (e.g. provisioned via SCIM) but not have a SAML subject
-				if identity.SAMLSubject == nil {
-					identity.SAMLSubject = &assertion.Subject.NameID.Value
+				if !hasSAMLSubject(identity) {
+					identity.SAMLSubject = &samlSubject
 				}
 
 				identity.EmailAddressVerified = true
 				identity.UpdatedAt = now
 
-				err = identity.Update(ctx, tx)
-				if err != nil {
+				if err = identity.Update(ctx, tx); err != nil {
+					if errors.Is(err, coredata.ErrSAMLSubjectAlreadyExists) {
+						return NewSAMLSubjectAlreadyInUseError(assertion.ID)
+					}
+
 					return fmt.Errorf("cannot update identity: %w", err)
 				}
 			}
@@ -309,6 +322,7 @@ func (s *Service) HandleAssertion(
 					OrganizationID: config.OrganizationID,
 					Source:         coredata.ProfileSourceSAML,
 					State:          coredata.ProfileStateActive,
+					ActivatedAt:    &now,
 					FullName:       fullname,
 					CreatedAt:      now,
 					UpdatedAt:      now,
@@ -319,8 +333,12 @@ func (s *Service) HandleAssertion(
 					return fmt.Errorf("cannot insert membership profile: %w", err)
 				}
 			} else {
-				if profile.State == coredata.ProfileStateInactive {
+				if profile.State == coredata.ProfileStateDeactivated {
 					return NewUserInactiveError(profile.ID)
+				}
+
+				if profile.State == coredata.ProfileStatePending {
+					profile.MarkActive(now)
 				}
 			}
 
@@ -361,6 +379,10 @@ func (s *Service) HandleAssertion(
 				err = profile.Update(ctx, tx, scope)
 				if err != nil {
 					return fmt.Errorf("cannot update profile: %w", err)
+				}
+
+				if err := identityname.CopyFromUniqueProfile(ctx, tx, profile.IdentityID, profile.FullName); err != nil {
+					return fmt.Errorf("cannot sync identity full name: %w", err)
 				}
 
 				if role != nil {
@@ -407,6 +429,10 @@ func (s *Service) validateAssertion(assertion *saml.Assertion, config *coredata.
 
 	if assertion.Subject == nil || assertion.Subject.NameID == nil {
 		return fmt.Errorf("subject or NameID missing")
+	}
+
+	if strings.TrimSpace(assertion.Subject.NameID.Value) == "" {
+		return NewSAMLSubjectRequiredError()
 	}
 
 	if assertion.Issuer.Value != config.IdPEntityID {
@@ -472,4 +498,8 @@ func (s *Service) baseServiceProvider() *saml.ServiceProvider {
 		AuthnNameIDFormat: saml.EmailAddressNameIDFormat,
 		AllowIDPInitiated: true,
 	}
+}
+
+func hasSAMLSubject(identity *coredata.Identity) bool {
+	return identity.SAMLSubject != nil && strings.TrimSpace(*identity.SAMLSubject) != ""
 }

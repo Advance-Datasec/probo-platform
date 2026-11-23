@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
@@ -29,20 +35,25 @@ import (
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/docgen"
 	"go.probo.inc/probo/pkg/gid"
-	"go.probo.inc/probo/pkg/prosemirror"
+	"go.probo.inc/probo/pkg/page"
+	"go.probo.inc/probo/pkg/richtext"
 )
 
-var trackerPolicyTemplate = template.Must(
-	template.New("tracker_policy.md.tmpl").
-		Funcs(template.FuncMap{
-			"formatDate": func(t time.Time) string {
-				return t.Format("January 2, 2006")
-			},
-			"add": func(a, b int) int {
-				return a + b
-			},
-		}).
-		ParseFS(Templates, "templates/tracker_policy.md.tmpl"),
+var (
+	trackerPolicyTemplate = template.Must(
+		template.New("tracker_policy.md.tmpl").
+			Funcs(template.FuncMap{
+				"add": func(a, b int) int {
+					return a + b
+				},
+			}).
+			ParseFS(Templates, "templates/tracker_policy.md.tmpl"),
+	)
+
+	// errTrackerPolicyStale means the banner label or published snapshot
+	// changed while the policy was rendered. Generation is re-armed and this
+	// render is dropped so it cannot become the latest version.
+	errTrackerPolicyStale = errors.New("tracker policy inputs changed during generation")
 )
 
 // BuildTrackerPolicyDocument renders the tracker policy markdown template for
@@ -54,7 +65,7 @@ func BuildTrackerPolicyDocument(data docgen.TrackerPolicyData) (string, error) {
 		return "", fmt.Errorf("cannot execute tracker policy template: %w", err)
 	}
 
-	node, err := prosemirror.ParseMarkdown(buf.String())
+	node, err := richtext.ParseMarkdown(buf.String())
 	if err != nil {
 		return "", fmt.Errorf("cannot convert tracker policy markdown: %w", err)
 	}
@@ -69,9 +80,9 @@ func BuildTrackerPolicyDocument(data docgen.TrackerPolicyData) (string, error) {
 
 // PublishTrackerPolicy generates (or regenerates) the cookie and tracking
 // technologies policy document for a banner from its latest published version
-// snapshot. The document is stored as a GENERATED document that is PRIVATE in
-// the trust center by default, and is linked to the banner through
-// cookie_banners.policy_document_id.
+// snapshot. The document is stored as a GENERATED document and is linked to the
+// banner through cookie_banners.policy_document_id. Portal publication is
+// configured separately via compliance portal catalog mutations.
 func (s *GeneratedDocumentService) PublishTrackerPolicy(
 	ctx context.Context,
 	scope coredata.Scoper,
@@ -81,9 +92,10 @@ func (s *GeneratedDocumentService) PublishTrackerPolicy(
 	// write transaction. Template rendering, markdown parsing, and JSON
 	// marshaling are CPU work that should not hold a write transaction open.
 	var (
-		organizationID gid.GID
-		bannerOrigin   string
-		documentData   docgen.TrackerPolicyData
+		organizationID     gid.GID
+		websiteLabel       string
+		publishedVersionID gid.GID
+		documentData       docgen.TrackerPolicyData
 	)
 
 	err := s.svc.pg.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
@@ -99,13 +111,13 @@ func (s *GeneratedDocumentService) PublishTrackerPolicy(
 
 		var err error
 
-		documentData, err = s.buildTrackerPolicyDocumentData(ctx, scope, conn, organization, banner)
+		documentData, publishedVersionID, err = s.buildTrackerPolicyDocumentData(ctx, scope, conn, organization, banner)
 		if err != nil {
 			return fmt.Errorf("cannot build document data: %w", err)
 		}
 
 		organizationID = banner.OrganizationID
-		bannerOrigin = banner.Origin
+		websiteLabel = trackerPolicyWebsiteLabel(banner)
 
 		return nil
 	})
@@ -119,12 +131,33 @@ func (s *GeneratedDocumentService) PublishTrackerPolicy(
 	}
 
 	// Phase 2: persist the document and version in a write transaction.
-	return s.svc.pg.WithTx(
+	// Drop the render when the banner label or published snapshot changed
+	// after phase 1. A newer generation (for example after enabling corsless)
+	// may already have committed, and publishing this older render would make
+	// it the latest version.
+	var stale bool
+
+	err = s.svc.pg.WithTx(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
 			banner := &coredata.CookieBanner{}
 			if err := banner.LoadByID(ctx, tx, scope, cookieBannerID); err != nil {
 				return fmt.Errorf("cannot reload cookie banner: %w", err)
+			}
+
+			published := &coredata.CookieBannerVersion{}
+			if err := published.LoadLatestPublishedByCookieBannerID(ctx, tx, scope, cookieBannerID); err != nil {
+				return fmt.Errorf("cannot reload latest published version: %w", err)
+			}
+
+			if trackerPolicyInputsChanged(websiteLabel, publishedVersionID, banner, published.ID) {
+				stale = true
+
+				if err := banner.SetPolicyGenerationRequested(ctx, tx); err != nil {
+					return fmt.Errorf("cannot re-request tracker policy generation: %w", err)
+				}
+
+				return nil
 			}
 
 			now := time.Now()
@@ -158,13 +191,12 @@ func (s *GeneratedDocumentService) PublishTrackerPolicy(
 				documentID := gid.New(scope.GetTenantID(), coredata.DocumentEntityType)
 
 				document = &coredata.Document{
-					ID:                    documentID,
-					OrganizationID:        organizationID,
-					WriteMode:             coredata.DocumentWriteModeGenerated,
-					TrustCenterVisibility: coredata.TrustCenterVisibilityPrivate,
-					Status:                coredata.DocumentStatusActive,
-					CreatedAt:             now,
-					UpdatedAt:             now,
+					ID:             documentID,
+					OrganizationID: organizationID,
+					WriteMode:      coredata.DocumentWriteModeGenerated,
+					Status:         coredata.DocumentStatusActive,
+					CreatedAt:      now,
+					UpdatedAt:      now,
 				}
 
 				if err := document.Insert(ctx, tx, scope); err != nil {
@@ -181,12 +213,19 @@ func (s *GeneratedDocumentService) PublishTrackerPolicy(
 				document = existingDoc
 			}
 
+			title := fmt.Sprintf("Cookie and Tracking Technologies Policy — %s", websiteLabel)
+			if existingDoc != nil {
+				// Later publishes copy the generated title. The first publish
+				// does that itself while the document title is still empty.
+				document.Title = title
+			}
+
 			documentVersionID := gid.New(scope.GetTenantID(), coredata.DocumentVersionEntityType)
 			documentVersion := &coredata.DocumentVersion{
 				ID:             documentVersionID,
 				OrganizationID: organizationID,
 				DocumentID:     document.ID,
-				Title:          fmt.Sprintf("Cookie and Tracking Technologies Policy — %s", bannerOrigin),
+				Title:          title,
 				Content:        prosemirrorJSON,
 				Classification: coredata.DocumentClassificationPublic,
 				DocumentType:   coredata.DocumentTypePolicy,
@@ -198,22 +237,32 @@ func (s *GeneratedDocumentService) PublishTrackerPolicy(
 			return s.publishOrRequestApproval(ctx, scope, tx, document, documentVersion, organizationID, nil, false, now)
 		},
 	)
+	if err != nil {
+		return err
+	}
+
+	if stale {
+		return errTrackerPolicyStale
+	}
+
+	return nil
 }
 
 func (s *GeneratedDocumentService) buildTrackerPolicyDocumentData(
-	ctx context.Context, scope coredata.Scoper,
+	ctx context.Context,
+	scope coredata.Scoper,
 	conn pg.Querier,
 	organization *coredata.Organization,
 	banner *coredata.CookieBanner,
-) (docgen.TrackerPolicyData, error) {
+) (docgen.TrackerPolicyData, gid.GID, error) {
 	version := &coredata.CookieBannerVersion{}
 	if err := version.LoadLatestPublishedByCookieBannerID(ctx, conn, scope, banner.ID); err != nil {
-		return docgen.TrackerPolicyData{}, fmt.Errorf("cannot load latest published version: %w", err)
+		return docgen.TrackerPolicyData{}, gid.Nil, fmt.Errorf("cannot load latest published version: %w", err)
 	}
 
 	snapshot, err := version.GetSnapshot()
 	if err != nil {
-		return docgen.TrackerPolicyData{}, fmt.Errorf("cannot decode snapshot: %w", err)
+		return docgen.TrackerPolicyData{}, gid.Nil, fmt.Errorf("cannot decode snapshot: %w", err)
 	}
 
 	categories := make([]docgen.TrackerPolicyCategory, 0, len(snapshot.Categories))
@@ -236,9 +285,9 @@ func (s *GeneratedDocumentService) buildTrackerPolicyDocumentData(
 		})
 	}
 
-	thirdParties, err := s.buildTrackerPolicyThirdParties(ctx, scope, conn, banner.ID)
+	thirdParties, err := s.buildTrackerPolicyThirdParties(ctx, scope, conn, banner.ID, snapshot)
 	if err != nil {
-		return docgen.TrackerPolicyData{}, err
+		return docgen.TrackerPolicyData{}, gid.Nil, err
 	}
 
 	privacyPolicyURL := ""
@@ -248,155 +297,265 @@ func (s *GeneratedDocumentService) buildTrackerPolicyDocumentData(
 
 	return docgen.TrackerPolicyData{
 		OrganizationName:  organization.Name,
-		WebsiteOrigin:     banner.Origin,
-		GeneratedAt:       time.Now(),
+		WebsiteOrigin:     trackerPolicyWebsiteLabel(banner),
 		PrivacyPolicyURL:  privacyPolicyURL,
 		ConsentExpiryDays: snapshot.ConsentExpiryDays,
 		Categories:        categories,
 		ThirdParties:      thirdParties,
-	}, nil
+	}, version.ID, nil
+}
+
+// trackerPolicyInputsChanged reports whether a rendered policy no longer
+// matches the banner. The website label covers corsless and renames; the
+// published version id covers a newer banner snapshot.
+func trackerPolicyInputsChanged(
+	renderedLabel string,
+	renderedVersionID gid.GID,
+	banner *coredata.CookieBanner,
+	publishedVersionID gid.GID,
+) bool {
+	return trackerPolicyWebsiteLabel(banner) != renderedLabel || publishedVersionID != renderedVersionID
+}
+
+func trackerPolicyWebsiteLabel(banner *coredata.CookieBanner) string {
+	if banner.Capabilities.Corsless {
+		return sanitizeTrackerCell(banner.Name)
+	}
+
+	return banner.Origin
 }
 
 func (s *GeneratedDocumentService) buildTrackerPolicyThirdParties(
-	ctx context.Context, scope coredata.Scoper,
+	ctx context.Context,
+	scope coredata.Scoper,
 	conn pg.Querier,
 	cookieBannerID gid.GID,
+	snapshot coredata.CookieBannerVersionSnapshot,
 ) ([]docgen.TrackerPolicyThirdParty, error) {
-	var patterns coredata.TrackerPatterns
-
-	thirdPartyIDs, err := patterns.LoadDistinctThirdPartyIDsByCookieBannerID(ctx, conn, scope, cookieBannerID)
-	if err != nil {
-		return nil, fmt.Errorf("cannot load distinct third party ids: %w", err)
-	}
-
-	var thirdParties coredata.ThirdParties
-	if len(thirdPartyIDs) > 0 {
-		if err := thirdParties.LoadByIDs(ctx, conn, scope, thirdPartyIDs); err != nil {
-			return nil, fmt.Errorf("cannot load third parties: %w", err)
-		}
-	}
-
-	// Patterns not linked to an org ThirdParty still surface their catalog
-	// (CommonThirdParty) vendor, mirroring the banner's linkedThirdParties
-	// union, so the policy stays complete whether or not the vendor was
-	// imported into the org register.
-	commonPatternIDs, err := patterns.LoadDistinctCommonTrackerPatternIDsByCookieBannerID(ctx, conn, scope, cookieBannerID)
-	if err != nil {
-		return nil, fmt.Errorf("cannot load distinct common tracker pattern ids: %w", err)
-	}
-
-	var commonParties coredata.CommonThirdParties
-
-	if len(commonPatternIDs) > 0 {
-		var commonPatterns coredata.CommonTrackerPatterns
-		if err := commonPatterns.LoadByIDs(ctx, conn, commonPatternIDs); err != nil {
-			return nil, fmt.Errorf("cannot load common tracker patterns: %w", err)
-		}
-
-		seen := make(map[gid.GID]struct{}, len(commonPatterns))
-		commonThirdPartyIDs := make([]gid.GID, 0, len(commonPatterns))
-
-		for _, cp := range commonPatterns {
-			if cp.CommonThirdPartyID == nil {
-				continue
-			}
-
-			if _, ok := seen[*cp.CommonThirdPartyID]; ok {
-				continue
-			}
-
-			seen[*cp.CommonThirdPartyID] = struct{}{}
-			commonThirdPartyIDs = append(commonThirdPartyIDs, *cp.CommonThirdPartyID)
-		}
-
-		if len(commonThirdPartyIDs) > 0 {
-			if err := commonParties.LoadByIDs(ctx, conn, commonThirdPartyIDs); err != nil {
-				return nil, fmt.Errorf("cannot load common third parties: %w", err)
-			}
-		}
-	}
-
-	if len(thirdParties) == 0 && len(commonParties) == 0 {
+	keys := snapshotTrackerKeys(snapshot)
+	if len(keys) == 0 {
 		return nil, nil
 	}
 
-	rows := make([]docgen.TrackerPolicyThirdParty, 0, len(thirdParties)+len(commonParties))
+	// Category is live state. A published tracker may already be uncategorised.
+	filter := coredata.NewTrackerPatternFilter(nil, nil, new(false))
 
-	// Dedupe by name so a vendor present both as an org third party (one
-	// pattern) and as a catalog entry (an unlinked pattern) is listed
-	// once. Org third parties are appended first, so their richer
-	// (user-editable) data wins for a shared name. When the kept row left a
-	// field empty (e.g. an org third party with no privacy policy URL), a
-	// later duplicate backfills it from the catalog so common-vendor
-	// metadata is not dropped.
-	rowIndexByName := make(map[string]int, len(thirdParties)+len(commonParties))
+	seen := make(map[gid.GID]struct{})
 
-	addRow := func(name, description, privacyPolicyURL string) {
-		name = strings.TrimSpace(name)
-		description = collapseWhitespace(description)
-		privacyPolicyURL = strings.TrimSpace(privacyPolicyURL)
+	var commonPatternIDs []gid.GID
+
+	err := page.WalkAll(
+		ctx,
+		page.OrderBy[coredata.TrackerPatternOrderField]{
+			Field:     coredata.TrackerPatternOrderFieldCreatedAt,
+			Direction: page.OrderDirectionAsc,
+		},
+		func(ctx context.Context, cursor *page.Cursor[coredata.TrackerPatternOrderField]) (coredata.TrackerPatterns, error) {
+			var batch coredata.TrackerPatterns
+			if err := batch.LoadByCookieBannerID(ctx, conn, scope, cookieBannerID, cursor, filter); err != nil {
+				return nil, fmt.Errorf("cannot load tracker patterns: %w", err)
+			}
+
+			return batch, nil
+		},
+		func(batch coredata.TrackerPatterns) error {
+			commonPatternIDs = appendCommonPatternIDs(commonPatternIDs, seen, batch, keys)
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot walk tracker patterns: %w", err)
+	}
+
+	if len(commonPatternIDs) == 0 {
+		return nil, nil
+	}
+
+	var commonPatterns coredata.CommonTrackerPatterns
+	if err := commonPatterns.LoadByIDs(ctx, conn, commonPatternIDs); err != nil {
+		return nil, fmt.Errorf("cannot load common tracker patterns: %w", err)
+	}
+
+	seenParty := make(map[gid.GID]struct{}, len(commonPatterns))
+	commonThirdPartyIDs := make([]gid.GID, 0, len(commonPatterns))
+
+	for _, cp := range commonPatterns {
+		if cp.CommonThirdPartyID == nil {
+			continue
+		}
+
+		if _, ok := seenParty[*cp.CommonThirdPartyID]; ok {
+			continue
+		}
+
+		seenParty[*cp.CommonThirdPartyID] = struct{}{}
+		commonThirdPartyIDs = append(commonThirdPartyIDs, *cp.CommonThirdPartyID)
+	}
+
+	if len(commonThirdPartyIDs) == 0 {
+		return nil, nil
+	}
+
+	var commonParties coredata.CommonThirdParties
+	if err := commonParties.LoadByIDs(ctx, conn, commonThirdPartyIDs); err != nil {
+		return nil, fmt.Errorf("cannot load common third parties: %w", err)
+	}
+
+	return collapseTrackerPolicyThirdParties(commonParties), nil
+}
+
+type snapshotTrackerKey struct {
+	trackerType coredata.TrackerType
+	pattern     string
+	maxAge      int
+}
+
+func snapshotTrackerMaxAge(maxAge *int) int {
+	if maxAge == nil {
+		return -1
+	}
+
+	return *maxAge
+}
+
+func snapshotTrackerKeys(
+	snapshot coredata.CookieBannerVersionSnapshot,
+) map[snapshotTrackerKey]struct{} {
+	keys := make(map[snapshotTrackerKey]struct{})
+
+	for _, category := range snapshot.Categories {
+		for _, cookie := range category.Cookies {
+			keys[snapshotTrackerKey{
+				trackerType: cookie.TrackerType,
+				pattern:     cookie.Name,
+				maxAge:      snapshotTrackerMaxAge(cookie.MaxAgeSeconds),
+			}] = struct{}{}
+		}
+	}
+
+	return keys
+}
+
+// Excluded and extension-sourced patterns are not attributed vendors.
+func commonPatternIDsForSnapshotTrackers(
+	patterns coredata.TrackerPatterns,
+	snapshot coredata.CookieBannerVersionSnapshot,
+) []gid.GID {
+	return appendCommonPatternIDs(nil, nil, patterns, snapshotTrackerKeys(snapshot))
+}
+
+func appendCommonPatternIDs(
+	ids []gid.GID,
+	seen map[gid.GID]struct{},
+	patterns coredata.TrackerPatterns,
+	keys map[snapshotTrackerKey]struct{},
+) []gid.GID {
+	if len(keys) == 0 {
+		return ids
+	}
+
+	if seen == nil {
+		seen = make(map[gid.GID]struct{})
+	}
+
+	for _, pattern := range patterns {
+		if pattern.Excluded {
+			continue
+		}
+
+		if pattern.Source != nil && *pattern.Source == coredata.CookieSourceExtension {
+			continue
+		}
+
+		if pattern.CommonTrackerPatternID == nil {
+			continue
+		}
+
+		key := snapshotTrackerKey{
+			trackerType: pattern.TrackerType,
+			pattern:     pattern.Pattern,
+			maxAge:      snapshotTrackerMaxAge(pattern.MaxAgeSeconds),
+		}
+		if _, ok := keys[key]; !ok {
+			continue
+		}
+
+		if _, ok := seen[*pattern.CommonTrackerPatternID]; ok {
+			continue
+		}
+
+		seen[*pattern.CommonTrackerPatternID] = struct{}{}
+		ids = append(ids, *pattern.CommonTrackerPatternID)
+	}
+
+	return ids
+}
+
+// collapseTrackerPolicyThirdParties folds catalog vendors that share a
+// display name into one policy row. LoadByIDs has no ORDER BY, so the
+// input is sorted by ID first. First-wins (and empty-URL backfill) then
+// keeps the same name casing and privacy-policy link on every
+// regeneration, even when two records disagree.
+func collapseTrackerPolicyThirdParties(
+	parties coredata.CommonThirdParties,
+) []docgen.TrackerPolicyThirdParty {
+	if len(parties) == 0 {
+		return nil
+	}
+
+	ordered := slices.Clone(parties)
+	slices.SortFunc(
+		ordered,
+		func(a, b *coredata.CommonThirdParty) int {
+			return bytes.Compare(a.ID[:], b.ID[:])
+		},
+	)
+
+	rows := make([]docgen.TrackerPolicyThirdParty, 0, len(ordered))
+	rowIndexByName := make(map[string]int, len(ordered))
+
+	for _, cp := range ordered {
+		name := strings.TrimSpace(cp.Name)
+
+		privacyPolicyURL := ""
+		if cp.PrivacyPolicyURL != nil {
+			privacyPolicyURL = strings.TrimSpace(*cp.PrivacyPolicyURL)
+		}
 
 		key := strings.ToLower(name)
 		if idx, ok := rowIndexByName[key]; ok {
-			if rows[idx].Description == "" {
-				rows[idx].Description = description
-			}
-
 			if rows[idx].PrivacyPolicyURL == "" {
 				rows[idx].PrivacyPolicyURL = privacyPolicyURL
 			}
 
-			return
+			continue
 		}
 
 		rowIndexByName[key] = len(rows)
-
 		rows = append(rows, docgen.TrackerPolicyThirdParty{
 			Name:             name,
-			Description:      description,
+			Description:      "",
 			PrivacyPolicyURL: privacyPolicyURL,
 		})
 	}
 
-	for _, tp := range thirdParties {
-		description := ""
-		if tp.Description != nil {
-			description = *tp.Description
-		}
+	slices.SortFunc(
+		rows,
+		func(a, b docgen.TrackerPolicyThirdParty) int {
+			if c := strings.Compare(a.Name, b.Name); c != 0 {
+				return c
+			}
 
-		privacyPolicyURL := ""
-		if tp.PrivacyPolicyURL != nil {
-			privacyPolicyURL = *tp.PrivacyPolicyURL
-		}
+			if c := strings.Compare(a.Description, b.Description); c != 0 {
+				return c
+			}
 
-		addRow(tp.Name, description, privacyPolicyURL)
-	}
+			return strings.Compare(a.PrivacyPolicyURL, b.PrivacyPolicyURL)
+		},
+	)
 
-	for _, cp := range commonParties {
-		privacyPolicyURL := ""
-		if cp.PrivacyPolicyURL != nil {
-			privacyPolicyURL = *cp.PrivacyPolicyURL
-		}
-
-		addRow(cp.Name, "", privacyPolicyURL)
-	}
-
-	// LoadByIDs returns rows in an unspecified order (no ORDER BY), so sort
-	// here to keep the generated policy document deterministic across
-	// regenerations.
-	slices.SortFunc(rows, func(a, b docgen.TrackerPolicyThirdParty) int {
-		if c := strings.Compare(a.Name, b.Name); c != 0 {
-			return c
-		}
-
-		if c := strings.Compare(a.Description, b.Description); c != 0 {
-			return c
-		}
-
-		return strings.Compare(a.PrivacyPolicyURL, b.PrivacyPolicyURL)
-	})
-
-	return rows, nil
+	return rows
 }
 
 // trackerPurpose returns a table-safe purpose string for a tracker, falling

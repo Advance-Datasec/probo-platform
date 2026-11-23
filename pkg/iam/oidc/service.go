@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package oidc
 
@@ -22,6 +28,7 @@ import (
 	cryptorand "crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
@@ -64,6 +71,10 @@ type (
 		// the email_verified claim does not need to be present in
 		// the ID token.
 		trustProviderEmail bool
+
+		// requireEmailDomainOwnerVerified requires the "xms_edov"
+		// claim (nOAuth mitigation).
+		requireEmailDomainOwnerVerified bool
 	}
 
 	UserInfo struct {
@@ -112,6 +123,9 @@ type (
 		EmailVerified any     `json:"email_verified"`
 		Name          string  `json:"name"`
 		HostedDomain  string  `json:"hd"`
+
+		// EmailDomainOwnerVerified is Microsoft's "xms_edov" domain-ownership claim.
+		EmailDomainOwnerVerified any `json:"xms_edov"`
 	}
 )
 
@@ -141,6 +155,38 @@ func (c *idTokenClaims) isEmailVerified() bool {
 	return false
 }
 
+func (c *idTokenClaims) isEmailDomainOwnerVerified() bool {
+	switch v := c.EmailDomainOwnerVerified.(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(v, "true")
+	}
+
+	return false
+}
+
+func validateIDTokenClaims(info *providerInfo, claims *idTokenClaims, allowPersonal bool) error {
+	if claims.Email == "" {
+		return NewMissingEmailClaimError()
+	}
+
+	isEnterprise := info.enterpriseChecker(claims)
+	if !isEnterprise && !allowPersonal {
+		return NewPersonalAccountNotAllowedError()
+	}
+
+	if !info.trustProviderEmail && !claims.isEmailVerified() {
+		return NewEmailNotVerifiedError()
+	}
+
+	if info.requireEmailDomainOwnerVerified && isEnterprise && !claims.isEmailDomainOwnerVerified() {
+		return NewEmailNotVerifiedError()
+	}
+
+	return nil
+}
+
 var (
 	googleEndpoint = oauth2.Endpoint{
 		AuthURL:  "https://accounts.google.com/o/oauth2/v2/auth",
@@ -159,6 +205,9 @@ const (
 	microsoftJWKSURL          = "https://login.microsoftonline.com/common/discovery/v2.0/keys"
 	microsoftConsumerTenantID = "9188040d-6c67-4c5b-b112-36a304b66dad"
 	jwksCacheTTL              = 1 * time.Hour
+
+	// LoginAttemptTTL is how long a pending OIDC login can be finished.
+	LoginAttemptTTL = 10 * time.Minute
 )
 
 func NewService(
@@ -208,8 +257,11 @@ func NewService(
 				RedirectURL:  baseURL + "/api/connect/v1/oidc/microsoft/callback",
 				Scopes:       []string{"openid", "email", "profile"},
 			},
-			jwksURL:            microsoftJWKSURL,
-			trustProviderEmail: true,
+			jwksURL: microsoftJWKSURL,
+			// Microsoft never emits email_verified; nOAuth is
+			// mitigated by the required xms_edov claim below.
+			trustProviderEmail:              true,
+			requireEmailDomainOwnerVerified: true,
 			issuerValidator: func(iss string) bool {
 				return strings.HasPrefix(iss, "https://login.microsoftonline.com/") &&
 					strings.HasSuffix(iss, "/v2.0")
@@ -275,25 +327,30 @@ func (s *Service) InitiateLogin(
 	provider coredata.OIDCProvider,
 	continueURL string,
 	organizationID *gid.GID,
-) (string, error) {
+) (string, string, error) {
 	info, ok := s.providers[provider]
 	if !ok {
-		return "", NewProviderNotEnabledError(provider)
+		return "", "", NewProviderNotEnabledError(provider)
 	}
 
 	state, err := generateRandomString(32)
 	if err != nil {
-		return "", fmt.Errorf("cannot generate state: %w", err)
+		return "", "", fmt.Errorf("cannot generate state: %w", err)
 	}
 
 	nonce, err := generateRandomString(32)
 	if err != nil {
-		return "", fmt.Errorf("cannot generate nonce: %w", err)
+		return "", "", fmt.Errorf("cannot generate nonce: %w", err)
+	}
+
+	browserNonce, err := generateRandomString(32)
+	if err != nil {
+		return "", "", fmt.Errorf("cannot generate browser nonce: %w", err)
 	}
 
 	codeVerifier, err := generateRandomString(64)
 	if err != nil {
-		return "", fmt.Errorf("cannot generate code verifier: %w", err)
+		return "", "", fmt.Errorf("cannot generate code verifier: %w", err)
 	}
 
 	now := time.Now()
@@ -301,11 +358,12 @@ func (s *Service) InitiateLogin(
 		ID:             state,
 		Provider:       provider,
 		Nonce:          nonce,
+		BrowserNonce:   browserNonce,
 		CodeVerifier:   codeVerifier,
 		ContinueURL:    continueURL,
 		OrganizationID: organizationID,
 		CreatedAt:      now,
-		ExpiresAt:      now.Add(10 * time.Minute),
+		ExpiresAt:      now.Add(LoginAttemptTTL),
 	}
 
 	err = s.pg.WithTx(
@@ -319,7 +377,7 @@ func (s *Service) InitiateLogin(
 		},
 	)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	codeChallenge := computeCodeChallenge(codeVerifier)
@@ -331,7 +389,24 @@ func (s *Service) InitiateLogin(
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
 	)
 
-	return authURL, nil
+	return authURL, browserNonce, nil
+}
+
+// ContinueURLFromCallbackState loads and removes a pending login when browserNonce
+// matches that attempt, and returns its continue URL. Used when the IdP callback
+// fails before an authorization code is exchanged.
+func (s *Service) ContinueURLFromCallbackState(
+	ctx context.Context,
+	provider coredata.OIDCProvider,
+	stateParam string,
+	browserNonce string,
+) (string, error) {
+	oidcState, err := s.consumeOIDCState(ctx, provider, stateParam, browserNonce)
+	if err != nil {
+		return "", err
+	}
+
+	return oidcState.ContinueURL, nil
 }
 
 func (s *Service) HandleCallback(
@@ -339,42 +414,16 @@ func (s *Service) HandleCallback(
 	provider coredata.OIDCProvider,
 	stateParam string,
 	code string,
+	browserNonce string,
 ) (*coredata.Identity, string, *gid.GID, error) {
 	info, ok := s.providers[provider]
 	if !ok {
 		return nil, "", nil, NewProviderNotEnabledError(provider)
 	}
 
-	var oidcState coredata.OIDCState
-
-	err := s.pg.WithTx(
-		ctx,
-		func(ctx context.Context, tx pg.Tx) error {
-			if err := oidcState.LoadByIDForUpdate(ctx, tx, stateParam); err != nil {
-				if errors.Is(err, coredata.ErrResourceNotFound) {
-					return NewInvalidStateError()
-				}
-
-				return fmt.Errorf("cannot load oidc state: %w", err)
-			}
-
-			if err := oidcState.Delete(ctx, tx); err != nil {
-				return fmt.Errorf("cannot delete oidc state: %w", err)
-			}
-
-			return nil
-		},
-	)
+	oidcState, err := s.consumeOIDCState(ctx, provider, stateParam, browserNonce)
 	if err != nil {
-		return nil, "", nil, err
-	}
-
-	if time.Now().After(oidcState.ExpiresAt) {
-		return nil, "", nil, NewInvalidStateError()
-	}
-
-	if oidcState.Provider != provider {
-		return nil, "", nil, NewInvalidStateError()
+		return nil, oidcState.ContinueURL, nil, err
 	}
 
 	token, err := info.oauth2Config.Exchange(
@@ -383,34 +432,30 @@ func (s *Service) HandleCallback(
 		oauth2.SetAuthURLParam("code_verifier", oidcState.CodeVerifier),
 	)
 	if err != nil {
-		return nil, "", nil, NewCodeExchangeError(err)
+		return nil, oidcState.ContinueURL, nil, NewCodeExchangeError(err)
 	}
 
 	rawIDToken, ok := token.Extra("id_token").(string)
 	if !ok {
-		return nil, "", nil, NewIDTokenMissingError()
+		return nil, oidcState.ContinueURL, nil, NewIDTokenMissingError()
 	}
 
 	claims, err := s.verifyAndParseIDToken(ctx, info, rawIDToken, oidcState.Nonce)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("cannot verify id token: %w", err)
+		return nil, oidcState.ContinueURL, nil, fmt.Errorf("cannot verify id token: %w", err)
 	}
 
-	if claims.Email == "" {
-		return nil, "", nil, NewMissingEmailClaimError()
-	}
-
-	if !info.trustProviderEmail && !claims.isEmailVerified() {
-		return nil, "", nil, NewEmailNotVerifiedError()
-	}
-
-	if !info.enterpriseChecker(claims) {
-		return nil, "", nil, NewPersonalAccountNotAllowedError()
+	if err := validateIDTokenClaims(
+		info,
+		claims,
+		s.allowsPersonalAccounts(ctx, oidcState.ContinueURL),
+	); err != nil {
+		return nil, oidcState.ContinueURL, nil, err
 	}
 
 	email, err := mail.ParseAddr(claims.Email)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("cannot parse email from id token: %w", err)
+		return nil, oidcState.ContinueURL, nil, fmt.Errorf("cannot parse email from id token: %w", err)
 	}
 
 	var identity *coredata.Identity
@@ -431,7 +476,7 @@ func (s *Service) HandleCallback(
 				identity = &coredata.Identity{
 					ID:                   gid.New(gid.NilTenant, coredata.IdentityEntityType),
 					EmailAddress:         email,
-					FullName:             claims.Name,
+					FullName:             strings.TrimSpace(claims.Name),
 					EmailAddressVerified: true,
 					CreatedAt:            now,
 					UpdatedAt:            now,
@@ -457,7 +502,7 @@ func (s *Service) HandleCallback(
 		},
 	)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, oidcState.ContinueURL, nil, err
 	}
 
 	return identity, oidcState.ContinueURL, oidcState.OrganizationID, nil
@@ -650,8 +695,8 @@ func parseJWK(k jwk) (crypto.PublicKey, error) {
 
 		return &ecdsa.PublicKey{
 			Curve: curve,
-			X:     new(big.Int).SetBytes(xBytes),
-			Y:     new(big.Int).SetBytes(yBytes),
+			X:     new(big.Int).SetBytes(xBytes), //nolint:staticcheck // JWK stores coordinates as separate fields
+			Y:     new(big.Int).SetBytes(yBytes), //nolint:staticcheck // JWK stores coordinates as separate fields
 		}, nil
 
 	default:
@@ -704,6 +749,64 @@ func verifySignature(alg string, key crypto.PublicKey, signedContent []byte, sig
 	default:
 		return fmt.Errorf("cannot verify signature: unsupported algorithm %s", alg)
 	}
+}
+
+// A browser-nonce mismatch leaves the row in place.
+func (s *Service) consumeOIDCState(
+	ctx context.Context,
+	provider coredata.OIDCProvider,
+	stateParam string,
+	browserNonce string,
+) (coredata.OIDCState, error) {
+	if stateParam == "" {
+		return coredata.OIDCState{}, NewInvalidStateError()
+	}
+
+	var oidcState coredata.OIDCState
+
+	err := s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, tx pg.Tx) error {
+			if err := oidcState.LoadByIDForUpdate(ctx, tx, stateParam); err != nil {
+				if errors.Is(err, coredata.ErrResourceNotFound) {
+					return NewInvalidStateError()
+				}
+
+				return fmt.Errorf("cannot load oidc state: %w", err)
+			}
+
+			if !browserNonceMatches(oidcState.BrowserNonce, browserNonce) {
+				return NewBrowserBindingError()
+			}
+
+			if err := oidcState.Delete(ctx, tx); err != nil {
+				return fmt.Errorf("cannot delete oidc state: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return oidcState, err
+	}
+
+	if time.Now().After(oidcState.ExpiresAt) {
+		return oidcState, NewInvalidStateError()
+	}
+
+	if oidcState.Provider != provider {
+		return oidcState, NewInvalidStateError()
+	}
+
+	return oidcState, nil
+}
+
+func browserNonceMatches(stored, provided string) bool {
+	if stored == "" || provided == "" || len(stored) != len(provided) {
+		return false
+	}
+
+	return subtle.ConstantTimeCompare([]byte(stored), []byte(provided)) == 1
 }
 
 func computeCodeChallenge(codeVerifier string) string {

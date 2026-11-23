@@ -1,19 +1,26 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
+import { catchResultValue } from "@probo/helpers";
 import { Badge, Button, IconCrossLargeX, useConfirm } from "@probo/ui";
+import { useTranslation } from "react-i18next";
 import { useFragment, useMutation } from "react-relay";
 import { graphql } from "relay-runtime";
 
@@ -25,6 +32,20 @@ import { DocumentApprovalListItem } from "./DocumentApprovalListItem";
 const versionFragment = graphql`
   fragment DocumentApprovalList_versionFragment on DocumentVersion {
     id
+    document {
+      organization {
+        employeePortals(
+          first: 1
+          orderBy: { field: CREATED_AT, direction: ASC }
+        ) @catch(to: RESULT) {
+          edges {
+            node {
+              id
+            }
+          }
+        }
+      }
+    }
     approvalQuorums(first: 100, orderBy: { field: CREATED_AT, direction: DESC }) {
       edges {
         node {
@@ -68,9 +89,13 @@ export function DocumentApprovalList(props: {
   versionFragmentRef: DocumentApprovalList_versionFragment$key;
 }) {
   const { versionFragmentRef } = props;
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   const version = useFragment(versionFragment, versionFragmentRef);
+  const employeePortalId = catchResultValue(
+    version.document.organization.employeePortals,
+    "cannot list employee portals",
+  )?.edges[0]?.node.id ?? null;
 
   const lastQuorum = version.approvalQuorums?.edges?.[0]?.node ?? null;
   const isPending = lastQuorum?.status === "PENDING";
@@ -99,10 +124,8 @@ export function DocumentApprovalList(props: {
           });
         }),
       {
-        message: __(
-          "This will void the current approval request and return the version to draft. This action cannot be undone.",
-        ),
-        label: __("Void approval"),
+        message: t("documentApprovalList.confirmation.void"),
+        label: t("documentApprovalList.actions.void"),
         variant: "danger",
       },
     );
@@ -116,10 +139,10 @@ export function DocumentApprovalList(props: {
   } as const;
 
   const statusLabel = {
-    PENDING: __("Pending"),
-    APPROVED: __("Approved"),
-    REJECTED: __("Rejected"),
-    VOIDED: __("Voided"),
+    PENDING: t("documentApprovalList.status.pending"),
+    APPROVED: t("documentApprovalList.status.approved"),
+    REJECTED: t("documentApprovalList.status.rejected"),
+    VOIDED: t("documentApprovalList.status.voided"),
   } as const;
 
   return (
@@ -136,7 +159,7 @@ export function DocumentApprovalList(props: {
               onClick={handleVoid}
               disabled={isVoiding}
             >
-              {__("Cancel")}
+              {t("documentApprovalList.actions.cancel")}
             </Button>
           )}
         </div>
@@ -145,7 +168,7 @@ export function DocumentApprovalList(props: {
       {edges.length === 0
         ? (
             <div className="text-sm text-txt-secondary text-center py-8">
-              {__("No approval decisions yet.")}
+              {t("documentApprovalList.empty")}
             </div>
           )
         : (
@@ -154,6 +177,7 @@ export function DocumentApprovalList(props: {
                 <DocumentApprovalListItem
                   key={node.id}
                   fragmentRef={node}
+                  employeePortalId={employeePortalId}
                 />
               ))}
             </div>

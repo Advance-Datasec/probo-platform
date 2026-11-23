@@ -5,9 +5,11 @@
 
   Placeholders are substituted by build.sh:
 
-    @@VERSION@@       agent version, e.g. 0.1.0
-    @@PKG_ARCH@@      payload pkgbuild architecture (x86_64 or arm64)
-    @@HOST_ARCHS@@    host arch filter used by Installer.app
+    @@VERSION@@              agent version, e.g. 0.1.0 or 0.1.0-rc.1
+    @@INSTALLER_VERSION@@    X.Y.Z stripped of -rc.N (pkg-ref)
+    @@IDENTIFIER@@           package identifier (default com.probo.agent)
+
+  hostArchitectures is fixed to arm64,x86_64 (fat binary installer).
 -->
 <installer-gui-script minSpecVersion="2">
     <title>Probo Device Posture Agent @@VERSION@@</title>
@@ -20,7 +22,7 @@
     <options customize="never"
              require-scripts="true"
              rootVolumeOnly="true"
-             hostArchitectures="@@HOST_ARCHS@@"/>
+             hostArchitectures="arm64,x86_64"/>
 
     <!--
       Refuse installation on macOS older than 11 (Big Sur). The agent
@@ -37,20 +39,20 @@
     <license    file="license.txt"     mime-type="text/plain"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
 
-    <pkg-ref id="com.getprobo.agent"
-             version="@@VERSION@@"
+    <pkg-ref id="@@IDENTIFIER@@"
+             version="@@INSTALLER_VERSION@@"
              onConclusion="none">probo-agent-component.pkg</pkg-ref>
 
     <choices-outline>
         <line choice="default">
-            <line choice="com.getprobo.agent"/>
+            <line choice="@@IDENTIFIER@@"/>
         </line>
     </choices-outline>
 
     <choice id="default"/>
-    <choice id="com.getprobo.agent"
+    <choice id="@@IDENTIFIER@@"
             title="Probo Device Posture Agent"
-            description="Installs probo-agent to /usr/local/bin and the launchd unit to /Library/LaunchDaemons.">
-        <pkg-ref id="com.getprobo.agent"/>
+            description="Installs the Probo agent and menu bar helper. Enroll after install at your Probo /enroll page.">
+        <pkg-ref id="@@IDENTIFIER@@"/>
     </choice>
 </installer-gui-script>

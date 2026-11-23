@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -21,15 +27,18 @@ import (
 
 type (
 	DocumentFilter struct {
-		query                   *string
-		trustCenterVisibilities []TrustCenterVisibility
-		published               *bool
-		employeeIdentityID      *gid.GID
-		employeeFilterModes     []EmployeeFilterMode
-		documentTypes           []DocumentType
-		classifications         []DocumentClassification
-		writeModes              []DocumentWriteMode
-		status                  []DocumentStatus
+		query                        *string
+		compliancePortalVisibilities []CompliancePortalVisibility
+		compliancePortalID           *gid.GID
+		published                    *bool
+		employeeIdentityID           *gid.GID
+		employeeFilterModes          []EmployeeFilterMode
+		employeeSigned               *bool
+		employeeApprovalStates       []DocumentVersionApprovalDecisionState
+		documentTypes                []DocumentType
+		classifications              []DocumentClassification
+		writeModes                   []DocumentWriteMode
+		status                       []DocumentStatus
 	}
 )
 
@@ -39,13 +48,13 @@ func NewDocumentFilter(query *string) *DocumentFilter {
 	}
 }
 
-func NewDocumentTrustCenterFilter() *DocumentFilter {
+func NewDocumentCompliancePortalFilter() *DocumentFilter {
 	published := true
 
 	return &DocumentFilter{
-		trustCenterVisibilities: []TrustCenterVisibility{
-			TrustCenterVisibilityPrivate,
-			TrustCenterVisibilityPublic,
+		compliancePortalVisibilities: []CompliancePortalVisibility{
+			CompliancePortalVisibilityRestricted,
+			CompliancePortalVisibilityPublic,
 		},
 		published: &published,
 		status:    []DocumentStatus{DocumentStatusActive},
@@ -57,10 +66,34 @@ func (f *DocumentFilter) WithPublished(published *bool) *DocumentFilter {
 	return f
 }
 
+func (f *DocumentFilter) WithCompliancePortalID(compliancePortalID gid.GID) *DocumentFilter {
+	clone := *f
+	clone.compliancePortalID = &compliancePortalID
+
+	return &clone
+}
+
+func (f *DocumentFilter) WithCompliancePortalVisibilities(visibilities ...CompliancePortalVisibility) *DocumentFilter {
+	f.compliancePortalVisibilities = visibilities
+	return f
+}
+
 func (f *DocumentFilter) WithEmployeeIdentityID(identityID *gid.GID, modes ...EmployeeFilterMode) *DocumentFilter {
 	f.employeeIdentityID = identityID
 	f.employeeFilterModes = modes
 
+	return f
+}
+
+func (f *DocumentFilter) WithSigned(signed *bool) *DocumentFilter {
+	f.employeeSigned = signed
+	return f
+}
+
+func (f *DocumentFilter) WithApprovalStates(
+	states []DocumentVersionApprovalDecisionState,
+) *DocumentFilter {
+	f.employeeApprovalStates = states
 	return f
 }
 
@@ -86,9 +119,9 @@ func (f *DocumentFilter) WithStatus(status []DocumentStatus) *DocumentFilter {
 
 func (f *DocumentFilter) SQLArguments() pgx.NamedArgs {
 	var visibilities []string
-	if f.trustCenterVisibilities != nil {
-		visibilities = make([]string, len(f.trustCenterVisibilities))
-		for i, v := range f.trustCenterVisibilities {
+	if f.compliancePortalVisibilities != nil {
+		visibilities = make([]string, len(f.compliancePortalVisibilities))
+		for i, v := range f.compliancePortalVisibilities {
 			visibilities[i] = v.String()
 		}
 	}
@@ -130,16 +163,33 @@ func (f *DocumentFilter) SQLArguments() pgx.NamedArgs {
 		employeeFilterModes = append(employeeFilterModes, string(m))
 	}
 
+	var employeeApprovalStates []string
+	if f.employeeApprovalStates != nil {
+		employeeApprovalStates = make([]string, len(f.employeeApprovalStates))
+		for i, state := range f.employeeApprovalStates {
+			employeeApprovalStates[i] = state.String()
+		}
+	}
+
+	var compliancePortalID any
+	if f.compliancePortalID != nil {
+		compliancePortalID = f.compliancePortalID.String()
+	}
+
 	return pgx.NamedArgs{
-		"query":                     f.query,
-		"trust_center_visibilities": visibilities,
-		"published":                 f.published,
-		"employee_identity_id":      f.employeeIdentityID,
-		"employee_filter_modes":     employeeFilterModes,
-		"document_types":            documentTypes,
-		"classifications":           classifications,
-		"write_modes":               writeModes,
-		"document_status":           status,
+		"query":                                   f.query,
+		"compliance_portal_id":                    compliancePortalID,
+		"compliance_portal_visibilities":          visibilities,
+		"published":                               f.published,
+		"employee_identity_id":                    f.employeeIdentityID,
+		"employee_filter_modes":                   employeeFilterModes,
+		"employee_signed":                         f.employeeSigned,
+		"employee_approval_states":                employeeApprovalStates,
+		"document_version_signature_state_signed": DocumentVersionSignatureStateSigned,
+		"document_types":                          documentTypes,
+		"classifications":                         classifications,
+		"write_modes":                             writeModes,
+		"document_status":                         status,
 	}
 }
 
@@ -147,23 +197,28 @@ func (f *DocumentFilter) SQLFragment() string {
 	return `
 (
 	CASE
-		WHEN @query::text IS NOT NULL AND @query::text != '' THEN
-			(
-				SELECT dv.search_vector
-				FROM document_versions dv
-				WHERE dv.document_id = documents.id
-				ORDER BY dv.major DESC, dv.minor DESC
-				LIMIT 1
-			) @@ (
-				SELECT to_tsquery('simple', string_agg(lexeme || ':*', ' & '))
-				FROM unnest(regexp_split_to_array(trim(@query::text), '\s+')) AS lexeme
+		WHEN to_tsvector('simple', translate(COALESCE(@query::text, ''), '-+', '  ')) <> ''::tsvector THEN
+			documents.search_vector @@ (
+				SELECT to_tsquery('simple', string_agg(quote_literal(lexeme) || ':*', ' & '))
+				FROM unnest(to_tsvector('simple', translate(COALESCE(@query::text, ''), '-+', '  '))) AS lex(lexeme, positions)
 			)
 		ELSE TRUE
 	END
 	AND
 	CASE
-		WHEN @trust_center_visibilities::trust_center_visibility[] IS NOT NULL THEN
-			trust_center_visibility = ANY(@trust_center_visibilities::trust_center_visibility[])
+		WHEN @compliance_portal_id::text IS NOT NULL
+			AND @compliance_portal_visibilities::compliance_portal_visibility[] IS NOT NULL THEN
+			EXISTS (
+				SELECT 1
+				FROM cp_documents
+				WHERE cp_documents.document_id = documents.id
+					AND cp_documents.compliance_portal_id = @compliance_portal_id
+					AND cp_documents.visibility = ANY(
+						@compliance_portal_visibilities::compliance_portal_visibility[]
+					)
+			)
+		WHEN @compliance_portal_visibilities::compliance_portal_visibility[] IS NOT NULL THEN
+			FALSE
 		ELSE TRUE
 	END
 	AND
@@ -203,26 +258,53 @@ func (f *DocumentFilter) SQLFragment() string {
 	END
 	AND
 	CASE
-		WHEN @document_types::document_type[] IS NOT NULL THEN
-			(
-				SELECT dv.document_type
+		WHEN @employee_signed::boolean IS NULL THEN TRUE
+		ELSE (
+			EXISTS (
+				WITH max_signable_major AS (
+					SELECT MAX(dv.major) AS major
+					FROM document_versions dv
+					INNER JOIN document_version_signatures dvs ON dvs.document_version_id = dv.id
+					INNER JOIN iam_membership_profiles p ON dvs.signed_by_profile_id = p.id
+					WHERE dv.document_id = documents.id
+						AND p.identity_id = @employee_identity_id::text
+				)
+				SELECT 1
 				FROM document_versions dv
+				INNER JOIN max_signable_major msm ON dv.major = msm.major
+				INNER JOIN document_version_signatures dvs ON dvs.document_version_id = dv.id
+				INNER JOIN iam_membership_profiles p ON dvs.signed_by_profile_id = p.id
 				WHERE dv.document_id = documents.id
-				ORDER BY dv.major DESC, dv.minor DESC
-				LIMIT 1
-			) = ANY(@document_types::document_type[])
+					AND p.identity_id = @employee_identity_id::text
+					AND dvs.state::text = @document_version_signature_state_signed::text
+			)
+		) = @employee_signed::boolean
+	END
+	AND
+	CASE
+		WHEN @employee_approval_states::text[] IS NULL THEN TRUE
+		ELSE (
+			SELECT dvad.state::text
+			FROM document_versions dv
+			INNER JOIN document_version_approval_quorums dvaq ON dvaq.version_id = dv.id
+			INNER JOIN document_version_approval_decisions dvad ON dvad.quorum_id = dvaq.id
+			INNER JOIN iam_membership_profiles p ON dvad.approver_id = p.id
+			WHERE dv.document_id = documents.id
+				AND p.identity_id = @employee_identity_id::text
+			ORDER BY dv.major DESC, dvaq.created_at DESC
+			LIMIT 1
+		) = ANY(@employee_approval_states::text[])
+	END
+	AND
+	CASE
+		WHEN @document_types::document_type[] IS NOT NULL THEN
+			documents.document_type = ANY(@document_types::document_type[])
 		ELSE TRUE
 	END
 	AND
 	CASE
 		WHEN @classifications::document_classification[] IS NOT NULL THEN
-			(
-				SELECT dv.classification
-				FROM document_versions dv
-				WHERE dv.document_id = documents.id
-				ORDER BY dv.major DESC, dv.minor DESC
-				LIMIT 1
-			) = ANY(@classifications::document_classification[])
+			documents.classification = ANY(@classifications::document_classification[])
 		ELSE TRUE
 	END
 	AND

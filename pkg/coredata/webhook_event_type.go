@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -24,15 +30,18 @@ import (
 type WebhookEventType string
 
 const (
-	WebhookEventTypeThirdPartyCreated WebhookEventType = "third-party:created"
-	WebhookEventTypeThirdPartyUpdated WebhookEventType = "third-party:updated"
-	WebhookEventTypeThirdPartyDeleted WebhookEventType = "third-party:deleted"
-	WebhookEventTypeUserCreated       WebhookEventType = "user:created"
-	WebhookEventTypeUserUpdated       WebhookEventType = "user:updated"
-	WebhookEventTypeUserDeleted       WebhookEventType = "user:deleted"
-	WebhookEventTypeObligationCreated WebhookEventType = "obligation:created"
-	WebhookEventTypeObligationUpdated WebhookEventType = "obligation:updated"
-	WebhookEventTypeObligationDeleted WebhookEventType = "obligation:deleted"
+	WebhookEventTypeThirdPartyCreated   WebhookEventType = "third-party:created"
+	WebhookEventTypeThirdPartyUpdated   WebhookEventType = "third-party:updated"
+	WebhookEventTypeThirdPartyDeleted   WebhookEventType = "third-party:deleted"
+	WebhookEventTypeUserCreated         WebhookEventType = "user:created"
+	WebhookEventTypeUserUpdated         WebhookEventType = "user:updated"
+	WebhookEventTypeUserDeleted         WebhookEventType = "user:deleted"
+	WebhookEventTypeObligationCreated   WebhookEventType = "obligation:created"
+	WebhookEventTypeObligationUpdated   WebhookEventType = "obligation:updated"
+	WebhookEventTypeObligationDeleted   WebhookEventType = "obligation:deleted"
+	WebhookEventTypeRightRequestCreated WebhookEventType = "right-request:created"
+	WebhookEventTypeRightRequestUpdated WebhookEventType = "right-request:updated"
+	WebhookEventTypeRightRequestDeleted WebhookEventType = "right-request:deleted"
 
 	WebhookEventTypeDocumentCreated    WebhookEventType = "document:created"
 	WebhookEventTypeDocumentUpdated    WebhookEventType = "document:updated"
@@ -55,6 +64,13 @@ const (
 	WebhookEventTypeDocumentVersionApprovalQuorumApproved  WebhookEventType = "document-version-approval-quorum:approved"
 	WebhookEventTypeDocumentVersionApprovalQuorumRejected  WebhookEventType = "document-version-approval-quorum:rejected"
 	WebhookEventTypeDocumentVersionApprovalQuorumVoided    WebhookEventType = "document-version-approval-quorum:voided"
+
+	WebhookEventTypeTaskCreated        WebhookEventType = "task:created"
+	WebhookEventTypeTaskUpdated        WebhookEventType = "task:updated"
+	WebhookEventTypeTaskDeleted        WebhookEventType = "task:deleted"
+	WebhookEventTypeTaskCommentCreated WebhookEventType = "task-comment:created"
+	WebhookEventTypeTaskCommentUpdated WebhookEventType = "task-comment:updated"
+	WebhookEventTypeTaskCommentDeleted WebhookEventType = "task-comment:deleted"
 )
 
 var (
@@ -75,6 +91,9 @@ func (v WebhookEventType) IsValid() bool {
 		WebhookEventTypeObligationCreated,
 		WebhookEventTypeObligationUpdated,
 		WebhookEventTypeObligationDeleted,
+		WebhookEventTypeRightRequestCreated,
+		WebhookEventTypeRightRequestUpdated,
+		WebhookEventTypeRightRequestDeleted,
 		WebhookEventTypeDocumentCreated,
 		WebhookEventTypeDocumentUpdated,
 		WebhookEventTypeDocumentArchived,
@@ -92,7 +111,13 @@ func (v WebhookEventType) IsValid() bool {
 		WebhookEventTypeDocumentVersionApprovalQuorumUpdated,
 		WebhookEventTypeDocumentVersionApprovalQuorumApproved,
 		WebhookEventTypeDocumentVersionApprovalQuorumRejected,
-		WebhookEventTypeDocumentVersionApprovalQuorumVoided:
+		WebhookEventTypeDocumentVersionApprovalQuorumVoided,
+		WebhookEventTypeTaskCreated,
+		WebhookEventTypeTaskUpdated,
+		WebhookEventTypeTaskDeleted,
+		WebhookEventTypeTaskCommentCreated,
+		WebhookEventTypeTaskCommentUpdated,
+		WebhookEventTypeTaskCommentDeleted:
 		return true
 	}
 

@@ -1,0 +1,482 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import {
+  type AutomergeUrl,
+  type DocHandle,
+  type DocHandleEphemeralMessagePayload,
+  type DocumentProgress,
+  Repo,
+} from "@automerge/automerge-repo";
+import {
+  deriveAutomergeUrl,
+  type RichEditorAutomergeDocument,
+  type RichEditorCollaborationHandle,
+  type RichEditorPresence,
+  type TextSelection,
+} from "@probo/ui";
+import {
+  pmSelectionFromPresence,
+  presenceFromPmSelection,
+  richEditorPresenceAdapter,
+} from "@probo/ui/src/RichEditor/repoPresence";
+
+import {
+  type PresenceEntry,
+  pruneStalePresences,
+  syncPresenceSelections,
+} from "./presence";
+import { RepoWebSocketAdapter } from "./repoSocket";
+
+// A collaboration handle for the editor, plus a close() that tears down the repo
+// and its network connection.
+export type RepoCollaborationHandle = RichEditorCollaborationHandle & {
+  close: () => void;
+};
+
+// How long a remote collaborator lingers after their last ephemeral before they
+// are pruned (three missed 10s heartbeats).
+export const presenceTimeToLiveMs = 30_000;
+
+// Heartbeat interval so idle peers stay listed while the tab is open.
+const presenceHeartbeatIntervalMs = 10_000;
+
+// Idle threshold: no caret/selection activity and the person is treated as
+// inactive (still connected, no caret).
+const presenceIdleMs = 60_000;
+
+// Covers a 20s document open and the server's 150s snapshot write ceiling on a
+// long-haul link.
+const initializationTimeoutMs = 180_000;
+
+// The gateway stamps review notices with this peer id (see NotifyReview in
+// pkg/collaboration). A client could also pick it as its join peer id, so this
+// is a best-effort origin filter rather than proof of server authorship: the
+// protocol has no authenticated sender marker. The rate limit below is the real
+// safeguard against a peer amplifying refetches across every open tab.
+const reviewSenderId = "probo-gateway";
+
+// Coalesce bursts of review notices so a flood cannot turn into one refetch per
+// notice in every open tab.
+const reviewInvalidationIntervalMs = 1_000;
+
+// The presence payload broadcast over repo ephemeral messages: a caret or
+// selection expressed as stable Automerge cursors. displayName, identityID, and
+// avatarURL are stamped by the gateway from the authenticated connection.
+type SelectionPresence = {
+  kind: "selection";
+  selection: TextSelection;
+  active: boolean;
+  displayName?: string;
+  identityID?: string;
+  avatarURL?: string;
+};
+
+function isCursor(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
+}
+
+function isTextSelection(value: unknown): value is TextSelection {
+  if (!value || typeof value !== "object") return false;
+  const selection = value as Record<string, unknown>;
+  return typeof selection.field === "string"
+    && selection.field !== ""
+    && isCursor(selection.anchor)
+    && isCursor(selection.head);
+}
+
+function isSelectionPresence(value: unknown): value is SelectionPresence {
+  if (!value || typeof value !== "object") return false;
+  const message = value as Record<string, unknown>;
+  return message.kind === "selection"
+    && typeof message.active === "boolean"
+    && isTextSelection(message.selection);
+}
+
+function isReviewPresence(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  return (value as { kind?: unknown }).kind === "document-review";
+}
+
+function isDeparturePresence(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  return (value as { kind?: unknown }).kind === "departure";
+}
+
+// For a plain automerge: URL (no heads or path), findWithProgress returns the
+// DocumentQuery itself, which exposes the handle before the document is ready.
+// The public DocumentProgress type omits it.
+type DocumentProgressWithHandle<T> = DocumentProgress<T> & {
+  handle?: DocHandle<T>;
+};
+
+export type RepoCollaborationMode = "viewing" | "editing" | "suggesting";
+
+// connectRepoDocument connects to the automerge-repo collaboration endpoint for a
+// document, finds the (server-seeded) document, and returns a handle the
+// editor can drive. Presence rides repo ephemeral messages carrying stable
+// cursors, so remote carets stay anchored while other people type.
+export async function connectRepoDocument(
+  documentId: string,
+  mode: RepoCollaborationMode = "viewing",
+): Promise<RepoCollaborationHandle> {
+  const endpoint = new URL(window.location.origin);
+  endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
+  endpoint.pathname = [
+    "api",
+    "console",
+    "v1",
+    "documents",
+    encodeURIComponent(documentId),
+    "collaboration",
+  ].join("/");
+  endpoint.searchParams.set("mode", mode);
+
+  const network = new RepoWebSocketAdapter(endpoint.toString());
+  const repo = new Repo({ network: [network] });
+
+  const documentURL = (await deriveAutomergeUrl(documentId)) as AutomergeUrl;
+
+  const progress = repo.findWithProgress<RichEditorAutomergeDocument>(
+    documentURL,
+  ) as DocumentProgressWithHandle<RichEditorAutomergeDocument>;
+  const handle = progress.handle;
+  if (!handle) {
+    void repo.shutdown();
+    throw new Error("automerge-repo did not expose the document handle before sync");
+  }
+
+  const adapter = richEditorPresenceAdapter();
+  const collaboration = handle as unknown as RepoCollaborationHandle;
+
+  let lastSelection: TextSelection | undefined;
+  let lastActivityAt = Date.now();
+  let lastBroadcastActive: boolean | undefined;
+  let documentReady = false;
+  const pendingEphemerals: DocHandleEphemeralMessagePayload<
+    RichEditorAutomergeDocument
+  >[] = [];
+  const latest = new Map<string, PresenceEntry>();
+  const listeners = new Set<(presences: RichEditorPresence[]) => void>();
+  const reviewListeners = new Set<() => void>();
+  let closed = false;
+  let pendingReview = false;
+  let lastReviewAt = 0;
+  let reviewFlushTimer: number | undefined;
+
+  const localActive = (): boolean => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      return false;
+    }
+    return Date.now() - lastActivityAt < presenceIdleMs;
+  };
+
+  const broadcastSelection = (selection: TextSelection, active: boolean) => {
+    handle.broadcast({
+      kind: "selection",
+      selection,
+      active,
+    } satisfies SelectionPresence);
+    lastBroadcastActive = active;
+  };
+
+  const publishPresence = () => {
+    if (!lastSelection) return;
+    const active = localActive();
+    broadcastSelection(lastSelection, active);
+  };
+
+  collaboration.onReview = (listener) => {
+    reviewListeners.add(listener);
+    // A notice can land before the page subscribes (onReview is wired before
+    // whenReady, but the page subscribes only after connectRepoDocument
+    // resolves). Replay the buffered invalidation so the margin is not stale.
+    if (pendingReview) {
+      pendingReview = false;
+      listener();
+    }
+    return () => {
+      reviewListeners.delete(listener);
+    };
+  };
+
+  const dispatchReview = () => {
+    if (reviewListeners.size === 0) {
+      pendingReview = true;
+      return;
+    }
+    for (const listener of reviewListeners) listener();
+  };
+
+  const invalidateReview = () => {
+    const now = Date.now();
+    const elapsed = now - lastReviewAt;
+    if (elapsed >= reviewInvalidationIntervalMs) {
+      lastReviewAt = now;
+      dispatchReview();
+      return;
+    }
+    if (reviewFlushTimer !== undefined) return;
+    reviewFlushTimer = window.setTimeout(() => {
+      reviewFlushTimer = undefined;
+      lastReviewAt = Date.now();
+      dispatchReview();
+    }, reviewInvalidationIntervalMs - elapsed);
+  };
+
+  collaboration.updatePresence = (anchorPosition, headPosition) => {
+    const document = handle.doc();
+    if (!document) return;
+
+    const selection = presenceFromPmSelection(
+      adapter,
+      document,
+      anchorPosition,
+      headPosition,
+    );
+    if (!selection) return;
+
+    lastSelection = selection;
+    lastActivityAt = Date.now();
+    publishPresence();
+  };
+
+  const emitPresences = () => {
+    const now = Date.now();
+    for (const [peer, entry] of latest) {
+      if (now - entry.at > presenceTimeToLiveMs) {
+        latest.delete(peer);
+      }
+    }
+    const presences = pruneStalePresences(
+      latest.values(),
+      now,
+      presenceTimeToLiveMs,
+    );
+    for (const listener of listeners) {
+      listener(presences);
+    }
+  };
+
+  const applyEphemeral = (
+    payload: DocHandleEphemeralMessagePayload<RichEditorAutomergeDocument>,
+  ) => {
+    const sender = String(payload.senderId);
+    if (isDeparturePresence(payload.message)) {
+      if (!latest.delete(sender)) return;
+      emitPresences();
+      return;
+    }
+
+    if (isReviewPresence(payload.message)) {
+      if (sender !== reviewSenderId) return;
+      invalidateReview();
+      return;
+    }
+
+    if (!isSelectionPresence(payload.message)) return;
+
+    const document = handle.doc();
+    if (!document) return;
+
+    // A peer cursor can throw inside Automerge. Keep the ephemeral handler alive.
+    let resolved: ReturnType<typeof pmSelectionFromPresence>;
+    try {
+      resolved = pmSelectionFromPresence(
+        adapter,
+        document,
+        payload.message.selection,
+      );
+    } catch {
+      resolved = null;
+    }
+    const now = Date.now();
+    const displayName = typeof payload.message.displayName === "string"
+      ? payload.message.displayName.trim()
+      : undefined;
+    const identityID = typeof payload.message.identityID === "string"
+      && payload.message.identityID !== ""
+      ? payload.message.identityID
+      : sender;
+    const avatarURL = typeof payload.message.avatarURL === "string"
+      ? payload.message.avatarURL.trim()
+      : undefined;
+    const active = payload.message.active;
+
+    const previous = latest.get(sender);
+    const isNewSender = !previous;
+    if (resolved) {
+      latest.set(sender, {
+        at: now,
+        selection: payload.message.selection,
+        presence: {
+          connectionID: sender,
+          identityID,
+          displayName: displayName || undefined,
+          avatarURL: avatarURL || undefined,
+          active,
+          anchorPosition: resolved.anchorPosition,
+          headPosition: resolved.headPosition,
+        },
+      });
+    } else if (previous) {
+      // Heartbeat / selection that no longer resolves: keep the last caret but
+      // refresh liveness and identity fields so the peer is not pruned.
+      latest.set(sender, {
+        at: now,
+        selection: payload.message.selection,
+        presence: {
+          ...previous.presence,
+          identityID,
+          displayName: displayName || previous.presence.displayName,
+          avatarURL: avatarURL || previous.presence.avatarURL,
+          active,
+        },
+      });
+    } else {
+      return;
+    }
+
+    emitPresences();
+
+    // Answer a peer we have not seen yet so they do not wait for the idle
+    // heartbeat — including people connected through another server process.
+    if (isNewSender) {
+      publishPresence();
+    }
+  };
+
+  const handleEphemeral = (
+    payload: DocHandleEphemeralMessagePayload<RichEditorAutomergeDocument>,
+  ) => {
+    // A review notice only asks the sidebar to refetch. It does not depend on
+    // the document being ready, and it must not be dropped with unknown frames.
+    if (isReviewPresence(payload.message)) {
+      applyEphemeral(payload);
+      return;
+    }
+
+    if (!isSelectionPresence(payload.message) && !isDeparturePresence(payload.message)) {
+      return;
+    }
+
+    // Join snapshots can arrive while the CRDT is still syncing; hold them
+    // until offsets can be resolved against a ready document.
+    if (!documentReady) {
+      pendingEphemerals.push(payload);
+      return;
+    }
+
+    applyEphemeral(payload);
+  };
+
+  // Presence is delivered ahead of the edit it describes. Resolving it in that
+  // window pins the caret one edit behind, and the decoration then stays there.
+  // Re-resolve after the sync plugin has applied the change to the editor.
+  const refreshPresencePositions = () => {
+    if (closed) return;
+
+    const document = handle.doc();
+    if (!document) return;
+
+    const changed = syncPresenceSelections(latest, (selection) => {
+      try {
+        return pmSelectionFromPresence(adapter, document, selection);
+      } catch {
+        return null;
+      }
+    });
+    if (!changed) return;
+
+    emitPresences();
+  };
+  const onDocumentChange = () => {
+    queueMicrotask(refreshPresencePositions);
+  };
+  handle.on("change", onDocumentChange);
+  handle.on("ephemeral-message", handleEphemeral);
+
+  try {
+    await progress.whenReady({
+      signal: AbortSignal.timeout(initializationTimeoutMs),
+    });
+  } catch (error) {
+    closed = true;
+    handle.off("change", onDocumentChange);
+    handle.off("ephemeral-message", handleEphemeral);
+    void repo.shutdown();
+    throw error;
+  }
+
+  documentReady = true;
+  for (const payload of pendingEphemerals) {
+    applyEphemeral(payload);
+  }
+  pendingEphemerals.length = 0;
+
+  collaboration.onPresence = (listener) => {
+    listeners.add(listener);
+    listener(
+      pruneStalePresences(latest.values(), Date.now(), presenceTimeToLiveMs),
+    );
+    return () => {
+      listeners.delete(listener);
+    };
+  };
+
+  const heartbeat = window.setInterval(() => {
+    if (!lastSelection) return;
+    const active = localActive();
+    broadcastSelection(lastSelection, active);
+  }, presenceHeartbeatIntervalMs);
+
+  // Drop gone peers even when nobody else is broadcasting.
+  const prune = window.setInterval(() => {
+    if (latest.size === 0) return;
+    emitPresences();
+  }, presenceHeartbeatIntervalMs);
+
+  const onVisibilityChange = () => {
+    if (!lastSelection) return;
+    const active = localActive();
+    if (active === lastBroadcastActive) return;
+    broadcastSelection(lastSelection, active);
+  };
+  document.addEventListener("visibilitychange", onVisibilityChange);
+
+  collaboration.close = () => {
+    closed = true;
+    window.clearInterval(heartbeat);
+    window.clearInterval(prune);
+    if (reviewFlushTimer !== undefined) {
+      window.clearTimeout(reviewFlushTimer);
+      reviewFlushTimer = undefined;
+    }
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    handle.off("change", onDocumentChange);
+    handle.off("ephemeral-message", handleEphemeral);
+    listeners.clear();
+    latest.clear();
+    pendingEphemerals.length = 0;
+    void repo.shutdown();
+  };
+
+  return collaboration;
+}

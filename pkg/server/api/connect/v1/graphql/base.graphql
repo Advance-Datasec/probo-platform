@@ -17,6 +17,17 @@ scalar Datetime
 scalar Upload
 scalar EmailAddr
 scalar OAuth2Scope
+scalar Map
+
+type Period {
+  start: Datetime
+  end: Datetime
+}
+
+input PeriodInput {
+  start: Datetime @goField(omittable: true)
+  end: Datetime @goField(omittable: true)
+}
 
 interface Node {
   id: ID!
@@ -34,9 +45,21 @@ type Query {
   signUpEnabled: Boolean!
     @goField(forceResolver: true)
     @authentication(required: OPTIONAL)
+  slackbotAvailable: Boolean!
+    @goField(forceResolver: true)
+    @authentication(required: PRESENT)
   oauth2ScopesSupported: [OAuth2Scope!]!
     @goField(forceResolver: true)
     @authentication(required: OPTIONAL)
+  oauthClientBranding(clientId: String): OAuthClientBranding
+    @goField(forceResolver: true)
+    @authentication(required: OPTIONAL)
+}
+
+type OAuthClientBranding {
+  name: String!
+  logoUrl: String
+  clientURL: String
 }
 
 type OIDCProviderInfo {

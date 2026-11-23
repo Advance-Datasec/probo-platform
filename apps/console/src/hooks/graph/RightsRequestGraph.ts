@@ -1,20 +1,26 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { promisifyMutation, sprintf } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
+import { promisifyMutation } from "@probo/helpers";
 import { useConfirm } from "@probo/ui";
+import { useTranslation } from "react-i18next";
 import { useMutation } from "react-relay";
 import { graphql } from "relay-runtime";
 
@@ -120,10 +126,10 @@ export const useDeleteRightsRequest = (
   request: { id: string },
   connectionId: string,
 ) => {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [mutate] = useMutationWithToasts(deleteRightsRequestMutation, {
-    successMessage: __("Rights request deleted successfully"),
-    errorMessage: __("Failed to delete rights request"),
+    successMessage: t("rightsRequestGraph.messages.deleted"),
+    errorMessage: t("rightsRequestGraph.errors.delete"),
   });
   const confirm = useConfirm();
 
@@ -139,11 +145,7 @@ export const useDeleteRightsRequest = (
           },
         }),
       {
-        message: sprintf(
-          __(
-            "This will permanently delete the rights request. This action cannot be undone.",
-          ),
-        ),
+        message: t("rightsRequestGraph.deleteConfirmation"),
       },
     );
   };
@@ -152,7 +154,7 @@ export const useDeleteRightsRequest = (
 export const useCreateRightsRequest = (connectionId: string) => {
   // eslint-disable-next-line relay/generated-typescript-types
   const [mutate] = useMutation(createRightsRequestMutation);
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (input: {
     organizationId: string;
@@ -166,17 +168,17 @@ export const useCreateRightsRequest = (connectionId: string) => {
   }) => {
     if (!input.organizationId) {
       return alert(
-        __("Failed to create rights request: organization is required"),
+        t("rightsRequestGraph.errors.createOrganizationRequired"),
       );
     }
     if (!input.requestType) {
       return alert(
-        __("Failed to create rights request: request type is required"),
+        t("rightsRequestGraph.errors.createRequestTypeRequired"),
       );
     }
     if (!input.requestState) {
       return alert(
-        __("Failed to create rights request: request state is required"),
+        t("rightsRequestGraph.errors.createRequestStateRequired"),
       );
     }
 
@@ -201,7 +203,7 @@ export const useCreateRightsRequest = (connectionId: string) => {
 export const useUpdateRightsRequest = () => {
   // eslint-disable-next-line relay/generated-typescript-types
   const [mutate] = useMutation(updateRightsRequestMutation);
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (input: {
     id: string;
@@ -214,7 +216,7 @@ export const useUpdateRightsRequest = () => {
     actionTaken?: string;
   }) => {
     if (!input.id) {
-      return alert(__("Failed to update rights request: ID is required"));
+      return alert(t("rightsRequestGraph.errors.updateIdRequired"));
     }
 
     return promisifyMutation(mutate)({

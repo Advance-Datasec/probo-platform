@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -25,6 +31,7 @@ const (
 	ConnectorProviderSlack           ConnectorProvider = "SLACK"
 	ConnectorProviderGoogleWorkspace ConnectorProvider = "GOOGLE_WORKSPACE"
 	ConnectorProviderLinear          ConnectorProvider = "LINEAR"
+	ConnectorProviderLinearSync      ConnectorProvider = "LINEAR_SYNC"
 	// _ ConnectorProvider = "FIGMA" — formerly Figma; removed (no driver, no OAuth config, no usage)
 	ConnectorProviderOnePassword  ConnectorProvider = "ONE_PASSWORD"
 	ConnectorProviderHubSpot      ConnectorProvider = "HUBSPOT"
@@ -52,28 +59,59 @@ const (
 	ConnectorProviderAsana        ConnectorProvider = "ASANA"
 	ConnectorProviderNetlify      ConnectorProvider = "NETLIFY"
 	ConnectorProviderClickUp      ConnectorProvider = "CLICKUP"
-	ConnectorProviderClerk        ConnectorProvider = "CLERK"
-	ConnectorProviderVercel       ConnectorProvider = "VERCEL"
-	ConnectorProviderMonday       ConnectorProvider = "MONDAY"
-	ConnectorProviderMetabase     ConnectorProvider = "METABASE"
-	ConnectorProviderTailscale    ConnectorProvider = "TAILSCALE"
-	ConnectorProviderAnthropic    ConnectorProvider = "ANTHROPIC"
-	ConnectorProviderCursor       ConnectorProvider = "CURSOR"
-	ConnectorProviderDatadog      ConnectorProvider = "DATADOG"
-	ConnectorProviderOkta         ConnectorProvider = "OKTA"
-	ConnectorProviderZendesk      ConnectorProvider = "ZENDESK"
-	ConnectorProviderQovery       ConnectorProvider = "QOVERY"
-	ConnectorProviderRender       ConnectorProvider = "RENDER"
-	ConnectorProviderNeon         ConnectorProvider = "NEON"
-	ConnectorProviderMercury      ConnectorProvider = "MERCURY"
-	ConnectorProviderApollo       ConnectorProvider = "APOLLO"
-	ConnectorProviderDeepgram     ConnectorProvider = "DEEPGRAM"
-	ConnectorProviderClickHouse   ConnectorProvider = "CLICKHOUSE"
-	ConnectorProviderLangfuse     ConnectorProvider = "LANGFUSE"
-	ConnectorProviderPylon        ConnectorProvider = "PYLON"
-	ConnectorProviderOpenRouter   ConnectorProvider = "OPENROUTER"
-	ConnectorProviderIncidentIO   ConnectorProvider = "INCIDENT_IO"
-	ConnectorProviderBrevo        ConnectorProvider = "BREVO"
+	// ConnectorProviderClerk is disabled (unregistered) but kept in IsValid
+	// and the GraphQL enum so existing stored CLERK rows still validate.
+	ConnectorProviderClerk           ConnectorProvider = "CLERK"
+	ConnectorProviderVercel          ConnectorProvider = "VERCEL"
+	ConnectorProviderMonday          ConnectorProvider = "MONDAY"
+	ConnectorProviderMetabase        ConnectorProvider = "METABASE"
+	ConnectorProviderMongoDBAtlas    ConnectorProvider = "MONGODB_ATLAS"
+	ConnectorProviderTailscale       ConnectorProvider = "TAILSCALE"
+	ConnectorProviderAnthropic       ConnectorProvider = "ANTHROPIC"
+	ConnectorProviderCursor          ConnectorProvider = "CURSOR"
+	ConnectorProviderDatadog         ConnectorProvider = "DATADOG"
+	ConnectorProviderOkta            ConnectorProvider = "OKTA"
+	ConnectorProviderZendesk         ConnectorProvider = "ZENDESK"
+	ConnectorProviderQovery          ConnectorProvider = "QOVERY"
+	ConnectorProviderRender          ConnectorProvider = "RENDER"
+	ConnectorProviderNeon            ConnectorProvider = "NEON"
+	ConnectorProviderMercury         ConnectorProvider = "MERCURY"
+	ConnectorProviderApollo          ConnectorProvider = "APOLLO"
+	ConnectorProviderDeepgram        ConnectorProvider = "DEEPGRAM"
+	ConnectorProviderClickHouse      ConnectorProvider = "CLICKHOUSE"
+	ConnectorProviderLangfuse        ConnectorProvider = "LANGFUSE"
+	ConnectorProviderPylon           ConnectorProvider = "PYLON"
+	ConnectorProviderOpenRouter      ConnectorProvider = "OPENROUTER"
+	ConnectorProviderIncidentIO      ConnectorProvider = "INCIDENT_IO"
+	ConnectorProviderBrevo           ConnectorProvider = "BREVO"
+	ConnectorProviderScaleway        ConnectorProvider = "SCALEWAY"
+	ConnectorProviderYousign         ConnectorProvider = "YOUSIGN"
+	ConnectorProviderRailway         ConnectorProvider = "RAILWAY"
+	ConnectorProviderCrisp           ConnectorProvider = "CRISP"
+	ConnectorProviderDotfile         ConnectorProvider = "DOTFILE"
+	ConnectorProviderSegment         ConnectorProvider = "SEGMENT"
+	ConnectorProviderSquare          ConnectorProvider = "SQUARE"
+	ConnectorProviderGoogleAnalytics ConnectorProvider = "GOOGLE_ANALYTICS"
+	ConnectorProviderUpCloud         ConnectorProvider = "UPCLOUD"
+	ConnectorProviderFront           ConnectorProvider = "FRONT"
+	ConnectorProviderNuki            ConnectorProvider = "NUKI"
+	ConnectorProviderAuthentik       ConnectorProvider = "AUTHENTIK"
+	ConnectorProviderCalCom          ConnectorProvider = "CAL_COM"
+	ConnectorProviderCalendly        ConnectorProvider = "CALENDLY"
+	ConnectorProviderAWS             ConnectorProvider = "AWS"
+	ConnectorProviderGCP             ConnectorProvider = "GCP"
+	ConnectorProviderElevenLabs      ConnectorProvider = "ELEVENLABS"
+	ConnectorProviderNewRelic        ConnectorProvider = "NEW_RELIC"
+	ConnectorProviderRetool          ConnectorProvider = "RETOOL"
+	ConnectorProviderTwingate        ConnectorProvider = "TWINGATE"
+	ConnectorProviderAttio           ConnectorProvider = "ATTIO"
+	ConnectorProviderAzure           ConnectorProvider = "AZURE"
+	ConnectorProviderOVHcloud        ConnectorProvider = "OVHCLOUD"
+	ConnectorProviderOVHcloudUS      ConnectorProvider = "OVHCLOUD_US"
+	ConnectorProviderPlanetScale     ConnectorProvider = "PLANETSCALE"
+	ConnectorProviderElasticCloud    ConnectorProvider = "ELASTIC_CLOUD"
+	ConnectorProviderDaytona         ConnectorProvider = "DAYTONA"
+	ConnectorProviderUniFi           ConnectorProvider = "UNIFI"
 )
 
 var (
@@ -87,6 +125,7 @@ func ConnectorProviders() []ConnectorProvider {
 		ConnectorProviderSlack,
 		ConnectorProviderGoogleWorkspace,
 		ConnectorProviderLinear,
+		ConnectorProviderLinearSync,
 		ConnectorProviderOnePassword,
 		ConnectorProviderHubSpot,
 		ConnectorProviderDocuSign,
@@ -113,10 +152,10 @@ func ConnectorProviders() []ConnectorProvider {
 		ConnectorProviderAsana,
 		ConnectorProviderNetlify,
 		ConnectorProviderClickUp,
-		ConnectorProviderClerk,
 		ConnectorProviderVercel,
 		ConnectorProviderMonday,
 		ConnectorProviderMetabase,
+		ConnectorProviderMongoDBAtlas,
 		ConnectorProviderTailscale,
 		ConnectorProviderAnthropic,
 		ConnectorProviderCursor,
@@ -135,6 +174,34 @@ func ConnectorProviders() []ConnectorProvider {
 		ConnectorProviderOpenRouter,
 		ConnectorProviderIncidentIO,
 		ConnectorProviderBrevo,
+		ConnectorProviderScaleway,
+		ConnectorProviderYousign,
+		ConnectorProviderRailway,
+		ConnectorProviderCrisp,
+		ConnectorProviderDotfile,
+		ConnectorProviderSegment,
+		ConnectorProviderSquare,
+		ConnectorProviderGoogleAnalytics,
+		ConnectorProviderUpCloud,
+		ConnectorProviderFront,
+		ConnectorProviderNuki,
+		ConnectorProviderAuthentik,
+		ConnectorProviderCalCom,
+		ConnectorProviderCalendly,
+		ConnectorProviderAWS,
+		ConnectorProviderGCP,
+		ConnectorProviderElevenLabs,
+		ConnectorProviderNewRelic,
+		ConnectorProviderRetool,
+		ConnectorProviderTwingate,
+		ConnectorProviderAttio,
+		ConnectorProviderAzure,
+		ConnectorProviderOVHcloud,
+		ConnectorProviderOVHcloudUS,
+		ConnectorProviderPlanetScale,
+		ConnectorProviderElasticCloud,
+		ConnectorProviderDaytona,
+		ConnectorProviderUniFi,
 	}
 }
 
@@ -144,6 +211,7 @@ func (v ConnectorProvider) IsValid() bool {
 		ConnectorProviderSlack,
 		ConnectorProviderGoogleWorkspace,
 		ConnectorProviderLinear,
+		ConnectorProviderLinearSync,
 		ConnectorProviderOnePassword,
 		ConnectorProviderHubSpot,
 		ConnectorProviderDocuSign,
@@ -174,6 +242,7 @@ func (v ConnectorProvider) IsValid() bool {
 		ConnectorProviderVercel,
 		ConnectorProviderMonday,
 		ConnectorProviderMetabase,
+		ConnectorProviderMongoDBAtlas,
 		ConnectorProviderTailscale,
 		ConnectorProviderAnthropic,
 		ConnectorProviderCursor,
@@ -191,7 +260,35 @@ func (v ConnectorProvider) IsValid() bool {
 		ConnectorProviderPylon,
 		ConnectorProviderOpenRouter,
 		ConnectorProviderIncidentIO,
-		ConnectorProviderBrevo:
+		ConnectorProviderBrevo,
+		ConnectorProviderScaleway,
+		ConnectorProviderYousign,
+		ConnectorProviderRailway,
+		ConnectorProviderCrisp,
+		ConnectorProviderDotfile,
+		ConnectorProviderSegment,
+		ConnectorProviderSquare,
+		ConnectorProviderGoogleAnalytics,
+		ConnectorProviderUpCloud,
+		ConnectorProviderFront,
+		ConnectorProviderNuki,
+		ConnectorProviderAuthentik,
+		ConnectorProviderCalCom,
+		ConnectorProviderCalendly,
+		ConnectorProviderAWS,
+		ConnectorProviderGCP,
+		ConnectorProviderElevenLabs,
+		ConnectorProviderNewRelic,
+		ConnectorProviderRetool,
+		ConnectorProviderTwingate,
+		ConnectorProviderAttio,
+		ConnectorProviderAzure,
+		ConnectorProviderOVHcloud,
+		ConnectorProviderOVHcloudUS,
+		ConnectorProviderPlanetScale,
+		ConnectorProviderElasticCloud,
+		ConnectorProviderDaytona,
+		ConnectorProviderUniFi:
 		return true
 	}
 

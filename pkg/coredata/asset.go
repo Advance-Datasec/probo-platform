@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -26,6 +32,10 @@ import (
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/iam/policy"
 	"go.probo.inc/probo/pkg/page"
+)
+
+var (
+	_ Searchable = (*Asset)(nil)
 )
 
 type (
@@ -55,6 +65,10 @@ func (a *Asset) CursorKey(field AssetOrderField) page.CursorKey {
 	}
 
 	panic(fmt.Sprintf("unsupported order by: %s", field))
+}
+
+func (a Asset) SearchText() []string {
+	return []string{a.Name, a.DataTypesStored}
 }
 
 // AuthorizationAttributes returns the authorization attributes for policy evaluation.
@@ -406,6 +420,146 @@ WHERE
 	return nil
 }
 
+func (a *Assets) CountByIDs(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	assetIDs []gid.GID,
+) (int, error) {
+	if len(assetIDs) == 0 {
+		return 0, nil
+	}
+
+	q := `
+SELECT
+	COUNT(id)
+FROM
+	assets
+WHERE
+	%s
+	AND id = ANY(@asset_ids)
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"asset_ids": assetIDs}
+	maps.Copy(args, scope.SQLArguments())
+
+	row := conn.QueryRow(ctx, q, args)
+
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("cannot scan count: %w", err)
+	}
+
+	return count, nil
+}
+
+func (a *Assets) LoadByIDs(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	assetIDs []gid.GID,
+) error {
+	if len(assetIDs) == 0 {
+		*a = nil
+		return nil
+	}
+
+	q := `
+SELECT
+	id,
+	name,
+	organization_id,
+	owner_profile_id,
+	amount,
+	asset_type,
+	data_types_stored,
+	created_at,
+	updated_at
+FROM
+	assets
+WHERE
+	%s
+	AND id = ANY(@asset_ids)
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"asset_ids": assetIDs}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query assets: %w", err)
+	}
+
+	assets, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[Asset])
+	if err != nil {
+		return fmt.Errorf("cannot collect assets: %w", err)
+	}
+
+	*a = assets
+
+	if len(assets) != len(gid.NewSet(assetIDs...)) {
+		return ErrResourceNotFound
+	}
+
+	return nil
+}
+
+func (a *Assets) LoadByIDsWithCursor(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	assetIDs []gid.GID,
+	cursor *page.Cursor[AssetOrderField],
+) error {
+	if len(assetIDs) == 0 {
+		*a = nil
+		return nil
+	}
+
+	q := `
+SELECT
+	id,
+	name,
+	organization_id,
+	owner_profile_id,
+	amount,
+	asset_type,
+	data_types_stored,
+	created_at,
+	updated_at
+FROM
+	assets
+WHERE
+	%s
+	AND id = ANY(@asset_ids)
+	AND %s
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment(), cursor.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"asset_ids": assetIDs}
+	maps.Copy(args, scope.SQLArguments())
+	maps.Copy(args, cursor.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query assets: %w", err)
+	}
+
+	assets, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[Asset])
+	if err != nil {
+		return fmt.Errorf("cannot collect assets: %w", err)
+	}
+
+	*a = assets
+
+	return nil
+}
+
 func (a Asset) GetGeneratedDocumentID(
 	ctx context.Context,
 	conn pg.Querier,
@@ -509,6 +663,32 @@ WHERE
 	)
 	if err != nil {
 		return fmt.Errorf("cannot clear asset list document references: %w", err)
+	}
+
+	return nil
+}
+
+func (c *Assets) DeleteByOrganizationID(
+	ctx context.Context,
+	conn pg.Tx,
+	scope Scoper,
+	organizationID gid.GID,
+) error {
+	q := `
+DELETE FROM assets
+WHERE
+	%s
+	AND organization_id = @organization_id
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"organization_id": organizationID}
+	maps.Copy(args, scope.SQLArguments())
+
+	_, err := conn.Exec(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot delete assets: %w", err)
 	}
 
 	return nil

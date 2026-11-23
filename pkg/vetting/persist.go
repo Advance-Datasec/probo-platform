@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package vetting
 
@@ -93,7 +99,6 @@ func PersistAssessmentResult(
 					childNamePath,
 					linkSubThirdPartyParams{
 						Name:    sub.Name,
-						Country: sub.Country,
 						Purpose: sub.Purpose,
 					},
 				); err != nil {
@@ -130,7 +135,7 @@ func persistVettingRiskAssessment(
 	}
 
 	now := time.Now()
-	notes := buildRiskAssessmentNotes(result.Info)
+	notes := buildRiskAssessmentNotesFromResult(result)
 
 	assessment := &coredata.ThirdPartyRiskAssessment{
 		ID:              gid.New(scope.GetTenantID(), coredata.ThirdPartyRiskAssessmentEntityType),
@@ -149,6 +154,14 @@ func persistVettingRiskAssessment(
 	}
 
 	return nil
+}
+
+func buildRiskAssessmentNotesFromResult(result Result) string {
+	if notes := filterVettingDocumentNotes(result.Document); notes != "" {
+		return notes
+	}
+
+	return buildRiskAssessmentNotes(result.Info)
 }
 
 func buildRiskAssessmentNotes(info ThirdPartyInfo) string {
@@ -172,6 +185,150 @@ func buildRiskAssessmentNotes(info ThirdPartyInfo) string {
 	appendSection(vettingGapsSection(info))
 
 	return strings.Join(sections, "\n\n")
+}
+
+// filterVettingDocumentNotes drops profile-duplicate sections from the report.
+func filterVettingDocumentNotes(document string) string {
+	document = strings.TrimSpace(document)
+	if document == "" {
+		return ""
+	}
+
+	lines := strings.Split(document, "\n")
+	out := make([]string, 0, len(lines))
+	skipUntilLevel := 0
+	inFence := false
+	fenceMarker := byte(0)
+	fenceLen := 0
+
+	for _, line := range lines {
+		if marker, length, isFence := parseMarkdownFence(line); isFence {
+			if !inFence {
+				inFence = true
+				fenceMarker = marker
+				fenceLen = length
+			} else if marker == fenceMarker && length >= fenceLen {
+				inFence = false
+				fenceMarker = 0
+				fenceLen = 0
+			}
+
+			if skipUntilLevel == 0 {
+				out = append(out, line)
+			}
+
+			continue
+		}
+
+		if !inFence {
+			level, title, isHeading := parseMarkdownHeading(line)
+			if isHeading {
+				if skipUntilLevel > 0 && level <= skipUntilLevel {
+					skipUntilLevel = 0
+				}
+
+				if skipUntilLevel == 0 && shouldDropVettingNotesSection(title) {
+					skipUntilLevel = level
+					continue
+				}
+			}
+		}
+
+		if skipUntilLevel > 0 {
+			continue
+		}
+
+		out = append(out, line)
+	}
+
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func parseMarkdownFence(line string) (marker byte, length int, ok bool) {
+	rest := line
+
+	indent := 0
+	for indent < len(rest) && indent < 3 && rest[indent] == ' ' {
+		indent++
+	}
+
+	rest = rest[indent:]
+
+	if len(rest) == 0 || (rest[0] != '`' && rest[0] != '~') {
+		return 0, 0, false
+	}
+
+	marker = rest[0]
+	for length < len(rest) && rest[length] == marker {
+		length++
+	}
+
+	if length < 3 {
+		return 0, 0, false
+	}
+
+	return marker, length, true
+}
+
+func parseMarkdownHeading(line string) (level int, title string, ok bool) {
+	rest := line
+
+	indent := 0
+	for indent < len(rest) && indent < 3 && rest[indent] == ' ' {
+		indent++
+	}
+
+	rest = rest[indent:]
+	rest = strings.TrimRight(rest, " \t")
+
+	if rest == "" || rest[0] != '#' {
+		return 0, "", false
+	}
+
+	level = 0
+	for level < len(rest) && rest[level] == '#' {
+		level++
+		if level > 6 {
+			return 0, "", false
+		}
+	}
+
+	if level == 0 || level >= len(rest) {
+		return 0, "", false
+	}
+
+	if rest[level] != ' ' && rest[level] != '\t' {
+		return 0, "", false
+	}
+
+	title = strings.TrimSpace(rest[level+1:])
+	title = strings.TrimRight(title, "#")
+	title = strings.TrimSpace(title)
+
+	if title == "" {
+		return 0, "", false
+	}
+
+	return level, title, true
+}
+
+func shouldDropVettingNotesSection(title string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(title))
+	normalized = strings.Trim(normalized, "*_`")
+	normalized = strings.Join(strings.Fields(strings.ReplaceAll(normalized, "-", " ")), " ")
+
+	switch {
+	case strings.Contains(normalized, "third party classification"),
+		strings.Contains(normalized, "vendor classification"):
+		return true
+	case strings.Contains(normalized, "compliance") && strings.Contains(normalized, "certification"):
+		return true
+	case strings.Contains(normalized, "sub processor"),
+		strings.Contains(normalized, "subprocessor"):
+		return true
+	default:
+		return false
+	}
 }
 
 func vettingBulletSection(title string, lines []string) string {
@@ -504,33 +661,30 @@ func scoreToBusinessImpact(score int) coredata.BusinessImpact {
 	}
 }
 
-func saveParamsFromInfo(info ThirdPartyInfo) saveThirdPartyInfoParams {
-	return saveThirdPartyInfoParams{
-		saveThirdPartyInfoToolParams: saveThirdPartyInfoToolParams{
-			Name:                          info.Name,
-			Description:                   info.Description,
-			Category:                      info.Category,
-			HeadquarterAddress:            info.HeadquarterAddress,
-			LegalName:                     info.LegalName,
-			PrivacyPolicyURL:              info.PrivacyPolicyURL,
-			ServiceLevelAgreementURL:      info.ServiceLevelAgreementURL,
-			DataProcessingAgreementURL:    info.DataProcessingAgreementURL,
-			BusinessAssociateAgreementURL: info.BusinessAssociateAgreementURL,
-			SubprocessorsListURL:          info.SubprocessorsListURL,
-			SecurityPageURL:               info.SecurityPageURL,
-			TrustPageURL:                  info.TrustPageURL,
-			TermsOfServiceURL:             info.TermsOfServiceURL,
-			StatusPageURL:                 info.StatusPageURL,
-			Certifications:                info.Certifications,
-		},
-		Countries: countriesFromInfo(info),
+func saveParamsFromInfo(info ThirdPartyInfo) saveThirdPartyInfoToolParams {
+	return saveThirdPartyInfoToolParams{
+		Name:                          info.Name,
+		Description:                   info.Description,
+		Category:                      info.Category,
+		HeadquarterAddress:            info.HeadquarterAddress,
+		LegalName:                     info.LegalName,
+		PrivacyPolicyURL:              info.PrivacyPolicyURL,
+		ServiceLevelAgreementURL:      info.ServiceLevelAgreementURL,
+		DataProcessingAgreementURL:    info.DataProcessingAgreementURL,
+		BusinessAssociateAgreementURL: info.BusinessAssociateAgreementURL,
+		SubprocessorsListURL:          info.SubprocessorsListURL,
+		SecurityPageURL:               info.SecurityPageURL,
+		TrustPageURL:                  info.TrustPageURL,
+		TermsOfServiceURL:             info.TermsOfServiceURL,
+		StatusPageURL:                 info.StatusPageURL,
+		Certifications:                info.Certifications,
 	}
 }
 
 func applySaveParams(
 	thirdParty *coredata.ThirdParty,
 	websiteURL string,
-	p saveThirdPartyInfoParams,
+	p saveThirdPartyInfoToolParams,
 	nameSuffixPath []string,
 ) {
 	if p.Name != "" {
@@ -598,10 +752,6 @@ func applySaveParams(
 	if len(p.Certifications) > 0 {
 		thirdParty.Certifications = p.Certifications
 	}
-
-	if len(p.Countries) > 0 {
-		thirdParty.Countries = p.Countries
-	}
 }
 
 func linkSubThirdParty(
@@ -635,15 +785,6 @@ func linkSubThirdParty(
 	err := child.LoadByNameAndParentThirdPartyID(ctx, conn, scope, qualifiedName, pc.ThirdPartyID)
 	switch {
 	case err == nil:
-		if countries := parseOptionalCountryCodes(p.Country); len(countries) > 0 && len(child.Countries) == 0 {
-			child.Countries = countries
-			child.UpdatedAt = time.Now()
-
-			if err := child.Update(ctx, conn, scope); err != nil {
-				return fmt.Errorf("cannot update child third party %q countries: %w", p.Name, err)
-			}
-		}
-
 		return nil
 	case !errors.Is(err, coredata.ErrResourceNotFound):
 		return fmt.Errorf("cannot find child third party %q: %w", p.Name, err)
@@ -674,10 +815,6 @@ func linkSubThirdParty(
 
 	if p.WebsiteURL != "" {
 		child.WebsiteURL = &p.WebsiteURL
-	}
-
-	if countries := parseOptionalCountryCodes(p.Country); len(countries) > 0 {
-		child.Countries = countries
 	}
 
 	if err := child.Insert(ctx, conn, scope); err != nil {

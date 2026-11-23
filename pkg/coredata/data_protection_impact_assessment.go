@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -24,6 +30,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.gearno.de/kit/pg"
+	"go.gearno.de/x/ref"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/iam/policy"
 	"go.probo.inc/probo/pkg/page"
@@ -161,6 +168,16 @@ func (dpia *DataProtectionImpactAssessment) CursorKey(field DataProtectionImpact
 	}
 
 	panic(fmt.Sprintf("unsupported order by: %s", field))
+}
+
+func (d DataProtectionImpactAssessment) SearchText(activityName string) []string {
+	return []string{
+		activityName,
+		ref.UnrefOrZero(d.Description),
+		ref.UnrefOrZero(d.NecessityAndProportionality),
+		ref.UnrefOrZero(d.PotentialRisk),
+		ref.UnrefOrZero(d.Mitigations),
+	}
 }
 
 // AuthorizationAttributes returns the authorization attributes for policy evaluation.
@@ -330,6 +347,60 @@ LIMIT 1;
 	}
 
 	*dpia = result
+
+	return nil
+}
+
+func (dpias *DataProtectionImpactAssessments) LoadByIDs(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	dpiaIDs []gid.GID,
+) error {
+	if len(dpiaIDs) == 0 {
+		*dpias = nil
+		return nil
+	}
+
+	q := `
+SELECT
+	id,
+	organization_id,
+	processing_activity_id,
+	description,
+	necessity_and_proportionality,
+	potential_risk,
+	mitigations,
+	residual_risk,
+	created_at,
+	updated_at
+FROM
+	processing_activity_data_protection_impact_assessments
+WHERE
+	%s
+	AND id = ANY(@dpia_ids)
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"dpia_ids": dpiaIDs}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query data protection impact assessments: %w", err)
+	}
+
+	items, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[DataProtectionImpactAssessment])
+	if err != nil {
+		return fmt.Errorf("cannot collect data protection impact assessments: %w", err)
+	}
+
+	*dpias = items
+
+	if len(items) != len(gid.NewSet(dpiaIDs...)) {
+		return ErrResourceNotFound
+	}
 
 	return nil
 }

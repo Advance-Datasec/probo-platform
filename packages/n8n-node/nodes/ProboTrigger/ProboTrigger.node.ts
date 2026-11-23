@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { createHmac, timingSafeEqual } from 'crypto';
 import {
@@ -25,6 +31,7 @@ import {
 	type JsonObject,
 } from 'n8n-workflow';
 import { proboApiRequest } from '../Probo/GenericFunctions';
+import { organizationLocator, searchOrganizations } from '../Probo/locators';
 import { WEBHOOK_EVENT_OPTIONS } from '../Probo/actions/webhook/events';
 
 function extractNode(response: IDataObject): IDataObject | undefined {
@@ -54,7 +61,11 @@ async function deleteSubscription(this: IHookFunctions, subscriptionId: string):
 		await proboApiRequest.call(this, query, {
 			input: { webhookSubscriptionId: subscriptionId },
 		});
-	} catch {
+	} catch (error) {
+		this.logger.error(`Failed to delete Probo webhook subscription "${subscriptionId}"`, {
+			subscriptionId,
+			error,
+		});
 		return false;
 	}
 
@@ -70,7 +81,6 @@ export class ProboTrigger implements INodeType {
 		version: 1,
 		subtitle: '={{$parameter["events"].join(", ")}}',
 		description: 'Starts a workflow when Probo events occur',
-		usableAsTool: true,
 		defaults: {
 			name: 'Probo Trigger',
 		},
@@ -91,14 +101,9 @@ export class ProboTrigger implements INodeType {
 			},
 		],
 		properties: [
-			{
-				displayName: 'Organization ID',
-				name: 'organizationId',
-				type: 'string',
-				default: '',
-				required: true,
-				description: 'The ID of the organization to receive events from',
-			},
+			organizationLocator({
+				description: 'The organization to receive events from. Search the list, or enter an ID.',
+			}),
 			{
 				displayName: 'Events',
 				name: 'events',
@@ -170,7 +175,7 @@ export class ProboTrigger implements INodeType {
 				}
 
 				const webhookUrl = this.getNodeWebhookUrl('default');
-				const organizationId = this.getNodeParameter('organizationId') as string;
+				const organizationId = this.getNodeParameter('organizationId', '', { extractValue: true }) as string;
 				const events = this.getNodeParameter('events') as string[];
 				const organization = node.organization as IDataObject | undefined;
 				const remoteEvents = (node.selectedEvents as string[] | undefined) ?? [];
@@ -202,7 +207,7 @@ export class ProboTrigger implements INodeType {
 
 			async create(this: IHookFunctions): Promise<boolean> {
 				const webhookUrl = this.getNodeWebhookUrl('default');
-				const organizationId = this.getNodeParameter('organizationId') as string;
+				const organizationId = this.getNodeParameter('organizationId', '', { extractValue: true }) as string;
 				const events = this.getNodeParameter('events') as string[];
 
 				if (webhookUrl === undefined) {
@@ -341,4 +346,10 @@ export class ProboTrigger implements INodeType {
 			workflowData: [this.helpers.returnJsonArray(body as IDataObject)],
 		};
 	}
+
+	methods = {
+		listSearch: {
+			searchOrganizations,
+		},
+	};
 }

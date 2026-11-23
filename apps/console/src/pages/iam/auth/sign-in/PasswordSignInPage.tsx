@@ -1,27 +1,42 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
-import { Button, Field, IconChevronLeft, useToast } from "@probo/ui";
-import type { FormEventHandler } from "react";
+import { Field } from "@base-ui/react/field";
+import { Form } from "@base-ui/react/form";
+import { formatError, type GraphQLError } from "@probo/helpers";
+import { Button } from "@probo/ui/src/v2/Button/Button";
+import { TextField } from "@probo/ui/src/v2/form/TextField";
+import { Link } from "@probo/ui/src/v2/Link/Link";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
+import { Heading } from "@probo/ui/src/v2/typography/Heading";
+import { Text } from "@probo/ui/src/v2/typography/Text";
+import { Suspense } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation } from "react-relay";
-import { Link, matchPath, useLocation } from "react-router";
+import { matchPath, useLocation, useNavigate, useSearchParams } from "react-router";
 import { graphql } from "relay-runtime";
 
 import type { PasswordSignInPageMutation } from "#/__generated__/iam/PasswordSignInPageMutation.graphql";
-import { useSafeContinueUrl } from "#/hooks/useSafeContinueUrl";
+import { usePostAuthRedirectUrl } from "#/hooks/usePostAuthRedirectUrl";
+
+import { CreateAccountFooterLazy } from "./_components/CreateAccountFooter";
 
 const signInMutation = graphql`
   mutation PasswordSignInPageMutation($input: SignInInput!) {
@@ -35,119 +50,140 @@ const signInMutation = graphql`
 
 export default function PasswordSignInPage() {
   const location = useLocation();
-  const safeContinueUrl = useSafeContinueUrl();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const postAuthRedirectUrl = usePostAuthRedirectUrl();
 
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
 
   const [signIn, isSigningIn]
     = useMutation<PasswordSignInPageMutation>(signInMutation);
 
-  const handlePasswordLogin: FormEventHandler<HTMLFormElement> = (e) => {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    const emailValue = formData.get("email") ? (formData.get("email") as string).toString() : "";
-    const passwordValue = formData.get("password") ? (formData.get("password") as string).toString() : "";
-
-    if (!emailValue || !passwordValue) return;
-
+  const handlePasswordLogin = (emailValue: string, passwordValue: string) => {
     const match = matchPath(
       { path: "/organizations/:organizationId", caseSensitive: false, end: false },
-      safeContinueUrl.pathname,
+      new URL(postAuthRedirectUrl, window.location.origin).pathname,
     );
+    const organizationId
+      = match?.params.organizationId ?? searchParams.get("organization-id") ?? undefined;
 
     signIn({
       variables: {
         input: {
           email: emailValue,
           password: passwordValue,
-          // Assume when signing in
-          organizationId: match && match.params.organizationId,
+          organizationId,
         },
       },
       onCompleted: (_, error) => {
         if (error) {
-          toast({
-            title: __("Error"),
+          const errors = Array.isArray(error) ? error : [error];
+          const emailNotVerified = errors.some(
+            e => (e as GraphQLError).extensions?.code === "EMAIL_NOT_VERIFIED",
+          );
+          if (emailNotVerified) {
+            const loginSearch = searchParams.toString();
+            void navigate(
+              {
+                pathname: "/auth/resend-verification-email",
+                search: loginSearch === "" ? "" : "?" + loginSearch,
+              },
+              { state: { email: emailValue } },
+            );
+            return;
+          }
+
+          toast.add({
+            title: t("common.error"),
             description: formatError(
-              __("Failed to login"),
+              t("passwordSignInPage.errors.login"),
               error,
             ),
-            variant: "error",
+            type: "error",
           });
           return;
         }
 
-        window.location.href = safeContinueUrl.href;
+        window.location.href = postAuthRedirectUrl;
       },
       onError: (e) => {
-        toast({
-          title: __("Error"),
+        toast.add({
+          title: t("common.error"),
           description: e.message,
-          variant: "error",
+          type: "error",
         });
       },
     });
   };
 
   return (
-    <form className="space-y-6 w-full max-w-md mx-auto pt-4" onSubmit={handlePasswordLogin}>
-      <Link
-        to={{ pathname: "/auth/login", search: location.search }}
-        className="flex items-center gap-2 text-txt-secondary hover:text-txt-primary transition-colors mb-4"
+    <div className="flex w-full flex-col gap-8">
+      <div className="flex flex-col gap-1">
+        <Heading level={1} size={4} weight="medium" align="center" highContrast>
+          {t("passwordSignInPage.title")}
+        </Heading>
+        <Text size={2} align="center" className="block">
+          {t("passwordSignInPage.description")}
+        </Text>
+      </div>
+
+      <Form
+        className="flex flex-col gap-5"
+        onFormSubmit={(values) => {
+          handlePasswordLogin(String(values.email ?? ""), String(values.password ?? ""));
+        }}
       >
-        <IconChevronLeft size={20} />
-        <span className="text-sm">{__("Back")}</span>
-      </Link>
+        <Field.Root name="email" className="flex flex-col gap-1.5">
+          <Field.Label className="text-1 font-medium text-sand-12">
+            {t("passwordSignInPage.fields.email")}
+          </Field.Label>
+          <TextField type="email" name="email" required autoFocus />
+          <Field.Error className="text-1 text-red-11" />
+        </Field.Root>
 
-      <h1 className="text-center text-2xl font-bold">
-        {__("Login with Email")}
-      </h1>
-      <p className="text-center text-txt-tertiary mt-1 mb-6">
-        {__("Enter your email and password")}
-      </p>
+        <Field.Root name="password" className="flex flex-col gap-1.5">
+          <Field.Label className="text-1 font-medium text-sand-12">
+            {t("passwordSignInPage.fields.password")}
+          </Field.Label>
+          <TextField type="password" name="password" required />
+          <Field.Error className="text-1 text-red-11" />
+          <Text align="right" size={2} className="block">
+            {t("passwordSignInPage.forgotPassword")}
+            {" "}
+            <Link to="/auth/forgot-password">
+              {t("passwordSignInPage.actions.resetPassword")}
+            </Link>
+          </Text>
+        </Field.Root>
 
-      <div className="space-y-4">
-        <Field
-          required
-          placeholder={__("Email")}
-          name="email"
-          type="email"
-          label={__("Email")}
-          autoFocus
-        />
-
-        <Field
-          required
-          placeholder={__("Password")}
-          name="password"
-          type="password"
-          label={__("Password")}
-        />
-      </div>
-
-      <Button className="w-xs h-10 mx-auto mt-6" disabled={isSigningIn}>
-        {isSigningIn ? __("Logging in...") : __("Login")}
-      </Button>
-
-      {/* <div className="text-center mt-6 text-sm text-txt-secondary">
-        {__("Don't have an account ?")}
-        {" "}
-        <Link to={{ pathname: "/auth/register", search: location.search }} className="underline hover:text-txt-primary">
-          {__("Register")}
-        </Link>
-      </div> */}
-
-      <div className="text-center text-sm text-txt-secondary">
-        {__("Forgot password?")}
-        {" "}
-        <Link
-          to="/auth/forgot-password"
-          className="underline hover:text-txt-primary"
+        <Button
+          type="submit"
+          variant="solid"
+          color="neutral"
+          highContrast
+          size={3}
+          className="w-full"
+          loading={isSigningIn}
         >
-          {__("Reset password")}
-        </Link>
+          {t("passwordSignInPage.actions.login")}
+        </Button>
+      </Form>
+
+      <div className="flex flex-col gap-2">
+        <Suspense fallback={null}>
+          <CreateAccountFooterLazy
+            prefix={t("passwordSignInPage.noAccount")}
+            label={t("passwordSignInPage.actions.register")}
+          />
+        </Suspense>
+
+        <Text align="center" size={2} className="block">
+          <Link to={{ pathname: "/auth/login", search: location.search }}>
+            {t("passwordSignInPage.actions.backToLogin")}
+          </Link>
+        </Text>
       </div>
-    </form>
+    </div>
   );
 }

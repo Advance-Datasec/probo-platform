@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package iam_test
 
@@ -163,7 +169,7 @@ func TestAuthorizer_AuthorizeBatch(t *testing.T) {
 		assert.Equal(t, coredata.OAuth2RefreshTokenEntityType, errUnsupported.EntityType)
 	})
 
-	t.Run("single deny rolls back entire batch", func(t *testing.T) {
+	t.Run("single deny records the refusal and no allows", func(t *testing.T) {
 		t.Parallel()
 
 		client := test.PGClient(t)
@@ -186,7 +192,20 @@ func TestAuthorizer_AuthorizeBatch(t *testing.T) {
 
 		_, ok := err.(*iam.ErrInsufficientPermissions)
 		require.True(t, ok)
-		assert.Equal(t, 0, countAuditLogsForAction(t, context.Background(), client, action))
+		assert.Equal(t, 1, countAuditLogsForActionAndOutcome(
+			t,
+			context.Background(),
+			client,
+			action,
+			coredata.AuditLogOutcomeDenied,
+		))
+		assert.Equal(t, 0, countAuditLogsForActionAndOutcome(
+			t,
+			context.Background(),
+			client,
+			action,
+			coredata.AuditLogOutcomeAllowed,
+		))
 	})
 
 	t.Run("duplicate resources in batch", func(t *testing.T) {
@@ -310,7 +329,7 @@ func TestAuthorizer_AuthorizeBatch(t *testing.T) {
 		)
 		require.Error(t, err)
 		assert.Nil(t, scope)
-		assert.ErrorContains(t, err, "cannot commit transaction")
+		assert.ErrorContains(t, err, "cannot bulk insert audit log entries")
 		assert.Equal(t, 0, countAuditLogsForAction(t, context.Background(), client, action))
 	})
 
@@ -339,7 +358,13 @@ func TestAuthorizer_AuthorizeBatch(t *testing.T) {
 
 		_, ok := err.(*iam.ErrAssumptionRequired)
 		require.True(t, ok)
-		assert.Equal(t, 0, countAuditLogsForAction(t, context.Background(), client, action))
+		assert.Equal(t, 2, countAuditLogsForActionAndOutcome(
+			t,
+			context.Background(),
+			client,
+			action,
+			coredata.AuditLogOutcomeDenied,
+		))
 	})
 
 	t.Run("assumption succeeds with active child session", func(t *testing.T) {
@@ -412,7 +437,13 @@ func TestAuthorizer_AuthorizeBatch(t *testing.T) {
 
 		_, ok := errors.AsType[*iam.ErrAssumptionRequired](err)
 		require.True(t, ok)
-		assert.Equal(t, 0, countAuditLogsForAction(t, context.Background(), client, action))
+		assert.Equal(t, 2, countAuditLogsForActionAndOutcome(
+			t,
+			context.Background(),
+			client,
+			action,
+			coredata.AuditLogOutcomeDenied,
+		))
 	})
 
 	t.Run("no membership ignores assumption check", func(t *testing.T) {
@@ -449,7 +480,13 @@ func TestAuthorizer_AuthorizeBatch(t *testing.T) {
 		insufficientPermissionsErr, ok := errors.AsType[*iam.ErrInsufficientPermissions](err)
 		require.True(t, ok)
 		assert.Equal(t, identityWithoutMembershipID, insufficientPermissionsErr.IdentityID)
-		assert.Equal(t, 0, countAuditLogsForAction(t, context.Background(), client, action))
+		assert.Equal(t, 1, countAuditLogsForActionAndOutcome(
+			t,
+			context.Background(),
+			client,
+			action,
+			coredata.AuditLogOutcomeDenied,
+		))
 	})
 }
 
@@ -532,10 +569,23 @@ func TestAuthorizer_AuthorizeMulti(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, fixture.frameworkID2, denied.EntityID)
 
-		assert.Equal(t, 1, countAuditLogsForAction(t, context.Background(), client, action))
+		assert.Equal(t, 1, countAuditLogsForActionAndOutcome(
+			t,
+			context.Background(),
+			client,
+			action,
+			coredata.AuditLogOutcomeAllowed,
+		))
+		assert.Equal(t, 1, countAuditLogsForActionAndOutcome(
+			t,
+			context.Background(),
+			client,
+			action,
+			coredata.AuditLogOutcomeDenied,
+		))
 	})
 
-	t.Run("writes no audit logs when every item is denied", func(t *testing.T) {
+	t.Run("writes a denial row when every item is denied", func(t *testing.T) {
 		t.Parallel()
 
 		client := test.PGClient(t)
@@ -569,7 +619,13 @@ func TestAuthorizer_AuthorizeMulti(t *testing.T) {
 		require.Len(t, decisions, 2)
 		require.Error(t, decisions[0])
 		require.Error(t, decisions[1])
-		assert.Equal(t, 0, countAuditLogsForAction(t, context.Background(), client, action))
+		assert.Equal(t, 2, countAuditLogsForActionAndOutcome(
+			t,
+			context.Background(),
+			client,
+			action,
+			coredata.AuditLogOutcomeDenied,
+		))
 	})
 
 	t.Run("skips audit log entries for dry-run allowed items", func(t *testing.T) {
@@ -725,7 +781,20 @@ func TestAuthorizer_AuthorizeMulti(t *testing.T) {
 		_, ok := errors.AsType[*iam.ErrAssumptionRequired](decisions[1])
 		require.True(t, ok)
 
-		assert.Equal(t, 1, countAuditLogsForAction(t, context.Background(), client, action))
+		assert.Equal(t, 1, countAuditLogsForActionAndOutcome(
+			t,
+			context.Background(),
+			client,
+			action,
+			coredata.AuditLogOutcomeAllowed,
+		))
+		assert.Equal(t, 1, countAuditLogsForActionAndOutcome(
+			t,
+			context.Background(),
+			client,
+			action,
+			coredata.AuditLogOutcomeDenied,
+		))
 	})
 
 	t.Run("per-item resource attributes are honoured by the policy", func(t *testing.T) {
@@ -769,7 +838,20 @@ func TestAuthorizer_AuthorizeMulti(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, fixture.frameworkID2, denied.EntityID)
 
-		assert.Equal(t, 1, countAuditLogsForAction(t, context.Background(), client, action))
+		assert.Equal(t, 1, countAuditLogsForActionAndOutcome(
+			t,
+			context.Background(),
+			client,
+			action,
+			coredata.AuditLogOutcomeAllowed,
+		))
+		assert.Equal(t, 1, countAuditLogsForActionAndOutcome(
+			t,
+			context.Background(),
+			client,
+			action,
+			coredata.AuditLogOutcomeDenied,
+		))
 	})
 }
 
@@ -809,7 +891,7 @@ func seedBatchAuthorizeFixture(t *testing.T, ctx context.Context, client *pg.Cli
 	t.Helper()
 
 	tenantID := gid.NewTenantID()
-	scope := coredata.NewScope(tenantID)
+	scope := coredata.NewScope(tenantID, gid.Nil)
 	identityID := gid.New(gid.NilTenant, coredata.IdentityEntityType)
 	organizationID := gid.New(tenantID, coredata.OrganizationEntityType)
 	organization2ID := gid.New(tenantID, coredata.OrganizationEntityType)
@@ -1031,6 +1113,33 @@ func insertBatchTestChildSession(
 	}))
 
 	return childSessionID
+}
+
+func countAuditLogsForActionAndOutcome(
+	t *testing.T,
+	ctx context.Context,
+	client *pg.Client,
+	action string,
+	outcome coredata.AuditLogOutcome,
+) int {
+	t.Helper()
+
+	var count int
+
+	require.NoError(t, client.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
+		if err := tx.QueryRow(
+			ctx,
+			"SELECT COUNT(id) FROM audit_log_entries WHERE action = $1 AND outcome = $2",
+			action,
+			outcome,
+		).Scan(&count); err != nil {
+			return fmt.Errorf("cannot query audit log count: %w", err)
+		}
+
+		return nil
+	}))
+
+	return count
 }
 
 func countAuditLogsForAction(t *testing.T, ctx context.Context, client *pg.Client, action string) int {

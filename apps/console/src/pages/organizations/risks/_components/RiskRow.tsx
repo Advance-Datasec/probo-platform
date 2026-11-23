@@ -1,31 +1,36 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { formatError, getTreatment, sprintf } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
+import { formatError } from "@probo/helpers";
 import {
   ActionDropdown,
   DropdownItem,
   IconPencil,
   IconTrashCan,
-  SeverityBadge,
   Td,
   Tr,
   useConfirm,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
+import { useTranslation } from "react-i18next";
 import { graphql, useFragment, useMutation } from "react-relay";
 
 import type { RiskRow_risk$key } from "#/__generated__/core/RiskRow_risk.graphql";
@@ -37,17 +42,12 @@ import { FormRiskDialog } from "./FormRiskDialog";
 const riskRowFragment = graphql`
   fragment RiskRow_risk on Risk {
     id
+    referenceId
     name
     category
-    treatment
-    owner {
-      id
-      fullName
-    }
-    inherentRiskScore
-    residualRiskScore
-    canUpdate: permission(action: "core:risk:update")
-    canDelete: permission(action: "core:risk:delete")
+    riskAnalysisHistoryCount
+    canUpdate: permission(action: "risk-management:risk:update")
+    canDelete: permission(action: "risk-management:risk:delete")
     ...FormRiskDialog_risk
   }
 `;
@@ -70,12 +70,12 @@ interface RiskRowProps {
 }
 
 export function RiskRow(props: RiskRowProps) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const organizationId = useOrganizationId();
   const risk = useFragment(riskRowFragment, props.riskKey);
   const [deleteRisk] = useMutation<RiskRowDeleteMutation>(deleteRiskMutation);
   const confirm = useConfirm();
-  const { toast } = useToast();
+  const toast = useToast();
   const formDialogRef = useDialogRef();
 
   const onDelete = () => {
@@ -91,30 +91,34 @@ export function RiskRow(props: RiskRowProps) {
               resolve();
             },
             onError(error) {
-              toast({
-                title: __("Error"),
+              toast.add({
+                title: t("riskRow.messages.error"),
                 description: formatError(
-                  __("Failed to delete risk"),
+                  t("riskRow.errors.delete"),
                   error,
                 ),
-                variant: "error",
+                type: "error",
               });
               resolve();
             },
           });
         }),
       {
-        message: sprintf(
-          __(
-            "This will permanently delete the risk \"%s\". This action cannot be undone.",
-          ),
-          risk.name,
+        message: t(
+          risk.riskAnalysisHistoryCount > 0
+            ? "riskRow.deleteConfirmationWithHistory"
+            : "riskRow.deleteConfirmation",
+          {
+            name: risk.name,
+            referenceId: risk.referenceId,
+            count: risk.riskAnalysisHistoryCount,
+          },
         ),
       },
     );
   };
 
-  const riskUrl = `/organizations/${organizationId}/risks/${risk.id}/overview`;
+  const riskUrl = `/organizations/${organizationId}/risk-management/risks/${risk.id}/treatment-plans`;
 
   return (
     <>
@@ -124,16 +128,11 @@ export function RiskRow(props: RiskRowProps) {
         connection={props.connectionId}
       />
       <Tr to={riskUrl}>
+        <Td>
+          <span className="font-mono text-sm">{risk.referenceId}</span>
+        </Td>
         <Td>{risk.name}</Td>
         <Td>{risk.category}</Td>
-        <Td>{getTreatment(__, risk.treatment)}</Td>
-        <Td>
-          <SeverityBadge score={risk.inherentRiskScore} />
-        </Td>
-        <Td>
-          <SeverityBadge score={risk.residualRiskScore} />
-        </Td>
-        <Td>{risk.owner?.fullName || __("Unassigned")}</Td>
         {props.hasAnyAction && (
           <Td noLink className="text-end">
             <ActionDropdown>
@@ -142,7 +141,7 @@ export function RiskRow(props: RiskRowProps) {
                   icon={IconPencil}
                   onClick={() => formDialogRef.current?.open()}
                 >
-                  {__("Edit")}
+                  {t("riskRow.actions.edit")}
                 </DropdownItem>
               )}
 
@@ -152,7 +151,7 @@ export function RiskRow(props: RiskRowProps) {
                   icon={IconTrashCan}
                   onClick={onDelete}
                 >
-                  {__("Delete")}
+                  {t("riskRow.actions.delete")}
                 </DropdownItem>
               )}
             </ActionDropdown>

@@ -1,18 +1,23 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
 import {
   Breadcrumb,
   Button,
@@ -27,14 +32,15 @@ import {
 } from "@probo/ui";
 import type { ReactNode } from "react";
 import { useEffect, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { useFragment } from "react-relay";
 import { graphql } from "relay-runtime";
-import { z } from "zod";
 
 import type { FrameworkControlDialogFragment$key } from "#/__generated__/core/FrameworkControlDialogFragment.graphql";
 import { ControlMaturityLevelOptions } from "#/components/form/ControlMaturityLevelOptions";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
 import { useMutationWithToasts } from "#/hooks/useMutationWithToasts";
+import { z } from "#/lib/zod";
 
 type Props = {
   children: ReactNode;
@@ -97,18 +103,18 @@ const schema = z.object({
 });
 
 export function FrameworkControlDialog(props: Props) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const frameworkControl = useFragment(controlFragment, props.control);
   const dialogRef = useDialogRef();
   const [mutate, isMutating] = useMutationWithToasts(
     props.control ? updateMutation : createMutation,
     {
-      successMessage: __(
-        `Control ${props.control ? "updated" : "created"} successfully.`,
-      ),
-      errorMessage: __(
-        `Failed to ${props.control ? "update" : "create"} control`,
-      ),
+      successMessage: props.control
+        ? t("frameworkControlDialog.messages.updated")
+        : t("frameworkControlDialog.messages.created"),
+      errorMessage: props.control
+        ? t("frameworkControlDialog.errors.update")
+        : t("frameworkControlDialog.errors.create"),
     },
   );
 
@@ -178,10 +184,10 @@ export function FrameworkControlDialog(props: Props) {
       title={(
         <Breadcrumb
           items={[
-            __("Controls"),
+            t("frameworkControlDialog.breadcrumb.controls"),
             frameworkControl
-              ? __("Edit Control")
-              : __("New Control"),
+              ? t("frameworkControlDialog.breadcrumb.editControl")
+              : t("frameworkControlDialog.breadcrumb.newControl"),
           ]}
         />
       )}
@@ -192,21 +198,21 @@ export function FrameworkControlDialog(props: Props) {
             id="sectionTitle"
             required
             variant="ghost"
-            placeholder={__("Section title")}
+            placeholder={t("frameworkControlDialog.fields.sectionTitle")}
             {...register("sectionTitle")}
           />
           <Input
             id="title"
             required
             variant="title"
-            placeholder={__("Control name")}
+            placeholder={t("frameworkControlDialog.fields.name")}
             {...register("name")}
           />
           <Textarea
             id="content"
             variant="ghost"
             autogrow
-            placeholder={__("Add description")}
+            placeholder={t("frameworkControlDialog.fields.description")}
             {...register("description")}
           />
           <div className="border border-border-low rounded-xl p-3 space-y-3 mt-4">
@@ -216,10 +222,10 @@ export function FrameworkControlDialog(props: Props) {
                 onChange={checked =>
                   setValue("bestPractice", checked)}
               />
-              <span className="text-sm">{__("Best Practice")}</span>
+              <span className="text-sm">{t("frameworkControlDialog.fields.bestPractice")}</span>
             </label>
             <div className="flex items-center gap-2">
-              <span className="text-sm">{__("Maturity level")}</span>
+              <span className="text-sm">{t("frameworkControlDialog.fields.maturityLevel")}</span>
               <Select
                 id="maturityLevel"
                 value={maturityLevelValue}
@@ -234,7 +240,7 @@ export function FrameworkControlDialog(props: Props) {
                 id="notImplementedJustification"
                 variant="ghost"
                 autogrow
-                placeholder={__("Justification for non-implementation")}
+                placeholder={t("frameworkControlDialog.fields.notImplementedJustification")}
                 {...register("notImplementedJustification")}
               />
             )}
@@ -243,8 +249,8 @@ export function FrameworkControlDialog(props: Props) {
         <DialogFooter>
           <Button type="submit" disabled={isMutating}>
             {props.control
-              ? __("Update control")
-              : __("Create control")}
+              ? t("frameworkControlDialog.actions.update")
+              : t("frameworkControlDialog.actions.create")}
           </Button>
         </DialogFooter>
       </form>

@@ -13,6 +13,7 @@ These rules are the **source of truth**. Where existing code disagrees (e.g. `ap
 | Relay queries, fragments, loaders, `queryRef`                                    | [`contrib/claude/relay.md`](relay.md)                       |
 | Error boundaries at any level, error/fallback props                              | [`contrib/claude/error-handling.md`](error-handling.md)     |
 | i18next translations and `_locales` folders                                      | [`contrib/claude/i18n.md`](i18n.md)                         |
+| Console nav entries a new page must register                                    | [`contrib/claude/routing.md`](routing.md#register-every-new-console-page-in-the-nav) |
 
 ## Single arborescence principle
 
@@ -47,7 +48,7 @@ src/
         AssetsPage.tsx
 ```
 
-Existing examples that already follow this pattern: `pages/organizations/compliance-page/routes.ts` and `pages/iam/organizations/people/routes.ts`. The parent route file (`routes.tsx` at the app root) imports and spreads them:
+Existing examples that already follow this pattern: `pages/organizations/compliance-page/routes.ts` and `pages/iam/organizations/users/routes.ts`. The parent route file (`routes.tsx` at the app root) imports and spreads them:
 
 ```tsx
 import { compliancePageRoutes } from "./pages/organizations/compliance-page/routes";
@@ -62,7 +63,7 @@ Each page folder may contain a subset of these files. Names use PascalCase match
 
 | File                 | Role                                                                                                                                                                                                           |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `routes.ts`          | Route definitions for this folder. Exports an array spread into the parent route tree. Uses `lazy()` from `@probo/react-lazy` to point at loaders / pages.                                                     |
+| `routes.ts`          | Route definitions for this folder. Exports an array spread into the parent route tree. Uses `lazy()` from `@probo/react-lazy` to point at loaders / pages. A new console page must also be registered in the shell nav ([`routing.md`](routing.md#register-every-new-console-page-in-the-nav)). |
 | `MyLayout.tsx`       | A **layout route** component that renders shared chrome (`Breadcrumb`, `PageHeader`, `Tabs`, …) and an `<Outlet />`. Named with the **`Layout` suffix** — never `Page` — to make its role obvious at a glance. |
 | `MyLayoutLoader.tsx` | Loader for a layout that needs data (same pattern as `MyPageLoader`).                                                                                                                                          |
 | `MyPageLoader.tsx`   | Bundle entry point imported by `lazy()` in the route. **Default export.** loads data via Relay, renders a skeleton while loading, then mounts the page with `queryRef`. Only needed when the page reads data.  |
@@ -340,6 +341,31 @@ src/components/ThirdPartyContactListItem.tsx     # only used by the third-partie
 
 // Good — scoped to the page that uses it
 pages/organizations/third-parties/_components/ThirdPartyContactListItem.tsx
+```
+
+### Complex component folder
+
+A simple component is one file in `_components/`. A complex one gets a folder named after the component, the same way the v2 kit does (`Dialog/Dialog.tsx`, `Dialog/DialogPopup.tsx` — see [`contrib/claude/ui.md`](ui.md#folder-layout)). The folder holds that component's private parts and private helpers. See [`contrib/claude/react-components.md`](react-components.md#component-folder).
+
+- Open the folder when the component has a private part or a private helper. Leave a single-file component as a file.
+- The primary file matches the folder name. Parts are prefixed with that name. Helpers in the folder are camelCase and stay private to the folder.
+- No nested `_components` or `_lib`, and no `index.ts`. Import the file (`.../_components/CreateTaskDialog/CreateTaskDialog`).
+- A highly composed component regroups the descendants it renders: the list item, the empty state, the create form, and pieces those descendants render that nobody else uses. One flat folder, named after the composer. Do not nest a folder per descendant.
+- A descendant rendered by a second composer leaves the folder: helpers to `_lib`, parts to `_components`. A fragment spread from a hook is not a second composer.
+- A thin parent that only mounts the composer stays outside. `TaskCommentsSection` keeps its skeleton; it does not swallow the list.
+- Do not add a folder for a page. The resource folder is already that namespace. `_components` is not a route segment.
+- A Suspense or error-boundary shell stays in the primary file.
+
+```text
+// Good — the list owns its item and its empty state
+pages/organizations/tasks/_components/TaskCommentsList/
+  TaskCommentsList.tsx
+  TaskCommentListItem.tsx
+  TaskCommentsEmpty.tsx
+
+// Bad — a page folder inside the resource, or a folder for a component that is still one file
+pages/organizations/tasks/TaskDetailsPage/TaskDetailsPage.tsx
+pages/organizations/tasks/_components/TaskDeleteDialog/TaskDeleteDialog.tsx
 ```
 
 ## `_lib` folder

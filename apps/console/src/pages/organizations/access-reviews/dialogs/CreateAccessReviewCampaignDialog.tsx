@@ -1,19 +1,24 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   Breadcrumb,
   Button,
@@ -23,15 +28,17 @@ import {
   DialogFooter,
   Field,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { type ReactNode, Suspense, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { graphql, useLazyLoadQuery, useMutation } from "react-relay";
-import { z } from "zod";
 
 import type { CreateAccessReviewCampaignDialogMutation } from "#/__generated__/core/CreateAccessReviewCampaignDialogMutation.graphql";
 import type { CreateAccessReviewCampaignDialogSourcesQuery } from "#/__generated__/core/CreateAccessReviewCampaignDialogSourcesQuery.graphql";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
+import { z } from "#/lib/zod";
+import { AccessReviewSourceOptionLabel } from "#/pages/organizations/access-reviews/_components/AccessReviewSourceOptionLabel";
 
 const createCampaignMutation = graphql`
   mutation CreateAccessReviewCampaignDialogMutation(
@@ -60,6 +67,13 @@ const sourcesQuery = graphql`
             node {
               id
               name
+              connector {
+                provider
+                displayName
+              }
+              connectorAccount {
+                name
+              }
             }
           }
         }
@@ -84,8 +98,8 @@ export function CreateAccessReviewCampaignDialog({
   organizationId,
   connectionId,
 }: Props) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
   const ref = useDialogRef();
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const { register, handleSubmit, reset, formState } = useFormWithSchema(
@@ -125,33 +139,33 @@ export function CreateAccessReviewCampaignDialog({
       },
       onCompleted(_, errors) {
         if (errors?.length) {
-          toast({
-            title: __("Error"),
+          toast.add({
+            title: t("createAccessReviewCampaignDialog.messages.error"),
             description: formatError(
-              __("Failed to create campaign"),
+              t("createAccessReviewCampaignDialog.errors.create"),
               errors,
             ),
-            variant: "error",
+            type: "error",
           });
           return;
         }
-        toast({
-          title: __("Success"),
-          description: __("Campaign created successfully."),
-          variant: "success",
+        toast.add({
+          title: t("createAccessReviewCampaignDialog.messages.success"),
+          description: t("createAccessReviewCampaignDialog.messages.created"),
+          type: "success",
         });
         reset();
         setSelectedSourceIds([]);
         ref.current?.close();
       },
       onError(error) {
-        toast({
-          title: __("Error"),
+        toast.add({
+          title: t("createAccessReviewCampaignDialog.messages.error"),
           description: formatError(
-            __("Failed to create campaign"),
+            t("createAccessReviewCampaignDialog.errors.create"),
             error,
           ),
-          variant: "error",
+          type: "error",
         });
       },
     });
@@ -169,27 +183,30 @@ export function CreateAccessReviewCampaignDialog({
       onClose={handleClose}
       title={(
         <Breadcrumb
-          items={[__("Access Reviews"), __("New Campaign")]}
+          items={[
+            t("createAccessReviewCampaignDialog.breadcrumb.accessReviews"),
+            t("createAccessReviewCampaignDialog.breadcrumb.newCampaign"),
+          ]}
         />
       )}
     >
       <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
         <DialogContent padded className="space-y-4">
           <Field
-            label={__("Name")}
+            label={t("createAccessReviewCampaignDialog.fields.name")}
             {...register("name")}
             type="text"
             required
           />
           <Field
-            label={__("Description")}
+            label={t("createAccessReviewCampaignDialog.fields.description")}
             {...register("description")}
             type="textarea"
           />
           <Suspense
             fallback={(
               <div className="text-sm text-txt-tertiary">
-                {__("Loading sources...")}
+                {t("createAccessReviewCampaignDialog.loadingSources")}
               </div>
             )}
           >
@@ -202,7 +219,7 @@ export function CreateAccessReviewCampaignDialog({
         </DialogContent>
         <DialogFooter>
           <Button disabled={isCreating || formState.isSubmitting} type="submit">
-            {__("Create")}
+            {t("createAccessReviewCampaignDialog.actions.create")}
           </Button>
         </DialogFooter>
       </form>
@@ -219,7 +236,7 @@ function SourceSelector({
   selectedSourceIds: string[];
   onToggle: (sourceId: string) => void;
 }) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const data = useLazyLoadQuery<CreateAccessReviewCampaignDialogSourcesQuery>(
     sourcesQuery,
     { organizationId },
@@ -234,14 +251,16 @@ function SourceSelector({
   if (sources.length === 0) {
     return (
       <div className="text-sm text-txt-tertiary">
-        {__("No sources available. Add sources in the Sources tab first.")}
+        {t("createAccessReviewCampaignDialog.emptySources")}
       </div>
     );
   }
 
   return (
     <fieldset>
-      <legend className="text-sm font-medium mb-2">{__("Sources")}</legend>
+      <legend className="text-sm font-medium mb-2">
+        {t("createAccessReviewCampaignDialog.fields.sources")}
+      </legend>
       <div className="space-y-2">
         {sources.map(source => (
           <label
@@ -252,7 +271,15 @@ function SourceSelector({
               checked={selectedSourceIds.includes(source.id)}
               onChange={() => onToggle(source.id)}
             />
-            <span className="text-sm">{source.name}</span>
+            <AccessReviewSourceOptionLabel
+              name={source.name}
+              accountName={source.connectorAccount?.name}
+              provider={source.connector?.provider}
+              providerName={source.connector?.displayName
+                ?? (source.connectorAccount == null
+                  ? t("addAccessReviewSourceDialog.csv.title")
+                  : null)}
+            />
           </label>
         ))}
       </div>

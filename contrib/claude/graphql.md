@@ -11,6 +11,21 @@ Each API's schema lives in `pkg/server/api/{api}/v1/graphql/` as multiple `.grap
 
 gqlgen's `follow-schema` layout generates one resolver file per schema file (e.g., `thirdParty.resolvers.go`). Types that get extended across files (Organization, Mutation, Viewer, TrustCenter) must be defined in `base.graphql`.
 
+### Node interface
+
+Every first-class `coredata` entity that corresponds to a persisted DB row with a GID **must** `implement Node` and be wired into `Query.node` in `base_resolvers.go`.
+
+Checklist when adding such a type:
+
+1. **Schema** — `type Foo implements Node { id: ID! … }`
+2. **Coredata** — `LoadByID` on the entity (plus `FooEntityType` / `NewEntityFromID` — see [`gid.md`](gid.md))
+3. **Service** — a Get-by-id method used by the node loader
+4. **`Query.node`** — a `case coredata.FooEntityType` that authorizes and returns `types.NewFoo(...)`
+
+Junction / catalog link rows (e.g. `CompliancePortalDocument`) are first-class entities when they have their own GID — they implement Node too. Do **not** map GraphQL entity objects onto `coredata` structs with `@goModel`; let gqlgen emit the types package struct and use a hand-written `New*` constructor.
+
+`implements Node` enables `node(id:)` refetch. It does **not** by itself update parameterized parent fields after a mutation. For create/link/delete of a child linked from a parent (e.g. `Document.compliancePortalDocument(compliancePortalId:)`), mutation payloads must also return the parent with that field selected so Relay can write the store without a manual `updater`.
+
 ### `extend type` restrictions
 
 **The only permitted use of `extend type` is `extend type Mutation`.** Never use `extend type` on any other type — not on entity types, not on `Organization`, not on `Query`. If `CookieBanner` needs a `consentRecords` connection, add the field directly to the `CookieBanner` type definition in `cookie_banner.graphql` — do not write `extend type CookieBanner` in another file. This keeps each entity's full field set visible in one place and avoids resolver mis-routing across generated files.
@@ -168,6 +183,8 @@ The query fetches `size + 1` (or `size + 2` with a cursor) rows to detect whethe
 
 For backward pagination (`last` / `before`), SQL sort direction is reversed, then the result slice is reversed back.
 
+`cursor.NewCursor` honors `before` over `first`, and `after` over `last`. Relay keeps a fragment's default `first` when a refetch passes `first: null`, so a Previous click arrives with both `first` and `before` set. Preferring `first` reloads page one. See [`pagination.md`](pagination.md).
+
 Default page size is **25** when neither `first` nor `last` is provided.
 
 ## Adding a new paginated field — checklist
@@ -177,4 +194,26 @@ Default page size is **25** when neither `first` nor `last` is provided.
 3. **API types** — add `*_connection.go` with `OrderBy` alias, connection struct, `NewXxxConnection`, `NewXxxEdge`
 4. **Resolver** — implement the resolver (authorize, build order, build cursor, call service, build connection)
 5. **Codegen** — run `go generate` for the relevant API package
+
+## Resolver errors
+
+A resolver must not return a plain `error` (`fmt.Errorf`, `errors.New`, or `graphql.ErrorOnPath`). Those responses have no `extensions.code`, and [`pkg/server/gqlx/tracing.go`](../../pkg/server/gqlx/tracing.go) logs them as `UNKNOWN` at error level. Do not build `&gqlerror.Error` by hand either. A hand-built error can set `extensions.code`, but it skips the helpers that set the path and the message.
+
+Use the helpers in `pkg/server/gqlx`. `r.authorize` already returns a coded error; return it unchanged.
+
+- The row the field was supposed to load is missing: `gqlx.NotFound`, or `gqlx.MapError` when that call can also fail another way. `MapError` maps `coredata.ErrResourceNotFound` to `NOT_FOUND` and `validator.ValidationErrors` to `INVALID`. `NOT_FOUND` shows `err.Error()`, so wrap the sentinel only with client-safe text. Return the sentinel unwrapped, or `gqlx.NotFoundf(ctx, "resource not found")`, when the prefix could reveal internals. Anything else is logged and returned as `gqlx.Internal(ctx)`.
+- Not-found is already handled and the load still failed: log with `r.logger.ErrorCtx` and return `gqlx.Internal(ctx)`. Do not put `err.Error()` in the response.
+- The client sent a value the server refuses: `Invalid` / `Invalidf`, `Unauthenticated` / `Unauthenticatedf`, `Forbidden` / `Forbiddenf`, `Conflict`, or another named helper in [`pkg/server/gqlx/errors.go`](../../pkg/server/gqlx/errors.go).
+- The schema already models absence as null (no alias, no generated document): return `nil, nil`.
+
+A new resolver-owned code needs a helper and an entry in `safeGraphQLErrorCodes`. A gqlgen protocol code such as `GRAPHQL_PARSE_FAILED` or `COMPLEXITY_LIMIT_EXCEEDED` is not returned by a resolver; it only needs the allowlist entry. A code missing from that list is logged as `UNKNOWN` at error level. `INTERNAL` stays at error. Every other allowlisted code logs at info.
+
+```go
+doc, err := r.probo.Documents.Get(ctx, scope, documentID)
+if err != nil {
+    return nil, gqlx.MapError(ctx, r.logger, "cannot get document", err)
+}
+```
+
+See [`api-surface.md`](api-surface.md) for the user-facing categories. MCP resolvers are a separate error path and do not use these helpers.
 

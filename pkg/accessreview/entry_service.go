@@ -1,22 +1,30 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package accessreview
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -106,6 +114,20 @@ func (s *Service) RecordDecisions(
 	err := s.pg.WithTx(
 		ctx,
 		func(ctx context.Context, conn pg.Tx) error {
+			campaignIDs, err := coredata.AccessReviewCampaignIDsByEntryIDs(ctx, conn, scope, entryIDs)
+			if err != nil {
+				return fmt.Errorf("cannot load access entry campaigns: %w", err)
+			}
+
+			// Lock in a fixed order so batches spanning the same campaigns cannot deadlock.
+			slices.SortFunc(campaignIDs, func(a, b gid.GID) int { return bytes.Compare(a[:], b[:]) })
+
+			for _, campaignID := range campaignIDs {
+				if err := lockCampaignForUpdate(ctx, conn, scope, campaignID); err != nil {
+					return fmt.Errorf("cannot lock campaign: %w", err)
+				}
+			}
+
 			// Track verified campaigns to avoid repeated loads within the
 			// same transaction.
 			verifiedCampaigns := make(map[gid.GID]bool)
@@ -124,7 +146,7 @@ func (s *Service) RecordDecisions(
 					}
 
 					if campaign.Status != coredata.AccessReviewCampaignStatusPendingActions {
-						return fmt.Errorf("cannot decide access entry: campaign status is %s, expected PENDING_ACTIONS", campaign.Status)
+						return fmt.Errorf("cannot decide access entry: %w", NewCampaignNotPendingActionsError(campaign.ID))
 					}
 
 					verifiedCampaigns[entry.AccessReviewCampaignID] = true
@@ -218,13 +240,17 @@ func (s *Service) FlagEntry(
 				return fmt.Errorf("cannot load access entry: %w", err)
 			}
 
+			if err := lockCampaignForUpdate(ctx, conn, scope, entry.AccessReviewCampaignID); err != nil {
+				return fmt.Errorf("cannot lock campaign: %w", err)
+			}
+
 			campaign := &coredata.AccessReviewCampaign{}
 			if err := campaign.LoadByID(ctx, conn, scope, entry.AccessReviewCampaignID); err != nil {
 				return fmt.Errorf("cannot load campaign: %w", err)
 			}
 
 			if campaign.Status != coredata.AccessReviewCampaignStatusPendingActions {
-				return fmt.Errorf("cannot flag access entry: campaign status is %q, expected PENDING_ACTIONS", campaign.Status)
+				return fmt.Errorf("cannot flag access entry: %w", NewCampaignNotPendingActionsError(campaign.ID))
 			}
 
 			entry.Flags = req.Flags

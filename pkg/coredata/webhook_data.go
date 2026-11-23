@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -33,6 +39,8 @@ type (
 		OrganizationID gid.GID          `db:"organization_id"`
 		EventType      WebhookEventType `db:"event_type"`
 		Data           json.RawMessage  `db:"data"`
+		UpdatedFrom    json.RawMessage  `db:"updated_from"`
+		Actor          json.RawMessage  `db:"actor"`
 		CreatedAt      time.Time        `db:"created_at"`
 		ProcessedAt    *time.Time       `db:"processed_at"`
 	}
@@ -52,7 +60,10 @@ INSERT INTO webhook_data (
     organization_id,
     event_type,
     data,
-    created_at
+    updated_from,
+    actor,
+    created_at,
+    processed_at
 )
 VALUES (
     @id,
@@ -60,7 +71,10 @@ VALUES (
     @organization_id,
     @event_type,
     @data,
-    @created_at
+    @updated_from,
+    @actor,
+    @created_at,
+    @processed_at
 )
 `
 
@@ -70,13 +84,106 @@ VALUES (
 		"organization_id": w.OrganizationID,
 		"event_type":      w.EventType,
 		"data":            w.Data,
+		"updated_from":    w.UpdatedFrom,
+		"actor":           w.Actor,
 		"created_at":      w.CreatedAt,
+		"processed_at":    w.ProcessedAt,
 	}
 
 	_, err := conn.Exec(ctx, q, args)
 	if err != nil {
 		return fmt.Errorf("cannot insert webhook data: %w", err)
 	}
+
+	return nil
+}
+
+func (w *WebhookData) LoadByID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	id gid.GID,
+) error {
+	q := `
+SELECT
+    id,
+    organization_id,
+    event_type,
+    data,
+    updated_from,
+    actor,
+    created_at,
+    processed_at
+FROM webhook_data
+WHERE %s
+    AND id = @id
+LIMIT 1
+`
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"id": id}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query webhook data: %w", err)
+	}
+
+	data, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[WebhookData])
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrResourceNotFound
+		}
+
+		return fmt.Errorf("cannot collect webhook data: %w", err)
+	}
+
+	*w = data
+
+	return nil
+}
+
+func (w *WebhookDataList) LoadByIDs(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	ids []gid.GID,
+) error {
+	if len(ids) == 0 {
+		*w = nil
+		return nil
+	}
+
+	q := `
+SELECT
+    id,
+    organization_id,
+    event_type,
+    data,
+    updated_from,
+    actor,
+    created_at,
+    processed_at
+FROM webhook_data
+WHERE %s
+    AND id = ANY(@ids)
+`
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"ids": ids}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query webhook data: %w", err)
+	}
+
+	data, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[WebhookData])
+	if err != nil {
+		return fmt.Errorf("cannot collect webhook data: %w", err)
+	}
+
+	*w = data
 
 	return nil
 }
@@ -91,6 +198,8 @@ SELECT
     organization_id,
     event_type,
     data,
+    updated_from,
+    actor,
     created_at,
     processed_at
 FROM webhook_data

@@ -1,33 +1,60 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package types
 
 import (
 	"go.probo.inc/probo/pkg/coredata"
+	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/page"
 )
 
 func NewAccessReviewSource(s *coredata.AccessReviewSource) *AccessReviewSource {
 	return &AccessReviewSource{
-		ID:             s.ID,
-		OrganizationID: s.OrganizationID,
-		ConnectorID:    s.ConnectorID,
-		Name:           s.Name,
-		CsvData:        s.CsvData,
-		CreatedAt:      s.CreatedAt,
-		UpdatedAt:      s.UpdatedAt,
+		ID:                 s.ID,
+		OrganizationID:     s.OrganizationID,
+		ConnectorAccountID: s.ConnectorAccountID,
+		Name:               s.Name,
+		CsvData:            s.CsvData,
+		CreatedAt:          s.CreatedAt,
+		UpdatedAt:          s.UpdatedAt,
+	}
+}
+
+func ApplySourceConnectorIDs(
+	mapped []*AccessReviewSource,
+	rows []*coredata.AccessReviewSource,
+	connectorIDs map[gid.GID]gid.GID,
+) {
+	for i, row := range rows {
+		if row.ConnectorAccountID == nil {
+			continue
+		}
+
+		id, ok := connectorIDs[*row.ConnectorAccountID]
+		if !ok {
+			continue
+		}
+
+		copied := id
+		mapped[i].ConnectorID = &copied
 	}
 }
 
@@ -66,7 +93,10 @@ func NewAccessReviewCampaign(c *coredata.AccessReviewCampaign) *AccessReviewCamp
 	}
 }
 
-func NewAccessReviewEntry(e *coredata.AccessReviewEntry) *AccessReviewEntry {
+func NewAccessReviewEntry(
+	e *coredata.AccessReviewEntry,
+	source *coredata.AccessReviewCampaignSource,
+) *AccessReviewEntry {
 	roles := e.Roles
 	if roles == nil {
 		roles = []string{}
@@ -76,6 +106,8 @@ func NewAccessReviewEntry(e *coredata.AccessReviewEntry) *AccessReviewEntry {
 		ID:                           e.ID,
 		CampaignID:                   e.AccessReviewCampaignID,
 		AccessReviewCampaignSourceID: e.AccessReviewCampaignSourceID,
+		SourceName:                   source.Name,
+		ConnectorID:                  source.ConnectorID,
 		Email:                        e.Email,
 		FullName:                     e.FullName,
 		Roles:                        roles,
@@ -88,7 +120,6 @@ func NewAccessReviewEntry(e *coredata.AccessReviewEntry) *AccessReviewEntry {
 		LastLogin:                    e.LastLogin,
 		AccountCreatedAt:             e.AccountCreatedAt,
 		ExternalID:                   e.ExternalID,
-		IncrementalTag:               e.IncrementalTag,
 		Flags:                        e.Flags,
 		FlagReasons:                  e.FlagReasons,
 		Decision:                     e.Decision,
@@ -125,10 +156,11 @@ func NewListAccessReviewCampaignsOutput(
 
 func NewListAccessEntriesOutput(
 	p *page.Page[*coredata.AccessReviewEntry, coredata.AccessReviewEntryOrderField],
+	sourcesByID map[gid.GID]*coredata.AccessReviewCampaignSource,
 ) ListAccessEntriesOutput {
 	entries := make([]*AccessReviewEntry, 0, len(p.Data))
 	for _, e := range p.Data {
-		entries = append(entries, NewAccessReviewEntry(e))
+		entries = append(entries, NewAccessReviewEntry(e, sourcesByID[e.AccessReviewCampaignSourceID]))
 	}
 
 	var nextCursor *page.CursorKey
@@ -155,15 +187,9 @@ func NewAccessReviewStatistics(s *coredata.AccessReviewStatistics) *AccessReview
 		flagCounts[string(k)] = v
 	}
 
-	incrementalTagCounts := make(map[string]any, len(s.IncrementalTagCounts))
-	for k, v := range s.IncrementalTagCounts {
-		incrementalTagCounts[string(k)] = v
-	}
-
 	return &AccessReviewStatistics{
-		TotalCount:           s.TotalCount,
-		DecisionCounts:       decisionCounts,
-		FlagCounts:           flagCounts,
-		IncrementalTagCounts: incrementalTagCounts,
+		TotalCount:     s.TotalCount,
+		DecisionCounts: decisionCounts,
+		FlagCounts:     flagCounts,
 	}
 }

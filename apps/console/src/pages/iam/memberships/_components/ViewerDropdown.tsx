@@ -1,40 +1,63 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
-  DropdownSeparator,
-  IconArrowBoxLeft,
-  IconCircleQuestionmark,
-  IconKey,
-  UserDropdown,
-  UserDropdownItem,
-  useToast,
-} from "@probo/ui";
-import { useFragment, useMutation } from "react-relay";
-import { graphql } from "relay-runtime";
+  CaretDownIcon,
+  KeyIcon,
+  MoonIcon,
+  QuestionIcon,
+  SignOutIcon,
+  SunIcon,
+  UserIcon,
+} from "@phosphor-icons/react";
+import { Avatar } from "@probo/ui/src/v2/Avatar/Avatar";
+import { useDisplayMode } from "@probo/ui/src/v2/displayMode/useDisplayMode";
+import { Dropdown } from "@probo/ui/src/v2/Dropdown/Dropdown";
+import { DropdownGroup } from "@probo/ui/src/v2/Dropdown/DropdownGroup";
+import { DropdownItem } from "@probo/ui/src/v2/Dropdown/DropdownItem";
+import { DropdownPopup } from "@probo/ui/src/v2/Dropdown/DropdownPopup";
+import { DropdownSeparator } from "@probo/ui/src/v2/Dropdown/DropdownSeparator";
+import { DropdownTrigger } from "@probo/ui/src/v2/Dropdown/DropdownTrigger";
+import { EditableAvatarButton } from "@probo/ui/src/v2/EditableAvatarButton/EditableAvatarButton";
+import { Text } from "@probo/ui/src/v2/typography/Text";
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { graphql, useFragment } from "react-relay";
+import { Link } from "react-router";
 
 import type { ViewerDropdownFragment$key } from "#/__generated__/iam/ViewerDropdownFragment.graphql";
 import type { ViewerDropdownSignOutMutation } from "#/__generated__/iam/ViewerDropdownSignOutMutation.graphql";
+import { useMutation } from "#/lib/relay/useMutation";
+import { IdentityAvatarDialog } from "#/pages/iam/_components/IdentityAvatarDialog";
+
+import { topBarUserMenuTrigger } from "./TopBar/variants";
 
 export const fragment = graphql`
   fragment ViewerDropdownFragment on Identity {
-    canListAPIKeys: permission(action: "iam:personal-api-key:list")
     canListOAuth2AccessTokens: permission(action: "iam:oauth2-access-token:list")
     email
     fullName
+    avatar {
+      downloadUrl
+    }
+    ...IdentityAvatarDialog_identity
   }
 `;
 
@@ -46,71 +69,113 @@ const signOutMutation = graphql`
   }
 `;
 
-export function ViewerDropdown(props: { fKey: ViewerDropdownFragment$key }) {
-  const { fKey } = props;
+interface ViewerDropdownProps {
+  identityKey: ViewerDropdownFragment$key;
+}
 
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+export function ViewerDropdown({ identityKey }: ViewerDropdownProps) {
+  const { t } = useTranslation();
+  const { displayMode, toggleDisplayMode } = useDisplayMode();
 
-  const { canListAPIKeys, canListOAuth2AccessTokens, email, fullName }
-    = useFragment<ViewerDropdownFragment$key>(fragment, fKey);
-  const [signOut] = useMutation<ViewerDropdownSignOutMutation>(signOutMutation);
+  const identity = useFragment<ViewerDropdownFragment$key>(fragment, identityKey);
+  const { canListOAuth2AccessTokens, email, fullName, avatar } = identity;
+  const [signOut, isSigningOut] = useMutation<ViewerDropdownSignOutMutation>(
+    signOutMutation,
+    { errorToast: t("viewerDropdown.errors.cannotSignOut") },
+  );
+  const [avatarOpen, setAvatarOpen] = useState(false);
 
-  const handleLogout: React.MouseEventHandler<HTMLAnchorElement> = (e) => {
-    e.preventDefault();
+  const displayName = fullName.trim() || email;
+  const avatarSrc = avatar?.downloadUrl;
 
-    signOut({
-      variables: {},
-      onCompleted: (_, e) => {
-        if (e) {
-          toast({
-            title: __("Request failed"),
-            description: formatError(__("Cannot sign out"), e),
-            variant: "error",
-          });
-          return;
-        }
-        window.location.reload();
-      },
-      onError: (e) => {
-        toast({
-          title: __("Error"),
-          description: e.message,
-          variant: "error",
-        });
-      },
+  function handleSignOut() {
+    void signOut({ variables: {} }).then(() => {
+      // Full reload rather than a client navigation, so no Relay store
+      // survives the session it belonged to.
+      window.location.href = "/auth/login";
+    }).catch(() => {
+      // errorToast already handles user-facing feedback.
     });
-  };
+  }
 
   return (
-    <UserDropdown fullName={fullName} email={email}>
-      {canListAPIKeys && (
-        <UserDropdownItem
-          to="/me/api-keys"
-          icon={IconKey}
-          label={__("API Keys")}
+    <>
+      <Dropdown>
+        <DropdownTrigger
+          render={(
+            <button type="button" className={topBarUserMenuTrigger()} aria-label={displayName}>
+              <Avatar
+                name={displayName}
+                src={avatarSrc}
+                size={1}
+                variant="soft"
+                color="gold"
+                radius="small"
+                fallback={<UserIcon />}
+              />
+              <Text size={2} weight="medium" color="neutral" highContrast className="max-w-36 truncate">
+                {displayName}
+              </Text>
+              <CaretDownIcon className="size-4 shrink-0 text-sand-11" />
+            </button>
+          )}
         />
-      )}
-      {canListOAuth2AccessTokens && (
-        <UserDropdownItem
-          to="/me/oauth-tokens"
-          icon={IconKey}
-          label={__("OAuth tokens")}
-        />
-      )}
-      <UserDropdownItem
-        to="mailto:support@probo.com"
-        icon={IconCircleQuestionmark}
-        label={__("Help")}
+        <DropdownPopup align="end">
+          <DropdownGroup>
+            <div className="flex w-full items-center gap-3 px-3 py-3">
+              <EditableAvatarButton
+                fullName={displayName}
+                email={email}
+                src={avatarSrc}
+                onClick={() => setAvatarOpen(true)}
+                label={t("editAvatar.actions.change")}
+                size={2}
+                radius="small"
+              />
+              <div className="flex min-w-0 flex-col gap-1">
+                <Text size={2} weight="medium" color="neutral" highContrast>
+                  {displayName}
+                </Text>
+                <Text size={1} color="faint" className="truncate">
+                  {email}
+                </Text>
+              </div>
+            </div>
+          </DropdownGroup>
+          <DropdownSeparator />
+          {canListOAuth2AccessTokens && (
+            <DropdownItem iconStart={<KeyIcon />} render={<Link to="/me/oauth-tokens" />}>
+              {t("viewerDropdown.actions.oauthTokens")}
+            </DropdownItem>
+          )}
+          <DropdownItem
+            iconStart={displayMode === "dark" ? <SunIcon /> : <MoonIcon />}
+            onClick={toggleDisplayMode}
+          >
+            {displayMode === "dark"
+              ? t("nav.switchToLightMode")
+              : t("nav.switchToDarkMode")}
+          </DropdownItem>
+          <DropdownItem iconStart={<QuestionIcon />} render={<a href="mailto:support@probo.com" />}>
+            {t("viewerDropdown.actions.help")}
+          </DropdownItem>
+          <DropdownSeparator />
+          <DropdownItem
+            color="error"
+            iconStart={<SignOutIcon />}
+            disabled={isSigningOut}
+            onClick={handleSignOut}
+          >
+            {t("viewerDropdown.actions.logout")}
+          </DropdownItem>
+        </DropdownPopup>
+      </Dropdown>
+      <IdentityAvatarDialog
+        identityKey={identity}
+        open={avatarOpen}
+        onOpenChange={setAvatarOpen}
+        fullName={displayName}
       />
-      <DropdownSeparator />
-      <UserDropdownItem
-        variant="danger"
-        to="/logout"
-        icon={IconArrowBoxLeft}
-        label="Logout"
-        onClick={handleLogout}
-      />
-    </UserDropdown>
+    </>
   );
 }

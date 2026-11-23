@@ -1,83 +1,75 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import {
-  formatDate,
-  formatError,
-  getStatusLabel,
-  getStatusOptions,
-  getStatusVariant,
-  sprintf,
-} from "@probo/helpers";
+import { FileTextIcon, PlusIcon, UploadSimpleIcon } from "@phosphor-icons/react";
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
-import {
-  ActionDropdown,
-  Avatar,
-  Badge,
-  Button,
-  Card,
-  DropdownItem,
-  IconPageTextLine,
-  IconPlusLarge,
-  IconTrashCan,
-  IconUpload,
-  Option,
-  PageHeader,
-  Select,
-  Table,
-  Tbody,
-  Td,
-  Th,
-  Thead,
-  Tr,
-  useConfirm,
-  useToast,
-} from "@probo/ui";
-import { Suspense, useState, useTransition } from "react";
-import {
-  ConnectionHandler,
-  graphql,
-  type PreloadedQuery,
-  useFragment,
-  useMutation,
-  usePaginationFragment,
-  usePreloadedQuery,
-} from "react-relay";
-import { Link, useNavigate } from "react-router";
+import { Button } from "@probo/ui/src/v2/Button/Button";
+import { ButtonLink } from "@probo/ui/src/v2/Button/ButtonLink";
+import { Select } from "@probo/ui/src/v2/Select/Select";
+import { SelectItem } from "@probo/ui/src/v2/Select/SelectItem";
+import { SelectPopup } from "@probo/ui/src/v2/Select/SelectPopup";
+import { SelectTrigger } from "@probo/ui/src/v2/Select/SelectTrigger";
+import { Heading } from "@probo/ui/src/v2/typography/Heading";
+import { Text } from "@probo/ui/src/v2/typography/Text";
+import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { type PreloadedQuery, usePreloadedQuery } from "react-relay";
+import { useLocation, useNavigate } from "react-router";
+import { graphql } from "relay-runtime";
 
-import type { FindingsPageDeleteMutation } from "#/__generated__/core/FindingsPageDeleteMutation.graphql";
-import type { FindingsPageFragment$key } from "#/__generated__/core/FindingsPageFragment.graphql";
-import type { FindingsPageListQuery } from "#/__generated__/core/FindingsPageListQuery.graphql";
-import type {
-  FindingKind,
-  FindingPriority,
-  FindingsPageRefetchQuery,
-  FindingStatus,
-} from "#/__generated__/core/FindingsPageRefetchQuery.graphql";
-import type { FindingsPageRowFragment$key } from "#/__generated__/core/FindingsPageRowFragment.graphql";
-import { usePeople } from "#/hooks/graph/PeopleGraph";
+import type { FindingsPageQuery } from "#/__generated__/core/FindingsPageQuery.graphql";
 import { useOrganizationId } from "#/hooks/useOrganizationId";
+import { NotFoundError } from "#/lib/relay/errors";
 
-import { CreateFindingDialog } from "./dialogs/CreateFindingDialog";
+import { AuditFilterSelect } from "./_components/AuditFilterSelect";
+import { FindingList } from "./_components/FindingList/FindingList";
+import { FindingsOwnerFilter } from "./_components/FindingsOwnerFilter";
+import { findingsPage } from "./_components/variants";
+import {
+  findingKindKey,
+  findingKinds,
+  findingPriorities,
+  findingStatuses,
+  isFindingKind,
+  isFindingPriority,
+  isFindingStatus,
+} from "./_lib/findingOptions";
+import { findingDocumentPath, findingNewPath } from "./_lib/findingPath";
+import { useFindingsListFilters } from "./_lib/useFindingsListFilters";
 import { PublishFindingListDialog } from "./dialogs/PublishFindingListDialog";
 
-export const FindingsConnectionKey = "FindingsPage_findings";
-
 export const findingsPageQuery = graphql`
-  query FindingsPageListQuery($organizationId: ID!) {
-    node(id: $organizationId) {
+  query FindingsPageQuery(
+    $organizationId: ID!
+    $first: Int
+    $after: CursorKey
+    $last: Int
+    $before: CursorKey
+    $kind: FindingKind
+    $status: FindingStatus
+    $priority: FindingPriority
+    $ownerId: ID
+    $auditId: ID
+  ) {
+    organization: node(id: $organizationId) @required(action: THROW) {
+      __typename
       ... on Organization {
         canCreateFinding: permission(action: "core:finding:create")
         canPublishFindings: permission(action: "core:finding:publish")
@@ -87,501 +79,221 @@ export const findingsPageQuery = graphql`
             id
           }
         }
-        ...FindingsPageFragment
-      }
-    }
-  }
-`;
-
-const deleteFindingMutation = graphql`
-  mutation FindingsPageDeleteMutation(
-    $input: DeleteFindingInput!
-    $connections: [ID!]!
-  ) {
-    deleteFinding(input: $input) {
-      deletedFindingId @deleteEdge(connections: $connections)
-    }
-  }
-`;
-
-const findingRowFragment = graphql`
-  fragment FindingsPageRowFragment on Finding {
-    id
-    kind
-    referenceId
-    description
-    status
-    priority
-    dueDate
-    owner {
-      id
-      fullName
-    }
-    canUpdate: permission(action: "core:finding:update")
-    canDelete: permission(action: "core:finding:delete")
-  }
-`;
-
-const findingsPageFragment = graphql`
-  fragment FindingsPageFragment on Organization
-  @refetchable(queryName: "FindingsPageRefetchQuery")
-  @argumentDefinitions(
-    first: { type: "Int", defaultValue: 500 }
-    after: { type: "CursorKey" }
-    kind: { type: "FindingKind", defaultValue: null }
-    status: { type: "FindingStatus", defaultValue: null }
-    priority: { type: "FindingPriority", defaultValue: null }
-    ownerId: { type: "ID", defaultValue: null }
-  ) {
-    id
-    findings(
-      first: $first
-      after: $after
-      filter: {
-        kind: $kind
-        status: $status
-        priority: $priority
-        ownerId: $ownerId
-      }
-    )
-      @connection(
-        key: "FindingsPage_findings"
-        filters: ["filter"]
-      ) {
-      edges {
-        node {
-          id
-          canUpdate: permission(action: "core:finding:update")
-          canDelete: permission(action: "core:finding:delete")
-          ...FindingsPageRowFragment
+        findings(
+          first: $first
+          after: $after
+          last: $last
+          before: $before
+          orderBy: { field: CREATED_AT, direction: DESC }
+          filter: {
+            kind: $kind
+            status: $status
+            priority: $priority
+            ownerId: $ownerId
+            auditId: $auditId
+          }
+        ) {
+          totalCount
         }
-      }
-      pageInfo {
-        hasNextPage
-        endCursor
+        ...FindingList_organization
+          @arguments(
+            first: $first
+            after: $after
+            last: $last
+            before: $before
+            kind: $kind
+            status: $status
+            priority: $priority
+            ownerId: $ownerId
+            auditId: $auditId
+          )
       }
     }
   }
 `;
 
 interface FindingsPageProps {
-  queryRef: PreloadedQuery<FindingsPageListQuery>;
+  queryRef: PreloadedQuery<FindingsPageQuery>;
 }
 
-export default function FindingsPage({ queryRef }: FindingsPageProps) {
-  const { __ } = useTranslate();
+export function FindingsPage({ queryRef }: FindingsPageProps) {
+  const { t } = useTranslation("organizations/findings");
   const organizationId = useOrganizationId();
-
-  usePageTitle(__("Findings"));
-
   const navigate = useNavigate();
-  const organization = usePreloadedQuery<FindingsPageListQuery>(findingsPageQuery, queryRef);
-  const defaultApproverIds = (organization.node.findingsDocument?.defaultApprovers ?? []).map(a => a.id);
+  const location = useLocation();
+  const filters = useFindingsListFilters();
+  const { organization } = usePreloadedQuery<FindingsPageQuery>(findingsPageQuery, queryRef);
+  const queriedCount = organization.__typename === "Organization"
+    ? organization.findings?.totalCount ?? 0
+    : 0;
+  const [totalCount, setTotalCount] = useState(queriedCount);
+  const [seenQueryCount, setSeenQueryCount] = useState(queriedCount);
+  if (queriedCount !== seenQueryCount) {
+    setSeenQueryCount(queriedCount);
+    setTotalCount(queriedCount);
+  }
 
-  const [isPending, startTransition] = useTransition();
-  const [kindFilter, setKindFilter] = useState<FindingKind | null>(null);
-  const [statusFilter, setStatusFilter] = useState<FindingStatus | null>(null);
-  const [priorityFilter, setPriorityFilter] = useState<FindingPriority | null>(null);
-  const [ownerFilter, setOwnerFilter] = useState<string | null>(null);
+  usePageTitle(t("list.title"));
 
-  const { data, loadNext, hasNext, isLoadingNext, refetch }
-    = usePaginationFragment<FindingsPageRefetchQuery, FindingsPageFragment$key>(
-      findingsPageFragment,
-      organization.node,
-    );
+  const handleTotalCount = useCallback((count: number) => {
+    setTotalCount(count);
+  }, []);
 
-  const refetchFilters = (overrides: Record<string, unknown> = {}) => {
-    startTransition(() => {
-      refetch(
-        {
-          kind: kindFilter,
-          status: statusFilter,
-          priority: priorityFilter,
-          ownerId: ownerFilter,
-          ...overrides,
-        },
-        { fetchPolicy: "network-only" },
-      );
-    });
-  };
+  if (organization.__typename !== "Organization") {
+    throw new NotFoundError("invalid type for organization node");
+  }
 
-  const handleKindFilterChange = (value: string) => {
-    const newKind = value === "ALL" ? null : (value as FindingKind);
-    setKindFilter(newKind);
-    refetchFilters({ kind: newKind });
-  };
+  const canCreate = organization.canCreateFinding ?? false;
+  const documentId = organization.findingsDocument?.id;
+  const defaultApproverIds = organization.findingsDocument?.defaultApprovers.map(approver => approver.id);
+  const {
+    root,
+    header,
+    intro,
+    title,
+    actions,
+    results,
+    tableFilters,
+    filter,
+  } = findingsPage();
 
-  const handleStatusFilterChange = (value: string) => {
-    const newStatus = value === "ALL" ? null : (value as FindingStatus);
-    setStatusFilter(newStatus);
-    refetchFilters({ status: newStatus });
-  };
-
-  const handlePriorityFilterChange = (value: string) => {
-    const newPriority = value === "ALL" ? null : (value as FindingPriority);
-    setPriorityFilter(newPriority);
-    refetchFilters({ priority: newPriority });
-  };
-
-  const handleOwnerFilterChange = (value: string) => {
-    const newOwner = value === "ALL" ? null : value;
-    setOwnerFilter(newOwner);
-    refetchFilters({ ownerId: newOwner });
-  };
-
-  const currentFilter = {
-    kind: kindFilter,
-    status: statusFilter,
-    priority: priorityFilter,
-    ownerId: ownerFilter,
-  };
-
-  const connectionId = ConnectionHandler.getConnectionID(
-    organizationId,
-    FindingsConnectionKey,
-    { filter: currentFilter },
-  );
-  const allFiltersNullConnectionId = ConnectionHandler.getConnectionID(
-    organizationId,
-    FindingsConnectionKey,
-    {
-      filter: {
-        kind: null,
-        status: null,
-        priority: null,
-        ownerId: null,
-      },
-    },
-  );
-  const hasActiveFilter = kindFilter || statusFilter || priorityFilter || ownerFilter;
-  const createConnectionIds = hasActiveFilter
-    ? [allFiltersNullConnectionId, connectionId]
-    : [connectionId];
-  const findings = data?.findings?.edges?.map(edge => edge.node) ?? [];
-
-  const hasAnyAction
-    = findings.some(({ canDelete, canUpdate }) => canDelete || canUpdate);
+  const create = canCreate
+    ? (
+        <ButtonLink
+          to={{ pathname: findingNewPath(organizationId), search: location.search }}
+          variant="solid"
+          iconStart={<PlusIcon />}
+        >
+          {t("list.actions.new")}
+        </ButtonLink>
+      )
+    : null;
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title={__("Findings")}
-        description={__("Manage your organization's findings.")}
-      >
-        <div className="flex gap-2">
-          {organization.node.findingsDocument?.id && (
-            <Button variant="secondary" asChild>
-              <Link
-                to={`/organizations/${organizationId}/documents/${organization.node.findingsDocument.id}`}
-              >
-                <IconPageTextLine size={16} />
-                {__("Document")}
-              </Link>
-            </Button>
+    <div className={root()}>
+      <div className={header()}>
+        <div className={intro()}>
+          <div className={title()}>
+            <Heading level={1} size={6} weight="medium" highContrast>
+              {t("list.title")}
+            </Heading>
+            <Text size={2} color="faint">{totalCount}</Text>
+          </div>
+          <Text size={2} color="faint">{t("list.description")}</Text>
+        </div>
+        <div className={actions()}>
+          {documentId && (
+            <ButtonLink
+              to={findingDocumentPath(organizationId, documentId)}
+              variant="soft"
+              color="neutral"
+              iconStart={<FileTextIcon />}
+            >
+              {t("list.actions.document")}
+            </ButtonLink>
           )}
-          {organization.node.canPublishFindings && (
+          {organization.canPublishFindings && (
             <PublishFindingListDialog
               organizationId={organizationId}
               defaultApproverIds={defaultApproverIds}
-              onPublished={(documentId) => {
-                void navigate(
-                  `/organizations/${organizationId}/documents/${documentId}`,
-                );
+              onPublished={(publishedDocumentId) => {
+                void navigate(findingDocumentPath(organizationId, publishedDocumentId));
               }}
             >
-              <Button variant="secondary" icon={IconUpload}>
-                {__("Publish")}
+              <Button variant="soft" color="neutral" iconStart={<UploadSimpleIcon />}>
+                {t("list.actions.publish")}
               </Button>
             </PublishFindingListDialog>
           )}
-          {organization.node.canCreateFinding && (
-            <CreateFindingDialog
-              organizationId={organizationId}
-              connectionIds={createConnectionIds}
-            >
-              <Button icon={IconPlusLarge}>{__("Add finding")}</Button>
-            </CreateFindingDialog>
-          )}
+          {create}
         </div>
-      </PageHeader>
-
-      <div className="flex items-center gap-4">
-        <Select
-          value={kindFilter ?? "ALL"}
-          onValueChange={handleKindFilterChange}
-        >
-          <Option value="ALL">{__("All kinds")}</Option>
-          <Option value="MINOR_NONCONFORMITY">{__("Minor nonconformity")}</Option>
-          <Option value="MAJOR_NONCONFORMITY">{__("Major nonconformity")}</Option>
-          <Option value="OBSERVATION">{__("Observation")}</Option>
-          <Option value="EXCEPTION">{__("Exception")}</Option>
-        </Select>
-        <Select
-          value={statusFilter ?? "ALL"}
-          onValueChange={handleStatusFilterChange}
-        >
-          <Option value="ALL">{__("All statuses")}</Option>
-          {getStatusOptions(__).map(opt => (
-            <Option key={opt.value} value={opt.value}>
-              {opt.label}
-            </Option>
-          ))}
-        </Select>
-        <Select
-          value={priorityFilter ?? "ALL"}
-          onValueChange={handlePriorityFilterChange}
-        >
-          <Option value="ALL">{__("All priorities")}</Option>
-          <Option value="LOW">{__("Low")}</Option>
-          <Option value="MEDIUM">{__("Medium")}</Option>
-          <Option value="HIGH">{__("High")}</Option>
-        </Select>
-        <Suspense fallback={<Select loading placeholder={__("Loading...")} />}>
-          <OwnerFilterSelect
-            organizationId={organizationId}
-            value={ownerFilter}
-            onChange={handleOwnerFilterChange}
-          />
-        </Suspense>
       </div>
-
-      <div className={isPending ? "opacity-50 pointer-events-none transition-opacity" : ""}>
-        {findings.length > 0
-          ? (
-              <Card>
-                <Table>
-                  <Thead>
-                    <Tr>
-                      <Th>{__("Kind")}</Th>
-                      <Th>{__("Reference ID")}</Th>
-                      <Th>{__("Description")}</Th>
-                      <Th>{__("Status")}</Th>
-                      <Th>{__("Priority")}</Th>
-                      <Th>{__("Owner")}</Th>
-                      <Th>{__("Due Date")}</Th>
-                      {hasAnyAction && <Th>{__("Actions")}</Th>}
-                    </Tr>
-                  </Thead>
-                  <Tbody>
-                    {findings.map(finding => (
-                      <FindingRow
-                        key={finding.id}
-                        findingKey={finding}
-                        connectionId={connectionId}
-                        hasAnyAction={hasAnyAction}
-                      />
-                    ))}
-                  </Tbody>
-                </Table>
-
-                {hasNext && (
-                  <div className="p-4 border-t">
-                    <Button
-                      variant="secondary"
-                      onClick={() => loadNext(10)}
-                      disabled={isLoadingNext}
-                    >
-                      {isLoadingNext ? __("Loading...") : __("Load more")}
-                    </Button>
-                  </div>
-                )}
-              </Card>
-            )
-          : (
-              <Card padded>
-                <div className="text-center py-12">
-                  <h3 className="text-lg font-semibold mb-2">
-                    {__("No findings yet")}
-                  </h3>
-                  <p className="text-txt-tertiary mb-4">
-                    {__("Create your first finding to get started.")}
-                  </p>
-                </div>
-              </Card>
-            )}
+      <div className={results()}>
+        <div className={tableFilters()}>
+          <div className={filter()}>
+            <Select<string | null>
+              value={filters.kind}
+              onValueChange={(value) => {
+                filters.setKind(value != null && isFindingKind(value) ? value : null);
+              }}
+            >
+              <SelectTrigger size={2} placeholder={t("list.filters.allKinds")} aria-label={t("list.columns.kind")}>
+                {(value: string | null) => value == null
+                  ? t("list.filters.allKinds")
+                  : t(`list.kinds.${findingKindKey(value)}`)}
+              </SelectTrigger>
+              <SelectPopup align="end">
+                <SelectItem value={null}>{t("list.filters.allKinds")}</SelectItem>
+                {findingKinds.map(kind => (
+                  <SelectItem key={kind} value={kind}>
+                    {t(`list.kinds.${findingKindKey(kind)}`)}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          </div>
+          <div className={filter()}>
+            <Select<string | null>
+              value={filters.status}
+              onValueChange={(value) => {
+                filters.setStatus(value != null && isFindingStatus(value) ? value : null);
+              }}
+            >
+              <SelectTrigger size={2} placeholder={t("list.filters.allStatuses")} aria-label={t("list.columns.status")}>
+                {(value: string | null) => value == null
+                  ? t("list.filters.allStatuses")
+                  : t(`list.statuses.${value.toLowerCase()}`)}
+              </SelectTrigger>
+              <SelectPopup align="end">
+                <SelectItem value={null}>{t("list.filters.allStatuses")}</SelectItem>
+                {findingStatuses.map(status => (
+                  <SelectItem key={status} value={status}>
+                    {t(`list.statuses.${status.toLowerCase()}`)}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          </div>
+          <div className={filter()}>
+            <Select<string | null>
+              value={filters.priority}
+              onValueChange={(value) => {
+                filters.setPriority(value != null && isFindingPriority(value) ? value : null);
+              }}
+            >
+              <SelectTrigger size={2} placeholder={t("list.filters.allPriorities")} aria-label={t("list.columns.priority")}>
+                {(value: string | null) => value == null
+                  ? t("list.filters.allPriorities")
+                  : t(`list.priorities.${value.toLowerCase()}`)}
+              </SelectTrigger>
+              <SelectPopup align="end">
+                <SelectItem value={null}>{t("list.filters.allPriorities")}</SelectItem>
+                {findingPriorities.map(priority => (
+                  <SelectItem key={priority} value={priority}>
+                    {t(`list.priorities.${priority.toLowerCase()}`)}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          </div>
+          <div className={filter()}>
+            <FindingsOwnerFilter />
+          </div>
+          <div className={filter()}>
+            <AuditFilterSelect
+              organizationId={organizationId}
+              value={filters.auditId}
+              onChange={filters.setAuditId}
+            />
+          </div>
+        </div>
+        <FindingList
+          organizationKey={organization}
+          loadedVariables={queryRef.variables}
+          create={create}
+          onTotalCount={handleTotalCount}
+        />
       </div>
     </div>
-  );
-}
-
-function getKindLabel(kind: string, __: (s: string) => string): string {
-  switch (kind) {
-    case "MINOR_NONCONFORMITY":
-      return __("Minor nonconformity");
-    case "MAJOR_NONCONFORMITY":
-      return __("Major nonconformity");
-    case "OBSERVATION":
-      return __("Observation");
-    case "EXCEPTION":
-      return __("Exception");
-    default:
-      return kind;
-  }
-}
-
-type FindingRowProps = {
-  findingKey: FindingsPageRowFragment$key;
-  connectionId: string;
-  hasAnyAction: boolean;
-};
-
-function FindingRow(props: FindingRowProps) {
-  const finding = useFragment(findingRowFragment, props.findingKey);
-  const organizationId = useOrganizationId();
-  const { __ } = useTranslate();
-  const [deleteFinding] = useMutation<FindingsPageDeleteMutation>(deleteFindingMutation);
-  const { toast } = useToast();
-  const confirm = useConfirm();
-
-  const handleDelete = () => {
-    confirm(
-      () =>
-        new Promise<void>((resolve) => {
-          deleteFinding({
-            variables: {
-              input: {
-                findingId: finding.id,
-              },
-              connections: [props.connectionId],
-            },
-            onCompleted(_, error) {
-              if (error) {
-                toast({
-                  title: __("Error"),
-                  description: formatError(
-                    __("Failed to delete finding"),
-                    error,
-                  ),
-                  variant: "error",
-                });
-              } else {
-                toast({
-                  title: __("Success"),
-                  description: __("Finding deleted successfully"),
-                  variant: "success",
-                });
-              }
-              resolve();
-            },
-            onError(error) {
-              toast({
-                title: __("Error"),
-                description: formatError(
-                  __("Failed to delete finding"),
-                  error,
-                ),
-                variant: "error",
-              });
-              resolve();
-            },
-          });
-        }),
-      {
-        message: sprintf(
-          __(
-            "This will permanently delete the finding %s. This action cannot be undone.",
-          ),
-          finding.referenceId,
-        ),
-      },
-    );
-  };
-
-  const detailsUrl = `/organizations/${organizationId}/findings/${finding.id}`;
-
-  return (
-    <Tr to={detailsUrl}>
-      <Td>
-        <Badge variant="neutral">
-          {getKindLabel(finding.kind, __)}
-        </Badge>
-      </Td>
-      <Td>
-        <span className="font-mono text-sm">{finding.referenceId}</span>
-      </Td>
-      <Td>
-        <div className="min-w-0">
-          <p className="whitespace-pre-wrap break-words">
-            {finding.description || __("No description")}
-          </p>
-        </div>
-      </Td>
-      <Td>
-        <Badge variant={getStatusVariant(finding.status)}>
-          {getStatusLabel(finding.status)}
-        </Badge>
-      </Td>
-      <Td>
-        <Badge
-          variant={
-            finding.priority === "HIGH"
-              ? "danger"
-              : finding.priority === "MEDIUM"
-                ? "warning"
-                : "success"
-          }
-        >
-          {finding.priority === "HIGH"
-            ? __("High")
-            : finding.priority === "MEDIUM"
-              ? __("Medium")
-              : __("Low")}
-        </Badge>
-      </Td>
-      <Td>{finding.owner?.fullName || "-"}</Td>
-      <Td>
-        {finding.dueDate
-          ? (
-              <time dateTime={finding.dueDate}>
-                {formatDate(finding.dueDate)}
-              </time>
-            )
-          : (
-              <span className="text-txt-tertiary">{__("No due date")}</span>
-            )}
-      </Td>
-      {props.hasAnyAction && (
-        <Td noLink width={50} className="text-end">
-          <ActionDropdown>
-            {finding.canDelete && (
-              <DropdownItem
-                icon={IconTrashCan}
-                variant="danger"
-                onSelect={handleDelete}
-              >
-                {__("Delete")}
-              </DropdownItem>
-            )}
-          </ActionDropdown>
-        </Td>
-      )}
-    </Tr>
-  );
-}
-
-type OwnerFilterSelectProps = {
-  organizationId: string;
-  value: string | null;
-  onChange: (value: string) => void;
-};
-
-function OwnerFilterSelect({
-  organizationId,
-  value,
-  onChange,
-}: OwnerFilterSelectProps) {
-  const { __ } = useTranslate();
-  const people = usePeople(organizationId, { contractEnded: false });
-
-  return (
-    <Select value={value ?? "ALL"} onValueChange={onChange}>
-      <Option value="ALL">{__("All owners")}</Option>
-      {people.map(p => (
-        <Option key={p.id} value={p.id}>
-          <Avatar name={p.fullName} />
-          {p.fullName}
-        </Option>
-      ))}
-    </Select>
   );
 }

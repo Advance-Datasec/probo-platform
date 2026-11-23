@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -76,6 +82,7 @@ type CommonTrackerPatternFilter struct {
 	matchType          *TrackerPatternMatchType
 	commonThirdPartyID *gid.GID
 	keyword            *string
+	patternKeyword     *string
 	linked             *bool
 	described          *bool
 	state              *CommonTrackerPatternEnrichmentState
@@ -108,8 +115,24 @@ func (f *CommonTrackerPatternFilter) WithCommonThirdPartyID(id *gid.GID) *Common
 	return f
 }
 
+// WithKeyword matches a substring of the pattern key or the description.
+//
+// The description is agent-written and rewritten by enrichment, so a selection
+// built on it is not stable over time. Prefer WithPatternKeyword for anything
+// that acts on the rows it selects.
 func (f *CommonTrackerPatternFilter) WithKeyword(keyword *string) *CommonTrackerPatternFilter {
 	f.keyword = keyword
+	return f
+}
+
+// WithPatternKeyword matches a substring of the pattern key only.
+//
+// The key is immutable, so the same selection returns the same rows however
+// often it runs. That matters for bulk actions: an action that also clears
+// descriptions would otherwise change what a description-matching selection
+// finds on the next run.
+func (f *CommonTrackerPatternFilter) WithPatternKeyword(keyword *string) *CommonTrackerPatternFilter {
+	f.patternKeyword = keyword
 	return f
 }
 
@@ -175,6 +198,17 @@ func (f *CommonTrackerPatternFilter) SQLFragment() string {
 	END
 	AND
 	CASE
+		WHEN @filter_pattern_keyword::text IS NOT NULL AND @filter_pattern_keyword::text != '' THEN
+			-- Escaped so the value is the literal substring the flag documents.
+			-- Unescaped, a bare '%' would match the whole table, which on a
+			-- terminal bulk action means marking the entire catalog.
+			pattern ILIKE '%' || replace(replace(replace(
+				@filter_pattern_keyword, '\', '\\'), '%', '\%'), '_', '\_') || '%'
+			ESCAPE '\'
+		ELSE TRUE
+	END
+	AND
+	CASE
 		WHEN @filter_linked::boolean IS NULL THEN TRUE
 		WHEN @filter_linked::boolean THEN common_third_party_id IS NOT NULL
 		ELSE common_third_party_id IS NULL
@@ -210,6 +244,7 @@ func (f *CommonTrackerPatternFilter) SQLArguments() pgx.StrictNamedArgs {
 		"filter_match_type":            nil,
 		"filter_common_third_party_id": nil,
 		"filter_keyword":               nil,
+		"filter_pattern_keyword":       nil,
 		"filter_linked":                nil,
 		"filter_described":             nil,
 		"filter_state_queued":          false,
@@ -236,6 +271,10 @@ func (f *CommonTrackerPatternFilter) SQLArguments() pgx.StrictNamedArgs {
 
 	if f.commonThirdPartyID != nil {
 		args["filter_common_third_party_id"] = *f.commonThirdPartyID
+	}
+
+	if f.patternKeyword != nil {
+		args["filter_pattern_keyword"] = *f.patternKeyword
 	}
 
 	if f.keyword != nil {

@@ -1,47 +1,55 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { LockSimpleIcon } from "@phosphor-icons/react";
 import { Avatar } from "@probo/ui/src/v2/Avatar/Avatar";
 import { Button } from "@probo/ui/src/v2/Button/Button";
-import { Link } from "@probo/ui/src/v2/Button/Link";
+import { ButtonLink } from "@probo/ui/src/v2/Button/ButtonLink";
 import { Text } from "@probo/ui/src/v2/typography/Text";
 import { useTranslation } from "react-i18next";
 import { graphql, useFragment } from "react-relay";
 import { Link as RouterLink, useLocation } from "react-router";
 
+import { getSafeContinueUrl, redirectToInitiate } from "#/lib/auth/continueUrl";
+import { useLocalizedPath } from "#/lib/i18n/useLocale";
+
 import type { TopBar_query$key } from "./__generated__/TopBar_query.graphql";
+import { LocaleSelect } from "./LocaleSelect";
+import { TOP_BAR_NAV_ITEMS } from "./navItems";
+import { TopBarMobileNav } from "./TopBarMobileNav";
 import { TopBarUserMenu } from "./TopBarUserMenu";
 import { topBar } from "./variants";
-
-const NAV_ITEMS = [
-  { to: "/documents", labelKey: "topBar.nav.documents" },
-  { to: "/subprocessors", labelKey: "topBar.nav.subprocessors" },
-  { to: "/updates", labelKey: "topBar.nav.updates" },
-  { to: "/requests", labelKey: "topBar.nav.requests" },
-] as const;
 
 const topBarFragment = graphql`
   fragment TopBar_query on Query {
     viewer {
       ...TopBarUserMenu_identity
+      ...TopBarMobileNav_identity
     }
-    currentTrustCenter @required(action: THROW) {
+    currentCompliancePortal @required(action: THROW) {
       themedLogoUrl
-      organization {
-        name
+      entityName
+      capabilities {
+        rightsRequests
       }
+      ...TopBarMobileNav_compliancePortal
     }
   }
 `;
@@ -57,58 +65,87 @@ function isActive(pathname: string, to: string): boolean {
 export function TopBar({ queryKey }: TopBarProps) {
   const { t } = useTranslation();
   const data = useFragment(topBarFragment, queryKey);
-  const { pathname } = useLocation();
+  const location = useLocation();
+  const { pathname } = location;
+  const localizedPath = useLocalizedPath();
 
-  const { currentTrustCenter } = data;
-  const organizationName = currentTrustCenter.organization.name;
-  const logoUrl = currentTrustCenter.themedLogoUrl ?? undefined;
+  const { currentCompliancePortal } = data;
+  const entityName = currentCompliancePortal.entityName;
+  const logoUrl = currentCompliancePortal.themedLogoUrl ?? undefined;
+  const navItems = TOP_BAR_NAV_ITEMS.filter(
+    item => item.to !== "/requests" || currentCompliancePortal.capabilities.rightsRequests,
+  );
 
   const slots = topBar();
+  const homePath = localizedPath("/");
 
   return (
     <header className={slots.bar()}>
       <div className={slots.inner()}>
-        <RouterLink to="/" className={slots.brand()}>
+        <RouterLink
+          to={homePath}
+          className={slots.brand()}
+          aria-label={`${entityName} ${t("topBar.tagline")}`}
+        >
           <Avatar
-            size={1}
+            size={2}
             variant="soft"
             color="neutral"
             radius="small"
             src={logoUrl}
-            fallback={organizationName.charAt(0) || "?"}
+            fallback={entityName.charAt(0) || "?"}
             className={slots.logo()}
           />
-          <Text size={2} weight="medium" color="neutral" highContrast>
-            {organizationName}
-          </Text>
-          <Text size={2} color="neutral">
-            {t("topBar.tagline")}
-          </Text>
+          <span className={slots.brandText()}>
+            <Text size={2} weight="medium" color="neutral" highContrast className={slots.brandName()}>
+              {entityName}
+            </Text>
+            <Text size={1} color="neutral" className={slots.tagline()}>
+              {t("topBar.tagline")}
+            </Text>
+          </span>
         </RouterLink>
 
-        <div className={slots.spacer()} />
-
         <nav className={slots.nav()}>
-          {NAV_ITEMS.map(item => (
-            <Link
-              key={item.to}
-              to={item.to}
-              variant="ghost"
-              color="neutral"
-              size={2}
-              active={isActive(pathname, item.to)}
-            >
-              {t(item.labelKey)}
-            </Link>
-          ))}
+          {navItems.map((item) => {
+            const to = localizedPath(item.to);
+            return (
+              <ButtonLink
+                key={item.to}
+                to={to}
+                variant="ghost"
+                color="neutral"
+                size={2}
+                active={isActive(pathname, to)}
+              >
+                {t(item.labelKey)}
+              </ButtonLink>
+            );
+          })}
           {data.viewer == null
             ? (
-                <Button variant="solid" color="neutral" highContrast iconStart={<LockSimpleIcon />}>
-                  {t("topBar.getAccess")}
-                </Button>
+                <>
+                  <LocaleSelect />
+                  <Button
+                    variant="solid"
+                    color="neutral"
+                    highContrast
+                    iconStart={<LockSimpleIcon />}
+                    onClick={() => {
+                      redirectToInitiate(getSafeContinueUrl(window.location.href));
+                    }}
+                  >
+                    {t("topBar.getAccess")}
+                  </Button>
+                </>
               )
             : <TopBarUserMenu identityKey={data.viewer} />}
         </nav>
+
+        <TopBarMobileNav
+          identityKey={data.viewer ?? null}
+          compliancePortalKey={currentCompliancePortal}
+        />
       </div>
     </header>
   );

@@ -1,35 +1,38 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import type { INodeProperties, IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
 import { proboApiRequest } from '../../GenericFunctions';
+import { internalControlLocator, personLocator, taskLocator, organizationLocator } from '../../locators';
 
 export const description: INodeProperties[] = [
-	{
-		displayName: 'Task ID',
-		name: 'taskId',
-		type: 'string',
-		displayOptions: {
-			show: {
-				resource: ['task'],
-				operation: ['update'],
-			},
-		},
-		default: '',
-		description: 'The ID of the task to update',
-		required: true,
-	},
+	organizationLocator({
+		resource: ['task'],
+		operation: ['update'],
+		required: false,
+		description: 'Organization to search in. Leave this empty when entering an ID.',
+	}),
+	taskLocator({
+		resource: ['task'],
+		operation: ['update'],
+	}),
 	{
 		displayName: 'Name',
 		name: 'name',
@@ -44,9 +47,12 @@ export const description: INodeProperties[] = [
 		description: 'The name of the task',
 	},
 	{
-		displayName: 'Description',
-		name: 'description',
+		displayName: 'Content',
+		name: 'content',
 		type: 'string',
+		typeOptions: {
+			rows: 6,
+		},
 		displayOptions: {
 			show: {
 				resource: ['task'],
@@ -54,7 +60,7 @@ export const description: INodeProperties[] = [
 			},
 		},
 		default: '',
-		description: 'The description of the task',
+		description: 'The content of the task as a ProseMirror document JSON string. An image node sets fileId from an attachment upload. A file node sets fileId, fileName, mimeType, and size',
 	},
 	{
 		displayName: 'State',
@@ -72,16 +78,28 @@ export const description: INodeProperties[] = [
 				value: '',
 			},
 			{
-				name: 'Todo',
-				value: 'TODO',
+				name: 'Backlog',
+				value: 'BACKLOG',
+			},
+			{
+				name: 'Canceled',
+				value: 'CANCELED',
+			},
+			{
+				name: 'Done',
+				value: 'DONE',
+			},
+			{
+				name: 'Duplicate',
+				value: 'DUPLICATE',
 			},
 			{
 				name: 'In Progress',
 				value: 'IN_PROGRESS',
 			},
 			{
-				name: 'Done',
-				value: 'DONE',
+				name: 'Todo',
+				value: 'TODO',
 			},
 		],
 		default: '',
@@ -161,9 +179,22 @@ export const description: INodeProperties[] = [
 		default: '',
 		description: 'The deadline for the task',
 	},
-	{
-		displayName: 'Assigned To ID',
+	personLocator({
 		name: 'assignedToId',
+		displayName: 'Assignee',
+		resource: ['task'],
+		operation: ['update'],
+		required: false,
+	}),
+	internalControlLocator({
+		resource: ['task'],
+		operation: ['update'],
+		required: false,
+		description: 'The ID of the internal control this task belongs to',
+	}),
+	{
+		displayName: 'Recurrence Interval',
+		name: 'recurrenceInterval',
 		type: 'string',
 		displayOptions: {
 			show: {
@@ -172,20 +203,20 @@ export const description: INodeProperties[] = [
 			},
 		},
 		default: '',
-		description: 'The ID of the user assigned to this task',
+		description: 'ISO-8601 duration for how often the task repeats, e.g. P7D, P1M or P1Y. Requires a deadline. The next task is created when that deadline passes. Leave empty and enable Clear Recurrence to remove it.',
 	},
 	{
-		displayName: 'Measure ID',
-		name: 'measureId',
-		type: 'string',
+		displayName: 'Clear Recurrence',
+		name: 'clearRecurrenceInterval',
+		type: 'boolean',
 		displayOptions: {
 			show: {
 				resource: ['task'],
 				operation: ['update'],
 			},
 		},
-		default: '',
-		description: 'The ID of the measure this task belongs to',
+		default: false,
+		description: 'Whether to remove the recurrence interval from the task',
 	},
 ];
 
@@ -193,16 +224,18 @@ export async function execute(
 	this: IExecuteFunctions,
 	itemIndex: number,
 ): Promise<INodeExecutionData> {
-	const taskId = this.getNodeParameter('taskId', itemIndex) as string;
+	const taskId = this.getNodeParameter('taskId', itemIndex, '', { extractValue: true }) as string;
 	const name = this.getNodeParameter('name', itemIndex, '') as string;
-	const description = this.getNodeParameter('description', itemIndex, '') as string;
+	const content = this.getNodeParameter('content', itemIndex, '') as string;
 	const state = this.getNodeParameter('state', itemIndex, '') as string;
 	const priority = this.getNodeParameter('priority', itemIndex, '') as string;
 	const rank = this.getNodeParameter('rank', itemIndex, '') as string;
 	const timeEstimate = this.getNodeParameter('timeEstimate', itemIndex, '') as string;
 	const deadline = this.getNodeParameter('deadline', itemIndex, '') as string;
-	const assignedToId = this.getNodeParameter('assignedToId', itemIndex, '') as string;
-	const measureId = this.getNodeParameter('measureId', itemIndex, '') as string;
+	const assignedToId = this.getNodeParameter('assignedToId', itemIndex, '', { extractValue: true }) as string;
+	const internalControlId = this.getNodeParameter('internalControlId', itemIndex, '', { extractValue: true }) as string;
+	const recurrenceInterval = this.getNodeParameter('recurrenceInterval', itemIndex, '') as string;
+	const clearRecurrenceInterval = this.getNodeParameter('clearRecurrenceInterval', itemIndex, false) as boolean;
 
 	const query = `
 		mutation UpdateTask($input: UpdateTaskInput!) {
@@ -210,11 +243,12 @@ export async function execute(
 				task {
 					id
 					name
-					description
+					content
 					state
 					priority
 					timeEstimate
 					deadline
+					recurrenceInterval
 					createdAt
 					updatedAt
 				}
@@ -222,16 +256,21 @@ export async function execute(
 		}
 	`;
 
-	const input: Record<string, string> = { taskId };
+	const input: Record<string, string | null> = { taskId };
 	if (name) input.name = name;
-	if (description) input.description = description;
+	if (content) input.content = content;
 	if (state) input.state = state;
 	if (priority) input.priority = priority;
 	if (rank) input.rank = rank;
 	if (timeEstimate) input.timeEstimate = timeEstimate;
 	if (deadline) input.deadline = deadline;
 	if (assignedToId) input.assignedToId = assignedToId;
-	if (measureId) input.measureId = measureId;
+	if (internalControlId) input.internalControlId = internalControlId;
+	if (clearRecurrenceInterval) {
+		input.recurrenceInterval = null;
+	} else if (recurrenceInterval) {
+		input.recurrenceInterval = recurrenceInterval;
+	}
 
 	const responseData = await proboApiRequest.call(this, query, { input });
 

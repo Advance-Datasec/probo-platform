@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_test
 
@@ -23,6 +29,219 @@ import (
 	"go.probo.inc/probo/e2e/internal/factory"
 	"go.probo.inc/probo/e2e/internal/testutil"
 )
+
+// TestUser_AdminCannotCreateOwner is a non-regression test for the vertical
+// privilege escalation where an ADMIN could mint an OWNER membership via
+// createUser. Granting ownership (whether by creating an OWNER member or
+// promoting one) is owner-only, enforced by policy on the target role.
+func TestUser_AdminCannotCreateOwner(t *testing.T) {
+	t.Parallel()
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	admin := testutil.NewClientInOrg(t, testutil.RoleAdmin, owner)
+
+	const createUserMutation = `
+		mutation($input: CreateUserInput!) {
+			createUser(input: $input) {
+				profileEdge {
+					node {
+						membership { role }
+					}
+				}
+			}
+		}
+	`
+
+	newUserInput := func(role string) map[string]any {
+		return map[string]any{
+			"input": map[string]any{
+				"organizationId":           owner.GetOrganizationID().String(),
+				"emailAddress":             factory.SafeEmail(),
+				"fullName":                 factory.SafeName("Privesc User"),
+				"role":                     role,
+				"kind":                     "EMPLOYEE",
+				"additionalEmailAddresses": []string{},
+			},
+		}
+	}
+
+	// An ADMIN must not be able to create an OWNER membership.
+	_, err := admin.DoConnect(createUserMutation, newUserInput("OWNER"))
+	testutil.RequireForbiddenError(t, err)
+
+	// The same ADMIN can still create a lower-privileged member.
+	var adminCreate struct {
+		CreateUser struct {
+			ProfileEdge struct {
+				Node struct {
+					Membership struct {
+						Role string `json:"role"`
+					} `json:"membership"`
+				} `json:"node"`
+			} `json:"profileEdge"`
+		} `json:"createUser"`
+	}
+
+	err = admin.ExecuteConnect(createUserMutation, newUserInput("ADMIN"), &adminCreate)
+	require.NoError(t, err)
+	assert.Equal(t, "ADMIN", adminCreate.CreateUser.ProfileEdge.Node.Membership.Role)
+
+	// An OWNER remains able to create an OWNER membership.
+	var ownerCreate struct {
+		CreateUser struct {
+			ProfileEdge struct {
+				Node struct {
+					Membership struct {
+						Role string `json:"role"`
+					} `json:"membership"`
+				} `json:"node"`
+			} `json:"profileEdge"`
+		} `json:"createUser"`
+	}
+
+	err = owner.ExecuteConnect(createUserMutation, newUserInput("OWNER"), &ownerCreate)
+	require.NoError(t, err)
+	assert.Equal(t, "OWNER", ownerCreate.CreateUser.ProfileEdge.Node.Membership.Role)
+}
+
+// TestUser_AdminCannotPromoteToOwner is a non-regression test that an ADMIN
+// cannot grant ownership by promoting an existing member to OWNER via
+// updateMembership. Granting ownership is owner-only, enforced by policy on the
+// assigned (target) role; an ADMIN may still change members between non-owner
+// roles.
+func TestUser_AdminCannotPromoteToOwner(t *testing.T) {
+	t.Parallel()
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	admin := testutil.NewClientInOrg(t, testutil.RoleAdmin, owner)
+	viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
+
+	const membershipQuery = `
+		query($id: ID!) {
+			node(id: $id) {
+				... on Profile {
+					membership { id }
+				}
+			}
+		}
+	`
+
+	var viewerMembership struct {
+		Node struct {
+			Membership struct {
+				ID string `json:"id"`
+			} `json:"membership"`
+		} `json:"node"`
+	}
+
+	err := owner.ExecuteConnect(membershipQuery, map[string]any{
+		"id": viewer.GetProfileID().String(),
+	}, &viewerMembership)
+	require.NoError(t, err)
+	require.NotEmpty(t, viewerMembership.Node.Membership.ID)
+
+	membershipID := viewerMembership.Node.Membership.ID
+
+	const updateMembershipMutation = `
+		mutation($input: UpdateMembershipInput!) {
+			updateMembership(input: $input) {
+				membership { role }
+			}
+		}
+	`
+
+	updateInput := func(role string) map[string]any {
+		return map[string]any{
+			"input": map[string]any{
+				"organizationId": owner.GetOrganizationID().String(),
+				"membershipId":   membershipID,
+				"role":           role,
+			},
+		}
+	}
+
+	// An ADMIN must not be able to promote a member to OWNER.
+	_, err = admin.DoConnect(updateMembershipMutation, updateInput("OWNER"))
+	testutil.RequireForbiddenError(t, err)
+
+	// The same ADMIN can still change a member between non-owner roles.
+	var adminUpdate struct {
+		UpdateMembership struct {
+			Membership struct {
+				Role string `json:"role"`
+			} `json:"membership"`
+		} `json:"updateMembership"`
+	}
+
+	err = admin.ExecuteConnect(updateMembershipMutation, updateInput("ADMIN"), &adminUpdate)
+	require.NoError(t, err)
+	assert.Equal(t, "ADMIN", adminUpdate.UpdateMembership.Membership.Role)
+
+	// An OWNER remains able to promote a member to OWNER.
+	var ownerUpdate struct {
+		UpdateMembership struct {
+			Membership struct {
+				Role string `json:"role"`
+			} `json:"membership"`
+		} `json:"updateMembership"`
+	}
+
+	err = owner.ExecuteConnect(updateMembershipMutation, updateInput("OWNER"), &ownerUpdate)
+	require.NoError(t, err)
+	assert.Equal(t, "OWNER", ownerUpdate.UpdateMembership.Membership.Role)
+}
+
+// TestUser_AdminCannotRemoveMembers is a non-regression test for the broken
+// access control where an ADMIN could hard-remove members (including OWNERs)
+// via removeUser because the mutation only checked the weaker
+// iam:membership-profile:delete gate instead of the owner-only
+// iam:membership:delete gate. Removing members is owner-only.
+func TestUser_AdminCannotRemoveMembers(t *testing.T) {
+	t.Parallel()
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	admin := testutil.NewClientInOrg(t, testutil.RoleAdmin, owner)
+	viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
+	secondOwner := testutil.NewClientInOrg(t, testutil.RoleOwner, owner)
+
+	const removeUserMutation = `
+		mutation($input: RemoveUserInput!) {
+			removeUser(input: $input) {
+				deletedProfileId
+			}
+		}
+	`
+
+	removeInput := func(profileID string) map[string]any {
+		return map[string]any{
+			"input": map[string]any{
+				"organizationId": owner.GetOrganizationID().String(),
+				"profileId":      profileID,
+			},
+		}
+	}
+
+	// An ADMIN must not be able to remove a lower-privileged member.
+	_, err := admin.DoConnect(removeUserMutation, removeInput(viewer.GetProfileID().String()))
+	testutil.RequireForbiddenError(t, err)
+
+	// An ADMIN must not be able to remove another ADMIN (itself).
+	_, err = admin.DoConnect(removeUserMutation, removeInput(admin.GetProfileID().String()))
+	testutil.RequireForbiddenError(t, err)
+
+	// An ADMIN must not be able to remove an OWNER, even when more than one
+	// active owner remains.
+	_, err = admin.DoConnect(removeUserMutation, removeInput(secondOwner.GetProfileID().String()))
+	testutil.RequireForbiddenError(t, err)
+
+	// An OWNER remains able to remove members.
+	var removeResult struct {
+		RemoveUser struct {
+			DeletedProfileID string `json:"deletedProfileId"`
+		} `json:"removeUser"`
+	}
+
+	err = owner.ExecuteConnect(removeUserMutation, removeInput(viewer.GetProfileID().String()), &removeResult)
+	require.NoError(t, err)
+	assert.Equal(t, viewer.GetProfileID().String(), removeResult.RemoveUser.DeletedProfileID)
+}
 
 func TestUser_UpdateMembership(t *testing.T) {
 	t.Parallel()
@@ -386,13 +605,13 @@ func TestUser_RemoveUser_ProfileInUse(t *testing.T) {
 	assert.Contains(t, gqlErrors[0].Message, "referenced by other resources")
 }
 
-func TestUser_ArchiveUser(t *testing.T) {
+func TestUser_DeactivateUser(t *testing.T) {
 	t.Parallel()
 	owner := testutil.NewClient(t, testutil.RoleOwner)
 
-	// Create a user to archive.
-	userToArchive := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
-	_ = userToArchive
+	// Create a user to deactivate.
+	userToDeactivate := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
+	_ = userToDeactivate
 
 	query := `
 		query($id: ID!) {
@@ -447,17 +666,17 @@ func TestUser_ArchiveUser(t *testing.T) {
 	require.NotEmpty(t, userID, "Should find viewer member")
 
 	mutation := `
-		mutation($input: ArchiveUserInput!) {
-			archiveUser(input: $input) {
-				archivedProfileId
+		mutation($input: DeactivateUserInput!) {
+			deactivateUser(input: $input) {
+				success
 			}
 		}
 	`
 
 	var mutationResult struct {
-		ArchiveUser struct {
-			ArchivedProfileID string `json:"archivedProfileId"`
-		} `json:"archiveUser"`
+		DeactivateUser struct {
+			Success bool `json:"success"`
+		} `json:"deactivateUser"`
 	}
 
 	err = owner.ExecuteConnect(mutation, map[string]any{
@@ -468,24 +687,24 @@ func TestUser_ArchiveUser(t *testing.T) {
 	}, &mutationResult)
 	require.NoError(t, err)
 
-	assert.Equal(t, userID, mutationResult.ArchiveUser.ArchivedProfileID)
+	assert.True(t, mutationResult.DeactivateUser.Success)
 
 	err = owner.ExecuteConnect(query, map[string]any{
 		"id": owner.GetOrganizationID().String(),
 	}, &result)
 	require.NoError(t, err)
 
-	var archivedUserState string
+	var deactivatedUserState string
 
 	for _, edge := range result.Node.Profiles.Edges {
 		if edge.Node.ID == userID {
-			archivedUserState = edge.Node.State
+			deactivatedUserState = edge.Node.State
 			break
 		}
 	}
 
-	require.NotEmpty(t, archivedUserState, "Should still find archived user")
-	assert.Equal(t, "INACTIVE", archivedUserState)
+	require.NotEmpty(t, deactivatedUserState, "Should still find deactivated user")
+	assert.Equal(t, "DEACTIVATED", deactivatedUserState)
 }
 
 func TestUser_DeactivateUserCancelsSignatureRequests(t *testing.T) {
@@ -630,7 +849,9 @@ func TestUser_EndedContractCancelsSignatureRequests(t *testing.T) {
 			"id":                       signerProfileID,
 			"fullName":                 "Ended Contract Signer",
 			"additionalEmailAddresses": []string{},
-			"contractEndDate":          contractEndDate,
+			"contract": map[string]any{
+				"end": contractEndDate,
+			},
 		},
 	})
 	require.NoError(t, err)

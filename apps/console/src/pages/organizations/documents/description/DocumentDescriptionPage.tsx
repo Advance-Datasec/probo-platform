@@ -1,30 +1,64 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
+import {
+  connectRepoDocument,
+  type RepoCollaborationHandle,
+} from "@probo/collaboration";
 import { formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
-import { RichEditor, useToast } from "@probo/ui";
-import { useCallback, useState } from "react";
-import { type PreloadedQuery, useMutation, usePreloadedQuery } from "react-relay";
+import { Button, IconClock } from "@probo/ui";
+import { CollaborativeRichEditor } from "@probo/ui/src/RichEditor/CollaborativeRichEditor";
+import { type CommentAnchor } from "@probo/ui/src/RichEditor/commentAnchors";
+import { type SuggestingController } from "@probo/ui/src/RichEditor/SuggestionExtension";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
+import type { Editor } from "@tiptap/core";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { type PreloadedQuery, usePreloadedQuery, useQueryLoader } from "react-relay";
 import { useOutletContext } from "react-router";
 import { graphql } from "relay-runtime";
 import { useDebounceCallback } from "usehooks-ts";
 
 import type { DocumentDescriptionPage_updateContentMutation } from "#/__generated__/core/DocumentDescriptionPage_updateContentMutation.graphql";
 import type { DocumentDescriptionPageQuery } from "#/__generated__/core/DocumentDescriptionPageQuery.graphql";
+import type { DocumentHistoryPanelQuery } from "#/__generated__/core/DocumentHistoryPanelQuery.graphql";
+import { useMutation } from "#/lib/relay/useMutation";
+import { RichEditor } from "#/pages/organizations/_components/RichEditor";
+import { useUploadRichTextFile } from "#/pages/organizations/_lib/useUploadRichTextFile";
+
+import { documentHistoryPanelQuery, DocumentHistoryView } from "./_components/DocumentHistoryPanel";
+import { DocumentPresence } from "./_components/DocumentPresence";
+import { DocumentReviewMargin } from "./_components/DocumentReviewMargin/DocumentReviewMargin";
+import {
+  type DocumentReviewMode,
+  DocumentReviewModeMenu,
+} from "./_components/DocumentReviewModeMenu";
 
 const autoSaveIntervalMs = 1000;
+
+type CollaborationState = {
+  versionID: string;
+  attempt: number;
+  handle?: RepoCollaborationHandle;
+  failed?: boolean;
+};
 
 export const documentDescriptionPageQuery = graphql`
   query DocumentDescriptionPageQuery($documentId: ID! $versionId: ID! $versionSpecified: Boolean!) {
@@ -33,7 +67,9 @@ export const documentDescriptionPageQuery = graphql`
       __typename
       ... on DocumentVersion {
         id
-        content
+        content {
+          prosemirror
+        }
         status
       }
     }
@@ -44,16 +80,9 @@ export const documentDescriptionPageQuery = graphql`
         status
         writeMode
         canUpdate: permission(action: "core:document:update")
-        # We use this on /documents/:documentId/description
-        lastVersion: versions(first: 1 orderBy: { field: CREATED_AT, direction: DESC }) @skip(if: $versionSpecified) {
-          edges {
-            node {
-              id
-              content
-              status
-            }
-          }
-        }
+        canComment: permission(action: "core:document:comment")
+        canSuggest: permission(action: "core:document:suggest")
+        canViewHistory: permission(action: "core:document-revision:list")
       }
     }
   }
@@ -65,25 +94,19 @@ const updateContentMutation = graphql`
       document {
         id
       }
-      documentVersion {
-        id
-        content
-        status
-      }
     }
   }
 `;
 
 export function DocumentDescriptionPage(props: {
   queryRef: PreloadedQuery<DocumentDescriptionPageQuery>;
-  versionChangedAt: number;
 }) {
-  const { queryRef, versionChangedAt } = props;
+  const { queryRef } = props;
 
-  const { __ } = useTranslate();
-  const { toast } = useToast();
-  const { onDocumentUpdated, isEditable } = useOutletContext<{
-    onDocumentUpdated: () => void;
+  const { t } = useTranslation();
+  const toast = useToast();
+  const onUploadFile = useUploadRichTextFile();
+  const { isEditable } = useOutletContext<{
     isEditable: boolean;
   }>();
 
@@ -95,106 +118,359 @@ export function DocumentDescriptionPage(props: {
     throw new Error("invalid type for node");
   }
 
-  const lastVersion = document.lastVersion?.edges[0].node;
-  const currentVersion = lastVersion ?? version;
-  if (!currentVersion) {
-    throw new Error("Document version not found");
-  }
+  const snapshot = version ?? null;
+  const viewingVersion = snapshot != null;
+  const editorIdentity = snapshot?.id ?? document.id;
 
-  const [updateContent] = useMutation<DocumentDescriptionPage_updateContentMutation>(updateContentMutation);
+  const [updateContent] = useMutation<DocumentDescriptionPage_updateContentMutation>(
+    updateContentMutation,
+    { errorToast: false },
+  );
 
   const documentId = document.id;
-  const wasDraft = currentVersion.status === "DRAFT";
 
   const handleUpdate = useDebounceCallback(
     useCallback((content: string) => {
-      updateContent({
+      void updateContent({
         variables: {
           input: {
             id: documentId,
             content,
           },
         },
-        onCompleted: (data, errors) => {
+        onCompleted: (_data, errors) => {
           if (errors?.length) {
-            toast({
-              title: __("Error"),
-              description: formatError(__("Content not saved"), errors),
-              variant: "error",
+            toast.add({
+              title: t("documentDescriptionPage.errors.title"),
+              description: formatError(t("documentDescriptionPage.errors.save"), errors),
+              type: "error",
             });
             return;
           }
 
-          const draftReturned = !!data.updateDocument.documentVersion;
-          if (wasDraft !== draftReturned) {
-            onDocumentUpdated();
-          }
-
-          toast({
-            title: __("Success"),
-            description: __("Content saved"),
-            variant: "success",
+          toast.add({
+            title: t("documentDescriptionPage.messages.successTitle"),
+            description: t("documentDescriptionPage.messages.saved"),
+            type: "success",
           });
         },
         onError: (error) => {
-          toast({
-            title: __("Error"),
-            description: error.message ?? __("Content not saved"),
-            variant: "error",
+          toast.add({
+            title: t("documentDescriptionPage.errors.title"),
+            description: error.message ?? t("documentDescriptionPage.errors.save"),
+            type: "error",
           });
         },
       });
-    }, [documentId, wasDraft, updateContent, toast, __, onDocumentUpdated]),
+    }, [documentId, updateContent, toast, t]),
     autoSaveIntervalMs,
   );
+  const uploadingRef = useRef(false);
+  const handleContentChange = useCallback((content: string) => {
+    if (uploadingRef.current) {
+      handleUpdate.cancel();
+      return;
+    }
+
+    handleUpdate(content);
+  }, [handleUpdate]);
 
   const canEdit = isEditable
     && document.canUpdate
     && document.status !== "ARCHIVED"
     && document.writeMode !== "GENERATED";
+  const canReview = isEditable
+    && (document.canUpdate || document.canComment || document.canSuggest);
+  const [mode, setMode] = useState<DocumentReviewMode>("viewing");
+  const [editor, setEditor] = useState<Editor | null>(null);
+  const [reviewToolbarHost, setReviewToolbarHost] = useState<HTMLDivElement | null>(null);
+  const reviewLayoutRef = useRef<HTMLDivElement>(null);
+  const [reviewMarginHost, setReviewMarginHost] = useState<HTMLElement | null>(null);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [activeSuggestionId, setActiveSuggestionId] = useState<string | null>(null);
+  const [reviewThreads, setReviewThreads] = useState<Array<{
+    id: string;
+    anchorStart: string;
+    anchorEnd: string;
+    suggestionId: string | null;
+  }>>([]);
+  const [reviewVersion, setReviewVersion] = useState(0);
+  const ignoreOwnReview = useRef(false);
+  const suggestingRef = useRef<SuggestingController>({
+    enabled: false,
+    suggestionId: null,
+    pending: null,
+    request: null,
+    onNeedId: () => Promise.resolve(null),
+    onBurstFinished: () => {},
+    onOpenSuggestion: () => {},
+  });
+  const anchorController = useRef({ onOpenThread: (_id: string) => {} });
+  const [collaboration, setCollaboration] = useState<CollaborationState>();
+  const connectionAttempt = useRef(0);
+  // The manager's identity changes when a toast is added.
+  const addToast = toast.add;
 
-  // The editor key must change on explicit actions (delete draft, edit
-  // title/type) but NOT on auto-save side effects (cursor preservation).
-  // We track a "data generation" that only increments when an explicit
-  // action (versionChangedAt change) is followed by fresh data arriving
-  // (currentVersion.id change). This uses React's "adjust state during
-  // render" pattern so we avoid refs-during-render and setState-in-effects.
-  const [prevVCA, setPrevVCA] = useState(versionChangedAt);
-  const [prevVersionId, setPrevVersionId] = useState(currentVersion.id);
-  const [dataGeneration, setDataGeneration] = useState(0);
-  const [pendingExplicit, setPendingExplicit] = useState(false);
+  useEffect(() => {
+    if (viewingVersion) return;
 
-  if (versionChangedAt !== prevVCA) {
-    setPrevVCA(versionChangedAt);
-    if (currentVersion.id !== prevVersionId) {
-      // Both changed at once — data was already available.
-      setPrevVersionId(currentVersion.id);
-      setDataGeneration(g => g + 1);
-      setPendingExplicit(false);
-    } else {
-      // Explicit action fired but data hasn't arrived yet.
-      setPendingExplicit(true);
+    const attempt = ++connectionAttempt.current;
+    let activeHandle: RepoCollaborationHandle | undefined;
+
+    connectRepoDocument(document.id, mode)
+      .then((handle) => {
+        if (attempt !== connectionAttempt.current) {
+          handle.close();
+          return;
+        }
+
+        activeHandle = handle;
+        setCollaboration({
+          versionID: document.id,
+          attempt,
+          handle,
+        });
+      })
+      .catch((error) => {
+        if (attempt !== connectionAttempt.current) return;
+
+        setCollaboration({
+          versionID: document.id,
+          attempt,
+          failed: true,
+        });
+        addToast({
+          title: t("documentDescriptionPage.errors.title"),
+          description: error instanceof Error
+            ? error.message
+            : t("documentDescriptionPage.errors.open"),
+          type: "error",
+        });
+      });
+
+    return () => {
+      connectionAttempt.current += 1;
+      activeHandle?.close();
+      setCollaboration(current =>
+        current?.attempt === attempt ? undefined : current,
+      );
+    };
+  }, [viewingVersion, document.id, mode, t, addToast]);
+
+  const collaborationHandle = !viewingVersion
+    && collaboration?.versionID === document.id
+    && !collaboration.failed
+    ? collaboration.handle
+    : undefined;
+
+  useEffect(() => {
+    suggestingRef.current.enabled = mode === "suggesting";
+    if (mode !== "suggesting") {
+      suggestingRef.current.suggestionId = null;
     }
-  } else if (currentVersion.id !== prevVersionId) {
-    setPrevVersionId(currentVersion.id);
-    if (pendingExplicit) {
-      // Fresh data arrived for a pending explicit action — remount.
-      setDataGeneration(g => g + 1);
-      setPendingExplicit(false);
-    }
-    // Otherwise auto-save changed the version — don't bump generation.
+    suggestingRef.current.onOpenSuggestion = (id: string) => {
+      setActiveSuggestionId(id);
+      setActiveThreadId(null);
+    };
+    anchorController.current.onOpenThread = (id: string) => {
+      if (id === "draft") return;
+      setActiveThreadId(id);
+      setActiveSuggestionId(null);
+    };
+  }, [mode]);
+
+  // Suggesting tracks text through the suggestion transaction (typing/paste),
+  // but a drop would reach ProseMirror directly and insert untracked content.
+  // File drops still upload; block plain-content drops while Suggesting.
+  useEffect(() => {
+    if (mode !== "suggesting") return;
+    const node = reviewLayoutRef.current;
+    if (!node) return;
+    const blockTextDrop = (event: DragEvent) => {
+      if (Array.from(event.dataTransfer?.types ?? []).includes("Files")) return;
+      const target = event.target;
+      const element = target instanceof Element ? target : (target as Node | null)?.parentElement;
+      if (!element?.closest("[data-review-scroll]")) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    node.addEventListener("drop", blockTextDrop, true);
+    return () => node.removeEventListener("drop", blockTextDrop, true);
+  }, [mode]);
+
+  useEffect(() => {
+    let timer = 0;
+    const unsubscribe = collaborationHandle?.onReview?.(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        if (ignoreOwnReview.current) {
+          ignoreOwnReview.current = false;
+          return;
+        }
+        setReviewVersion(version => version + 1);
+      }, 50);
+    });
+    return () => {
+      window.clearTimeout(timer);
+      unsubscribe?.();
+    };
+  }, [collaborationHandle]);
+
+  const commentAnchors = useMemo<CommentAnchor[]>(() => reviewThreads
+    .filter(thread => thread.suggestionId == null)
+    .map(thread => ({
+      id: thread.id,
+      anchorStart: thread.anchorStart,
+      anchorEnd: thread.anchorEnd,
+      active: thread.id === activeThreadId || thread.id === "draft",
+    })), [activeThreadId, reviewThreads]);
+
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyQueryRef, loadHistoryQuery]
+    = useQueryLoader<DocumentHistoryPanelQuery>(documentHistoryPanelQuery);
+  const historyAvailable = document.canViewHistory;
+
+  if (historyOpen) {
+    return (
+      <div className="flex flex-1 min-h-0 min-w-0">
+        {historyQueryRef
+          ? (
+              <Suspense
+                fallback={(
+                  <div className="flex-1 px-8 py-6 text-sm text-txt-secondary">
+                    {t("documentDescriptionPage.history.loading")}
+                  </div>
+                )}
+              >
+                <DocumentHistoryView
+                  queryRef={historyQueryRef}
+                  documentId={documentId}
+                  canRestore={canEdit}
+                  onClose={() => setHistoryOpen(false)}
+                  onRestored={() => setHistoryOpen(false)}
+                />
+              </Suspense>
+            )
+          : (
+              <div className="flex-1 px-8 py-6 text-sm text-txt-secondary">
+                {t("documentDescriptionPage.history.loading")}
+              </div>
+            )}
+      </div>
+    );
   }
 
-  const editorKey = `${version?.id ?? document.id}-${dataGeneration}`;
-
   return (
-    <RichEditor
-      key={editorKey}
-      className="flex-1"
-      content={currentVersion.content}
-      data-theme="document"
-      disabled={!canEdit}
-      onChangeContent={handleUpdate}
-    />
+    <div className="flex flex-1 min-h-0 flex-col">
+      {(historyAvailable || collaborationHandle) && (
+        <div className="flex items-center justify-end gap-3 px-4 pb-2">
+          {collaborationHandle && canReview && (
+            <DocumentReviewModeMenu
+              mode={mode}
+              canEdit={canEdit}
+              canSuggest={document.canSuggest}
+              onModeChange={setMode}
+            />
+          )}
+          <div ref={setReviewToolbarHost} className="flex items-center" />
+          {collaborationHandle && (
+            <DocumentPresence collaborationHandle={collaborationHandle} />
+          )}
+          {historyAvailable && (
+            <Button
+              icon={IconClock}
+              variant="secondary"
+              onClick={() => {
+                loadHistoryQuery({ documentId }, { fetchPolicy: "network-only" });
+                setHistoryOpen(true);
+              }}
+            >
+              {t("documentDescriptionPage.history.open")}
+            </Button>
+          )}
+        </div>
+      )}
+      <div ref={reviewLayoutRef} className="flex min-h-0 flex-1" data-review-layout="">
+        {snapshot
+          ? (
+              <RichEditor
+                key={editorIdentity}
+                className="flex-1"
+                content={snapshot.content.prosemirror}
+                data-theme="document"
+                disabled
+              />
+            )
+          : collaborationHandle
+            ? (
+                <>
+                  <CollaborativeRichEditor
+                    key={editorIdentity}
+                    className="flex-1"
+                    collaborationHandle={collaborationHandle}
+                    margin={canReview && editor
+                      ? (
+                          <Suspense fallback={null}>
+                            <DocumentReviewMargin
+                              activeSuggestionId={activeSuggestionId}
+                              activeThreadId={activeThreadId}
+                              canComment={document.canComment}
+                              canUpdate={document.canUpdate}
+                              collaborationHandle={collaborationHandle}
+                              documentId={documentId}
+                              editor={editor}
+                              onActiveSuggestion={setActiveSuggestionId}
+                              onActiveThread={setActiveThreadId}
+                              onThreads={setReviewThreads}
+                              onOwnReview={() => {
+                                ignoreOwnReview.current = true;
+                              }}
+                              onOwnReviewFailed={() => {
+                                ignoreOwnReview.current = false;
+                              }}
+                              reviewVersion={reviewVersion}
+                              suggesting={suggestingRef}
+                              toolbarHost={reviewToolbarHost}
+                              marginHost={reviewMarginHost}
+                            />
+                          </Suspense>
+                        )
+                      : null}
+                    commentAnchorController={anchorController}
+                    commentAnchors={commentAnchors}
+                    content=""
+                    data-theme="document"
+                    disabled={mode === "viewing" || (!canEdit && mode !== "suggesting")}
+                    formatting={canEdit && mode === "editing"}
+                    suggestingMenus={mode === "suggesting"}
+                    onChangeContent={handleContentChange}
+                    onEditor={setEditor}
+                    onUploadFile={onUploadFile}
+                    onUploadingChange={(uploading) => {
+                      uploadingRef.current = uploading;
+                      if (uploading) {
+                        handleUpdate.cancel();
+                      }
+                    }}
+                    suggesting={suggestingRef}
+                  />
+                  {canReview && (
+                    <aside
+                      ref={setReviewMarginHost}
+                      className="relative ml-4 hidden w-68 shrink-0 bg-sand-2 lg:block"
+                      data-review-margin=""
+                    />
+                  )}
+                </>
+              )
+            : (
+                <div className="flex-1 px-8 py-6 text-sm text-txt-secondary">
+                  {collaboration?.failed
+                    ? t("documentDescriptionPage.errors.open")
+                    : t("documentDescriptionPage.loading")}
+                </div>
+              )}
+      </div>
+    </div>
   );
 }

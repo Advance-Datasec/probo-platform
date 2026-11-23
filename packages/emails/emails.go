@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package emails
 
@@ -45,10 +51,10 @@ type (
 		// Static variables
 		APIBaseURL                      string
 		BaseURL                         string
+		PoweredByLogoURL                string
 		SenderCompanyName               string
 		SenderCompanyWebsiteURL         string
 		SenderCompanyLogoURL            string
-		PoweredByLogoURL                string
 		SenderCompanyHeadquarterAddress string
 
 		// Other common variables
@@ -64,6 +70,18 @@ type (
 		Title string
 		Type  string
 		URL   string
+	}
+
+	TaskSummary struct {
+		Title string
+		URL   string
+	}
+
+	NotificationDigestOrganization struct {
+		Name       string
+		Signatures []DocumentSummary
+		Approvals  []DocumentSummary
+		Tasks      []TaskSummary
 	}
 )
 
@@ -94,51 +112,63 @@ func NewPresenter(baseURL string, fullName string) *Presenter {
 }
 
 const (
-	subjectConfirmEmail                      = "Confirm your email address"
-	subjectPasswordReset                     = "Reset your password"
-	subjectInvitation                        = "Invitation to join %s on Probo"
-	subjectDocumentApproval                  = "Action Required – Please review and approve %s compliance documents"
-	subjectDocumentSigning                   = "Action Required – Please review and sign %s compliance documents"
-	subjectDocumentExport                    = "Your document export is ready"
-	subjectFrameworkExport                   = "Your framework export is ready"
-	subjectTrustCenterAccess                 = "Compliance Page Access Invitation - %s"
-	subjectTrustCenterDocumentAccessRejected = "Compliance Page Document Access Rejected - %s"
-	subjectMagicLink                         = "Connect to %s"
-	subjectMagicLinkSignIn                   = "Sign in to Govrly"
-	subjectMailingListSubscription           = "%s – Confirm Your Compliance Updates Subscription"
-	subjectMailingListUnsubscription         = "%s – You've been unsubscribed"
-	subjectMailingListUpdates                = "%s – %s"
+	subjectConfirmEmail                           = "Confirm your email address"
+	subjectPasswordReset                          = "Reset your password"
+	subjectInvitation                             = "Invitation to join %s on Probo"
+	subjectDocumentApproval                       = "Action Required – Please review and approve %s compliance documents"
+	subjectDocumentSigning                        = "Action Required – Please review and sign %s compliance documents"
+	subjectTaskAssigned                           = "Action Required – Tasks assigned to you at %s"
+	subjectTaskMentioned                          = "You were mentioned in tasks at %s"
+	subjectNotificationDigest                     = "Your weekly Probo notifications at %s"
+	subjectDocumentExport                         = "Your document export is ready"
+	subjectFrameworkExport                        = "Your framework export is ready"
+	subjectCompliancePortalAccess                 = "Compliance Portal Access Invitation - %s"
+	subjectCompliancePortalDocumentAccessRejected = "Compliance Portal Document Access Rejected - %s"
+	subjectMagicLink                              = "Connect to %s"
+	subjectMailingListSubscription                = "%s – Confirm Your Compliance Updates Subscription"
+	subjectMailingListUnsubscription              = "%s – You've been unsubscribed"
+	subjectMailingListUpdates                     = "%s – %s"
+	subjectAuditLogExport                         = "Your audit log export is ready"
+	subjectSCIMEventExport                        = "Your SCIM event export is ready"
 )
 
 var (
-	confirmEmailHTMLTemplate                      = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/confirm-email.html.tmpl"))
-	confirmEmailTextTemplate                      = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/confirm-email.txt.tmpl"))
-	passwordResetHTMLTemplate                     = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/password-reset.html.tmpl"))
-	passwordResetTextTemplate                     = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/password-reset.txt.tmpl"))
-	invitationHTMLTemplate                        = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/invitation.html.tmpl"))
-	invitationTextTemplate                        = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/invitation.txt.tmpl"))
-	documentApprovalHTMLTemplate                  = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/document-approval.html.tmpl"))
-	documentApprovalTextTemplate                  = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/document-approval.txt.tmpl"))
-	documentSigningHTMLTemplate                   = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/document-signing.html.tmpl"))
-	documentSigningTextTemplate                   = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/document-signing.txt.tmpl"))
-	documentExportHTMLTemplate                    = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/document-export.html.tmpl"))
-	documentExportTextTemplate                    = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/document-export.txt.tmpl"))
-	frameworkExportHTMLTemplate                   = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/framework-export.html.tmpl"))
-	frameworkExportTextTemplate                   = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/framework-export.txt.tmpl"))
-	trustCenterAccessHTMLTemplate                 = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/trust-center-access.html.tmpl"))
-	trustCenterAccessTextTemplate                 = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/trust-center-access.txt.tmpl"))
-	trustCenterDocumentAccessRejectedHTMLTemplate = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/trust-center-document-access-rejected.html.tmpl"))
-	trustCenterDocumentAccessRejectedTextTemplate = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/trust-center-document-access-rejected.txt.tmpl"))
-	magicLinkHTMLTemplate                         = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/magic-link.html.tmpl"))
-	magicLinkTextTemplate                         = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/magic-link.txt.tmpl"))
-	electronicSignatureCertificateHTMLTemplate    = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/electronic-signature-certificate.html.tmpl"))
-	electronicSignatureCertificateTextTemplate    = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/electronic-signature-certificate.txt.tmpl"))
-	mailingListSubscriptionHTMLTemplate           = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/mailing-list-subscription.html.tmpl"))
-	mailingListSubscriptionTextTemplate           = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/mailing-list-subscription.txt.tmpl"))
-	mailingListUnsubscriptionHTMLTemplate         = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/mailing-list-unsubscription.html.tmpl"))
-	mailingListUnsubscriptionTextTemplate         = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/mailing-list-unsubscription.txt.tmpl"))
-	mailingListUpdatesHTMLTemplate                = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/mailing-list-updates.html.tmpl"))
-	mailingListUpdatesTextTemplate                = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/mailing-list-updates.txt.tmpl"))
+	confirmEmailHTMLTemplate                           = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/confirm-email.html.tmpl"))
+	confirmEmailTextTemplate                           = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/confirm-email.txt.tmpl"))
+	passwordResetHTMLTemplate                          = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/password-reset.html.tmpl"))
+	passwordResetTextTemplate                          = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/password-reset.txt.tmpl"))
+	invitationHTMLTemplate                             = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/invitation.html.tmpl"))
+	invitationTextTemplate                             = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/invitation.txt.tmpl"))
+	documentApprovalHTMLTemplate                       = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/document-approval.html.tmpl"))
+	documentApprovalTextTemplate                       = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/document-approval.txt.tmpl"))
+	documentSigningHTMLTemplate                        = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/document-signing.html.tmpl"))
+	documentSigningTextTemplate                        = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/document-signing.txt.tmpl"))
+	documentExportHTMLTemplate                         = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/document-export.html.tmpl"))
+	documentExportTextTemplate                         = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/document-export.txt.tmpl"))
+	frameworkExportHTMLTemplate                        = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/framework-export.html.tmpl"))
+	frameworkExportTextTemplate                        = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/framework-export.txt.tmpl"))
+	compliancePortalAccessHTMLTemplate                 = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/compliance-portal-access.html.tmpl"))
+	compliancePortalAccessTextTemplate                 = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/compliance-portal-access.txt.tmpl"))
+	compliancePortalDocumentAccessRejectedHTMLTemplate = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/compliance-portal-document-access-rejected.html.tmpl"))
+	compliancePortalDocumentAccessRejectedTextTemplate = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/compliance-portal-document-access-rejected.txt.tmpl"))
+	magicLinkHTMLTemplate                              = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/magic-link.html.tmpl"))
+	magicLinkTextTemplate                              = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/magic-link.txt.tmpl"))
+	electronicSignatureCertificateHTMLTemplate         = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/electronic-signature-certificate.html.tmpl"))
+	electronicSignatureCertificateTextTemplate         = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/electronic-signature-certificate.txt.tmpl"))
+	mailingListSubscriptionHTMLTemplate                = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/mailing-list-subscription.html.tmpl"))
+	mailingListSubscriptionTextTemplate                = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/mailing-list-subscription.txt.tmpl"))
+	mailingListUnsubscriptionHTMLTemplate              = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/mailing-list-unsubscription.html.tmpl"))
+	mailingListUnsubscriptionTextTemplate              = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/mailing-list-unsubscription.txt.tmpl"))
+	mailingListUpdatesHTMLTemplate                     = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/mailing-list-updates.html.tmpl"))
+	mailingListUpdatesTextTemplate                     = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/mailing-list-updates.txt.tmpl"))
+	logExportHTMLTemplate                              = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/log-export.html.tmpl"))
+	logExportTextTemplate                              = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/log-export.txt.tmpl"))
+	taskAssignedHTMLTemplate                           = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/task-assigned.html.tmpl"))
+	taskAssignedTextTemplate                           = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/task-assigned.txt.tmpl"))
+	taskMentionedHTMLTemplate                          = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/task-mentioned.html.tmpl"))
+	taskMentionedTextTemplate                          = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/task-mentioned.txt.tmpl"))
+	notificationDigestHTMLTemplate                     = htmltemplate.Must(htmltemplate.ParseFS(Templates, "dist/notification-digest.html.tmpl"))
+	notificationDigestTextTemplate                     = texttemplate.Must(texttemplate.ParseFS(Templates, "dist/notification-digest.txt.tmpl"))
 )
 
 func (p *Presenter) getCommonVariables() (*CommonVariables, error) {
@@ -149,10 +179,10 @@ func (p *Presenter) getCommonVariables() (*CommonVariables, error) {
 	return &CommonVariables{
 		APIBaseURL:                      p.config.APIBaseURL,
 		BaseURL:                         p.config.BaseURL,
+		PoweredByLogoURL:                poweredByLogoURL,
 		SenderCompanyName:               p.config.SenderCompanyName,
 		SenderCompanyWebsiteURL:         p.config.SenderCompanyWebsiteURL,
 		SenderCompanyLogoURL:            senderCompanyLogoURL,
-		PoweredByLogoURL:                poweredByLogoURL,
 		SenderCompanyHeadquarterAddress: p.config.SenderCompanyHeadquarterAddress,
 		RecipientFullName:               p.RecipientFullName,
 	}, nil
@@ -240,6 +270,7 @@ func (p *Presenter) RenderDocumentApproval(
 	approvalURL string,
 	organizationName string,
 	documents []DocumentSummary,
+	notificationSettingsURL string,
 ) (subject string, textBody string, htmlBody *string, err error) {
 	vars, err := p.getCommonVariables()
 	if err != nil {
@@ -248,14 +279,16 @@ func (p *Presenter) RenderDocumentApproval(
 
 	data := struct {
 		*CommonVariables
-		ApprovalUrl      string
-		OrganizationName string
-		Documents        []DocumentSummary
+		ApprovalUrl             string
+		OrganizationName        string
+		Documents               []DocumentSummary
+		NotificationSettingsUrl string
 	}{
-		CommonVariables:  vars,
-		ApprovalUrl:      approvalURL,
-		OrganizationName: organizationName,
-		Documents:        documents,
+		CommonVariables:         vars,
+		ApprovalUrl:             approvalURL,
+		OrganizationName:        organizationName,
+		Documents:               documents,
+		NotificationSettingsUrl: notificationSettingsURL,
 	}
 
 	textBody, htmlBody, err = renderEmail(documentApprovalTextTemplate, documentApprovalHTMLTemplate, data)
@@ -268,6 +301,7 @@ func (p *Presenter) RenderDocumentSigning(
 	signingURL string,
 	organizationName string,
 	documents []DocumentSummary,
+	notificationSettingsURL string,
 ) (subject string, textBody string, htmlBody *string, err error) {
 	vars, err := p.getCommonVariables()
 	if err != nil {
@@ -276,19 +310,110 @@ func (p *Presenter) RenderDocumentSigning(
 
 	data := struct {
 		*CommonVariables
-		SigningUrl       string
-		OrganizationName string
-		Documents        []DocumentSummary
+		SigningUrl              string
+		OrganizationName        string
+		Documents               []DocumentSummary
+		NotificationSettingsUrl string
 	}{
-		CommonVariables:  vars,
-		SigningUrl:       signingURL,
-		OrganizationName: organizationName,
-		Documents:        documents,
+		CommonVariables:         vars,
+		SigningUrl:              signingURL,
+		OrganizationName:        organizationName,
+		Documents:               documents,
+		NotificationSettingsUrl: notificationSettingsURL,
 	}
 
 	textBody, htmlBody, err = renderEmail(documentSigningTextTemplate, documentSigningHTMLTemplate, data)
 
 	return fmt.Sprintf(subjectDocumentSigning, organizationName), textBody, htmlBody, err
+}
+
+func (p *Presenter) RenderTaskAssigned(
+	ctx context.Context,
+	tasksURL string,
+	organizationName string,
+	tasks []TaskSummary,
+	notificationSettingsURL string,
+) (subject string, textBody string, htmlBody *string, err error) {
+	vars, err := p.getCommonVariables()
+	if err != nil {
+		return "", "", nil, fmt.Errorf("cannot get common variables: %w", err)
+	}
+
+	data := struct {
+		*CommonVariables
+		TasksUrl                string
+		OrganizationName        string
+		Tasks                   []TaskSummary
+		NotificationSettingsUrl string
+	}{
+		CommonVariables:         vars,
+		TasksUrl:                tasksURL,
+		OrganizationName:        organizationName,
+		Tasks:                   tasks,
+		NotificationSettingsUrl: notificationSettingsURL,
+	}
+
+	textBody, htmlBody, err = renderEmail(taskAssignedTextTemplate, taskAssignedHTMLTemplate, data)
+
+	return fmt.Sprintf(subjectTaskAssigned, organizationName), textBody, htmlBody, err
+}
+
+func (p *Presenter) RenderTaskMentioned(
+	ctx context.Context,
+	tasksURL string,
+	organizationName string,
+	tasks []TaskSummary,
+	notificationSettingsURL string,
+) (subject string, textBody string, htmlBody *string, err error) {
+	vars, err := p.getCommonVariables()
+	if err != nil {
+		return "", "", nil, fmt.Errorf("cannot get common variables: %w", err)
+	}
+
+	data := struct {
+		*CommonVariables
+		TasksUrl                string
+		OrganizationName        string
+		Tasks                   []TaskSummary
+		NotificationSettingsUrl string
+	}{
+		CommonVariables:         vars,
+		TasksUrl:                tasksURL,
+		OrganizationName:        organizationName,
+		Tasks:                   tasks,
+		NotificationSettingsUrl: notificationSettingsURL,
+	}
+
+	textBody, htmlBody, err = renderEmail(taskMentionedTextTemplate, taskMentionedHTMLTemplate, data)
+
+	return fmt.Sprintf(subjectTaskMentioned, organizationName), textBody, htmlBody, err
+}
+
+func (p *Presenter) RenderNotificationDigest(
+	ctx context.Context,
+	organization NotificationDigestOrganization,
+	notificationSettingsURL string,
+) (subject string, textBody string, htmlBody *string, err error) {
+	vars, err := p.getCommonVariables()
+	if err != nil {
+		return "", "", nil, fmt.Errorf("cannot get common variables: %w", err)
+	}
+
+	data := struct {
+		*CommonVariables
+		OrganizationName        string
+		Organizations           []NotificationDigestOrganization
+		NotificationSettingsUrl string
+	}{
+		CommonVariables:         vars,
+		OrganizationName:        organization.Name,
+		Organizations:           []NotificationDigestOrganization{organization},
+		NotificationSettingsUrl: notificationSettingsURL,
+	}
+
+	textBody, htmlBody, err = renderEmail(notificationDigestTextTemplate, notificationDigestHTMLTemplate, data)
+
+	return fmt.Sprintf(subjectNotificationDigest, organization.Name), textBody, htmlBody, err
 }
 
 func (p *Presenter) RenderDocumentExport(ctx context.Context, downloadUrl string) (subject string, textBody string, htmlBody *string, err error) {
@@ -329,7 +454,38 @@ func (p *Presenter) RenderFrameworkExport(ctx context.Context, downloadUrl strin
 	return subjectFrameworkExport, textBody, htmlBody, err
 }
 
-func (p *Presenter) RenderTrustCenterAccess(ctx context.Context, organizationName string) (subject string, textBody string, htmlBody *string, err error) {
+func (p *Presenter) RenderLogExport(ctx context.Context, downloadUrl string, isSCIMEvent bool) (subject string, textBody string, htmlBody *string, err error) {
+	vars, err := p.getCommonVariables()
+	if err != nil {
+		return "", "", nil, fmt.Errorf("cannot get common variables: %w", err)
+	}
+
+	subject = subjectAuditLogExport
+	exportLabel := "audit log"
+
+	if isSCIMEvent {
+		subject = subjectSCIMEventExport
+		exportLabel = "SCIM event"
+	}
+
+	data := struct {
+		*CommonVariables
+		Subject     string
+		ExportLabel string
+		DownloadUrl string
+	}{
+		CommonVariables: vars,
+		Subject:         subject,
+		ExportLabel:     exportLabel,
+		DownloadUrl:     downloadUrl,
+	}
+
+	textBody, htmlBody, err = renderEmail(logExportTextTemplate, logExportHTMLTemplate, data)
+
+	return subject, textBody, htmlBody, err
+}
+
+func (p *Presenter) RenderCompliancePortalAccess(ctx context.Context, organizationName string) (subject string, textBody string, htmlBody *string, err error) {
 	vars, err := p.getCommonVariables()
 	if err != nil {
 		return "", "", nil, fmt.Errorf("cannot get common variables: %w", err)
@@ -343,12 +499,12 @@ func (p *Presenter) RenderTrustCenterAccess(ctx context.Context, organizationNam
 		OrganizationName: organizationName,
 	}
 
-	textBody, htmlBody, err = renderEmail(trustCenterAccessTextTemplate, trustCenterAccessHTMLTemplate, data)
+	textBody, htmlBody, err = renderEmail(compliancePortalAccessTextTemplate, compliancePortalAccessHTMLTemplate, data)
 
-	return fmt.Sprintf(subjectTrustCenterAccess, organizationName), textBody, htmlBody, err
+	return fmt.Sprintf(subjectCompliancePortalAccess, organizationName), textBody, htmlBody, err
 }
 
-func (p *Presenter) RenderTrustCenterDocumentAccessRejected(
+func (p *Presenter) RenderCompliancePortalDocumentAccessRejected(
 	ctx context.Context,
 	fileNames []string,
 	organizationName string,
@@ -368,9 +524,9 @@ func (p *Presenter) RenderTrustCenterDocumentAccessRejected(
 		OrganizationName: organizationName,
 	}
 
-	textBody, htmlBody, err = renderEmail(trustCenterDocumentAccessRejectedTextTemplate, trustCenterDocumentAccessRejectedHTMLTemplate, data)
+	textBody, htmlBody, err = renderEmail(compliancePortalDocumentAccessRejectedTextTemplate, compliancePortalDocumentAccessRejectedHTMLTemplate, data)
 
-	return fmt.Sprintf(subjectTrustCenterDocumentAccessRejected, organizationName), textBody, htmlBody, err
+	return fmt.Sprintf(subjectCompliancePortalDocumentAccessRejected, organizationName), textBody, htmlBody, err
 }
 
 func (p *Presenter) RenderMagicLink(ctx context.Context, magicLinkUrlPath string, tokenString string, tokenDuration time.Duration, organizationName string) (subject string, textBody string, htmlBody *string, err error) {
@@ -392,12 +548,6 @@ func (p *Presenter) RenderMagicLink(ctx context.Context, magicLinkUrlPath string
 	}
 
 	textBody, htmlBody, err = renderEmail(magicLinkTextTemplate, magicLinkHTMLTemplate, data)
-
-	// Console sign-in has no organization context, so fall back to a generic
-	// subject rather than rendering "Connect to ".
-	if organizationName == "" {
-		return subjectMagicLinkSignIn, textBody, htmlBody, err
-	}
 
 	return fmt.Sprintf(subjectMagicLink, organizationName), textBody, htmlBody, err
 }

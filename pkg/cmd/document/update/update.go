@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package update
 
@@ -24,11 +30,10 @@ import (
 )
 
 const updateMutation = `
-mutation($input: UpdateDocumentInput!) {
+mutation DocumentUpdate($input: UpdateDocumentInput!) {
   updateDocument(input: $input) {
     document {
       id
-      trustCenterVisibility
     }
     documentVersion {
       id
@@ -46,8 +51,7 @@ mutation($input: UpdateDocumentInput!) {
 type updateResponse struct {
 	UpdateDocument struct {
 		Document struct {
-			ID                    string `json:"id"`
-			TrustCenterVisibility string `json:"trustCenterVisibility"`
+			ID string `json:"id"`
 		} `json:"document"`
 		DocumentVersion *struct {
 			ID             string `json:"id"`
@@ -63,11 +67,10 @@ type updateResponse struct {
 
 func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 	var (
-		flagTitle                 string
-		flagContent               string
-		flagDocumentType          string
-		flagClassification        string
-		flagTrustCenterVisibility string
+		flagTitle          string
+		flagContent        string
+		flagDocumentType   string
+		flagClassification string
 	)
 
 	cmd := &cobra.Command{
@@ -90,6 +93,7 @@ func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 				hc.Token,
 				"/api/console/v1/graphql",
 				cfg.HTTPTimeoutDuration(),
+				cmdutil.TokenRefreshOption(cfg, host, hc),
 			)
 
 			input := map[string]any{
@@ -101,7 +105,16 @@ func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 			}
 
 			if cmd.Flags().Changed("content") {
-				input["content"] = flagContent
+				if flagContent == "" {
+					input["content"] = ""
+				} else {
+					content, err := cmdutil.CLIContent(flagContent)
+					if err != nil {
+						return fmt.Errorf("cannot read content: %w", err)
+					}
+
+					input["content"] = content
+				}
 			}
 
 			if cmd.Flags().Changed("document-type") {
@@ -126,18 +139,6 @@ func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 				}
 
 				input["classification"] = flagClassification
-			}
-
-			if cmd.Flags().Changed("trust-center-visibility") {
-				if err := cmdutil.ValidateEnum(
-					"trust-center-visibility",
-					flagTrustCenterVisibility,
-					[]string{"NONE", "PRIVATE", "PUBLIC"},
-				); err != nil {
-					return err
-				}
-
-				input["trustCenterVisibility"] = flagTrustCenterVisibility
 			}
 
 			if len(input) == 1 {
@@ -180,10 +181,9 @@ func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&flagTitle, "title", "", "Document title")
-	cmd.Flags().StringVar(&flagContent, "content", "", "Document content")
+	cmd.Flags().StringVar(&flagContent, "content", "", "Document content as markdown or ProseMirror JSON. Images and links to /api/files/v1/{id} are kept")
 	cmd.Flags().StringVar(&flagDocumentType, "document-type", "", "Document type: OTHER, GOVERNANCE, POLICY, PROCEDURE, PLAN, REGISTER, RECORD, REPORT, TEMPLATE, STATEMENT_OF_APPLICABILITY")
 	cmd.Flags().StringVar(&flagClassification, "classification", "", "Classification: PUBLIC, INTERNAL, CONFIDENTIAL, SECRET")
-	cmd.Flags().StringVar(&flagTrustCenterVisibility, "trust-center-visibility", "", "Trust center visibility: NONE, PRIVATE, PUBLIC")
 
 	return cmd
 }

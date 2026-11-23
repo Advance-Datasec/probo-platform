@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -32,11 +38,27 @@ import (
 // slug; Sentry uses 404 (not 403) so this also covers revoked memberships.
 var errSentryOrgNotAccessible = errors.New("sentry organization is not accessible by this connector's token")
 
+// Sentry path elements joined onto the driver's base URL. Both carry a
+// trailing slash because Sentry's API only routes slashed paths and answers
+// 404 (without redirecting) otherwise; url.JoinPath keeps the slash only
+// when the LAST element carries it, so every join must end on one of these.
+const (
+	sentryOrganizationsPath = "organizations/"
+	sentryMembersPath       = "members/"
+)
+
+// sentryDefaultBaseURL is the Sentry SaaS API root. It backs only the
+// exported ListSentryOrganizations, and only when its caller resolves no
+// APIBase for the provider (unregistered, or registered without one).
+// Every driver path goes through the injected baseURL instead.
+const sentryDefaultBaseURL = "https://sentry.io/api/0"
+
 // SentryDriver fetches organization members from Sentry via Bearer
 // token-authenticated REST API requests.
 type SentryDriver struct {
 	httpClient *http.Client
 	orgSlug    string
+	baseURL    string
 }
 
 var _ Driver = (*SentryDriver)(nil)
@@ -62,15 +84,18 @@ type sentryUser struct {
 	HasPasswordAuth bool   `json:"hasPasswordAuth"`
 }
 
-func NewSentryDriver(httpClient *http.Client, orgSlug string) *SentryDriver {
+// NewSentryDriver builds a driver against baseURL, the versioned Sentry API
+// origin (e.g. https://sentry.io/api/0).
+func NewSentryDriver(httpClient *http.Client, orgSlug, baseURL string) *SentryDriver {
 	return &SentryDriver{
 		httpClient: httpClient,
 		orgSlug:    orgSlug,
+		baseURL:    baseURL,
 	}
 }
 
 func (d *SentryDriver) resolveOrgSlug(ctx context.Context) (string, error) {
-	orgs, err := ListSentryOrganizations(ctx, d.httpClient)
+	orgs, err := listSentryOrganizations(ctx, d.httpClient, d.baseURL)
 	if err != nil {
 		return "", fmt.Errorf("cannot resolve sentry organization slug: %w", err)
 	}
@@ -95,7 +120,7 @@ func (d *SentryDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error
 
 	var records []AccountRecord
 
-	nextURL, err := url.JoinPath("https://sentry.io", "api", "0", "organizations", url.PathEscape(orgSlug), "members")
+	nextURL, err := url.JoinPath(d.baseURL, sentryOrganizationsPath, url.PathEscape(orgSlug), sentryMembersPath)
 	if err != nil {
 		return nil, fmt.Errorf("cannot build sentry members URL: %w", err)
 	}
@@ -146,7 +171,7 @@ func (d *SentryDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error
 				FullName:    fullName,
 				Roles:       roles,
 				Active:      new(active),
-				IsAdmin:     isAdmin,
+				IsAdmin:     new(isAdmin),
 				ExternalID:  m.ID,
 				MFAStatus:   mfaStatus,
 				AuthMethod:  authMethod,
@@ -170,9 +195,14 @@ func (d *SentryDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error
 			}
 		}
 
-		nextURL = sentryNextLink(linkHeader)
-		if nextURL == "" {
+		rawNext := sentryNextLink(linkHeader)
+		if rawNext == "" {
 			return records, nil
+		}
+
+		nextURL, err = sameHostNextPageURL("sentry", d.baseURL, rawNext)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -233,4 +263,127 @@ func sentryAuthMethod(flags map[string]bool, user *sentryUser) coredata.AccessRe
 	}
 
 	return coredata.AccessReviewEntryAuthMethodUnknown
+}
+
+// sentryNameResolver resolves the Sentry organization name.
+type sentryNameResolver struct {
+	httpClient *http.Client
+	orgSlug    string
+	baseURL    string
+}
+
+// NewSentryNameResolver resolves the org name against baseURL, the
+// versioned Sentry API origin (e.g. https://sentry.io/api/0).
+func NewSentryNameResolver(httpClient *http.Client, orgSlug, baseURL string) NameResolver {
+	return &sentryNameResolver{httpClient: httpClient, orgSlug: orgSlug, baseURL: baseURL}
+}
+
+func (r *sentryNameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
+	if r.orgSlug == "" {
+		return "", nil
+	}
+
+	// Trailing slash required; see the sentryOrganizationsPath const.
+	endpoint, err := url.JoinPath(r.baseURL, sentryOrganizationsPath, url.PathEscape(r.orgSlug)+"/")
+	if err != nil {
+		return "", fmt.Errorf("cannot build sentry organization URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("cannot create sentry organization request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	httpResp, err := r.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("cannot execute sentry organization request: %w", err)
+	}
+
+	defer func() { _ = httpResp.Body.Close() }()
+
+	// 404 means the stored slug is no longer visible to this token.
+	// Treat as terminal so the worker stops looping; other non-2xx
+	// stay retryable for token refresh / transient outages.
+	if httpResp.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
+
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return "", nameStatusError("sentry organization", httpResp.StatusCode)
+	}
+
+	var resp struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		return "", fmt.Errorf("cannot decode sentry organization response: %w", err)
+	}
+
+	return resp.Name, nil
+}
+
+// ListSentryOrganizations fetches the organizations the authenticated
+// Sentry user belongs to, from baseURL ("" for Sentry SaaS).
+func ListSentryOrganizations(ctx context.Context, httpClient *http.Client, baseURL string) ([]Organization, error) {
+	if baseURL == "" {
+		baseURL = sentryDefaultBaseURL
+	}
+
+	return listSentryOrganizations(ctx, httpClient, baseURL)
+}
+
+func listSentryOrganizations(ctx context.Context, httpClient *http.Client, baseURL string) ([]Organization, error) {
+	endpoint, err := url.JoinPath(baseURL, sentryOrganizationsPath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build sentry organizations URL: %w", err)
+	}
+
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse sentry organizations URL: %w", err)
+	}
+
+	q := parsed.Query()
+	q.Set("member", "true")
+	parsed.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create sentry organizations request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("cannot fetch sentry organizations: %w", err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cannot fetch sentry organizations: unexpected status %d", resp.StatusCode)
+	}
+
+	var orgs []struct {
+		Slug string `json:"slug"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&orgs); err != nil {
+		return nil, fmt.Errorf("cannot decode sentry organizations response: %w", err)
+	}
+
+	result := make([]Organization, len(orgs))
+	for i, org := range orgs {
+		displayName := org.Name
+		if displayName == "" {
+			displayName = org.Slug
+		}
+
+		result[i] = Organization{Slug: org.Slug, DisplayName: displayName}
+	}
+
+	return result, nil
 }

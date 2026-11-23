@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package prosemirror
 
@@ -57,8 +63,8 @@ func TestUnmarshalDocument(t *testing.T) {
 
 			require.Len(t, h1.Content, 1)
 			assert.Equal(t, NodeText, h1.Content[0].Type)
-			require.NotNil(t, h1.Content[0].Text)
-			assert.Equal(t, "Heading 1", *h1.Content[0].Text)
+			require.NotEmpty(t, h1.Content[0].Text)
+			assert.Equal(t, "Heading 1", h1.Content[0].Text)
 		},
 	)
 
@@ -75,8 +81,8 @@ func TestUnmarshalDocument(t *testing.T) {
 			boldNode := p.Content[1]
 			require.Len(t, boldNode.Marks, 1)
 			assert.Equal(t, MarkStrong, boldNode.Marks[0].Type)
-			require.NotNil(t, boldNode.Text)
-			assert.Equal(t, "with some bold", *boldNode.Text)
+			require.NotEmpty(t, boldNode.Text)
+			assert.Equal(t, "with some bold", boldNode.Text)
 
 			// Italic text
 			italicNode := p.Content[3]
@@ -145,8 +151,8 @@ func TestUnmarshalDocument(t *testing.T) {
 			assert.Nil(t, attrs.Language)
 
 			require.Len(t, cb.Content, 1)
-			require.NotNil(t, cb.Content[0].Text)
-			assert.Equal(t, "code block", *cb.Content[0].Text)
+			require.NotEmpty(t, cb.Content[0].Text)
+			assert.Equal(t, "code block", cb.Content[0].Text)
 		},
 	)
 
@@ -455,7 +461,7 @@ func TestTextLength(t *testing.T) {
 			t.Parallel()
 
 			n := Node{Type: NodeDoc}
-			assert.Equal(t, 0, n.TextLength())
+			assert.Equal(t, 0, testDocumentSchema.TextLength(n))
 		},
 	)
 
@@ -465,8 +471,8 @@ func TestTextLength(t *testing.T) {
 			t.Parallel()
 
 			text := "hello"
-			n := Node{Type: NodeText, Text: &text}
-			assert.Equal(t, 5, n.TextLength())
+			n := Node{Type: NodeText, Text: text}
+			assert.Equal(t, 5, testDocumentSchema.TextLength(n))
 		},
 	)
 
@@ -478,7 +484,7 @@ func TestTextLength(t *testing.T) {
 			raw := `{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"hello world"}]}]}`
 			doc, err := Parse(raw)
 			require.NoError(t, err)
-			assert.Equal(t, 11, doc.TextLength())
+			assert.Equal(t, 11, testDocumentSchema.TextLength(doc))
 		},
 	)
 
@@ -490,7 +496,7 @@ func TestTextLength(t *testing.T) {
 			raw := `{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"aaa"}]},{"type":"paragraph","content":[{"type":"text","text":"bb"}]}]}`
 			doc, err := Parse(raw)
 			require.NoError(t, err)
-			assert.Equal(t, 5, doc.TextLength())
+			assert.Equal(t, 5, testDocumentSchema.TextLength(doc))
 		},
 	)
 
@@ -502,7 +508,7 @@ func TestTextLength(t *testing.T) {
 			raw := `{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"plain "},{"type":"text","marks":[{"type":"bold"}],"text":"bold"}]}]}`
 			doc, err := Parse(raw)
 			require.NoError(t, err)
-			assert.Equal(t, 10, doc.TextLength())
+			assert.Equal(t, 10, testDocumentSchema.TextLength(doc))
 		},
 	)
 
@@ -514,7 +520,7 @@ func TestTextLength(t *testing.T) {
 			raw := `{"type":"doc","content":[{"type":"bulletList","content":[{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"item 1"}]}]},{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"item 2"}]}]}]}]}`
 			doc, err := Parse(raw)
 			require.NoError(t, err)
-			assert.Equal(t, 12, doc.TextLength())
+			assert.Equal(t, 12, testDocumentSchema.TextLength(doc))
 		},
 	)
 
@@ -526,7 +532,7 @@ func TestTextLength(t *testing.T) {
 			raw := `{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"café résumé"}]}]}`
 			doc, err := Parse(raw)
 			require.NoError(t, err)
-			assert.Equal(t, 11, doc.TextLength())
+			assert.Equal(t, 11, testDocumentSchema.TextLength(doc))
 		},
 	)
 
@@ -535,7 +541,7 @@ func TestTextLength(t *testing.T) {
 		func(t *testing.T) {
 			t.Parallel()
 			doc := loadTestDocument(t)
-			assert.Greater(t, doc.TextLength(), 0)
+			assert.Greater(t, testDocumentSchema.TextLength(doc), 0)
 		},
 	)
 }
@@ -551,6 +557,108 @@ func TestNodeWithNoAttrs(t *testing.T) {
 	assert.Equal(t, NodeParagraph, n.Type)
 	assert.Nil(t, n.Attrs)
 	require.Len(t, n.Content, 1)
-	require.NotNil(t, n.Content[0].Text)
-	assert.Equal(t, "Hello", *n.Content[0].Text)
+	require.NotEmpty(t, n.Content[0].Text)
+	assert.Equal(t, "Hello", n.Content[0].Text)
+}
+
+func TestAttrs_SchemaDefaults(t *testing.T) {
+	t.Parallel()
+
+	// The renderer only emits colspan/rowspan above 1, so nothing else in the
+	// tree tells a defaulted cell from a zero-valued one.
+	for _, tc := range []struct {
+		name  string
+		raw   string
+		check func(*testing.T, Node)
+	}{
+		{
+			name: "heading",
+			raw:  `{"type":"heading","content":[{"type":"text","text":"X"}]}`,
+			check: func(t *testing.T, n Node) {
+				attrs, err := n.HeadingAttrs()
+				require.NoError(t, err)
+				assert.Equal(t, 1, attrs.Level)
+			},
+		},
+		{
+			name: "heading with empty attrs",
+			raw:  `{"type":"heading","attrs":{},"content":[{"type":"text","text":"X"}]}`,
+			check: func(t *testing.T, n Node) {
+				attrs, err := n.HeadingAttrs()
+				require.NoError(t, err)
+				assert.Equal(t, 1, attrs.Level)
+			},
+		},
+		{
+			name: "ordered list",
+			raw:  `{"type":"orderedList"}`,
+			check: func(t *testing.T, n Node) {
+				attrs, err := n.OrderedListAttrs()
+				require.NoError(t, err)
+				assert.Equal(t, 1, attrs.Start)
+				assert.Nil(t, attrs.Type)
+			},
+		},
+		{
+			name: "ordered list with empty attrs",
+			raw:  `{"type":"orderedList","attrs":{}}`,
+			check: func(t *testing.T, n Node) {
+				attrs, err := n.OrderedListAttrs()
+				require.NoError(t, err)
+				assert.Equal(t, 1, attrs.Start)
+			},
+		},
+		{
+			name: "table cell",
+			raw:  `{"type":"tableCell"}`,
+			check: func(t *testing.T, n Node) {
+				attrs, err := n.TableCellAttrs()
+				require.NoError(t, err)
+				assert.Equal(t, 1, attrs.Colspan)
+				assert.Equal(t, 1, attrs.Rowspan)
+				assert.Nil(t, attrs.Colwidth)
+			},
+		},
+		{
+			name: "table header with empty attrs",
+			raw:  `{"type":"tableHeader","attrs":{}}`,
+			check: func(t *testing.T, n Node) {
+				attrs, err := n.TableCellAttrs()
+				require.NoError(t, err)
+				assert.Equal(t, 1, attrs.Colspan)
+				assert.Equal(t, 1, attrs.Rowspan)
+			},
+		},
+		{
+			name: "code block",
+			raw:  `{"type":"codeBlock"}`,
+			check: func(t *testing.T, n Node) {
+				attrs, err := n.CodeBlockAttrs()
+				require.NoError(t, err)
+				assert.Nil(t, attrs.Language)
+			},
+		},
+		{
+			name: "image",
+			raw:  `{"type":"image"}`,
+			check: func(t *testing.T, n Node) {
+				attrs, err := n.ImageAttrs()
+				require.NoError(t, err)
+				assert.Empty(t, attrs.Src)
+				assert.Nil(t, attrs.Alt)
+			},
+		},
+	} {
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				t.Parallel()
+
+				var n Node
+				require.NoError(t, json.Unmarshal([]byte(tc.raw), &n))
+
+				tc.check(t, n)
+			},
+		)
+	}
 }

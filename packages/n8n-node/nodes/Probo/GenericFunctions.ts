@@ -1,27 +1,37 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import type {
 	IExecuteFunctions,
 	IHookFunctions,
+	ILoadOptionsFunctions,
 	IDataObject,
 	JsonObject,
 	IHttpRequestOptions,
 } from 'n8n-workflow';
-import { NodeApiError } from 'n8n-workflow';
+import { NodeApiError, NodeOperationError } from 'n8n-workflow';
 
 import { version } from '../../package.json';
+import { readGraphQLBody } from './graphqlResponse';
+
+export { executionItems } from './output';
 
 type ApiRequestFn = (
 	this: IExecuteFunctions | IHookFunctions,
@@ -29,11 +39,71 @@ type ApiRequestFn = (
 	variables?: IDataObject,
 ) => Promise<IDataObject>;
 
-async function proboGraphqlRequest(
-	this: IExecuteFunctions | IHookFunctions,
+type ApiRequestContext = IExecuteFunctions | IHookFunctions | ILoadOptionsFunctions;
+
+function graphqlBodyOrThrow(
+	this: ApiRequestContext,
+	response: unknown,
+	options?: { keepPartialResult?: boolean },
+): IDataObject {
+	const parsed = readGraphQLBody(response);
+	if (!parsed.ok) {
+		if (options?.keepPartialResult && parsed.body?.data != null) {
+			return parsed.body as IDataObject;
+		}
+
+		throw new NodeApiError(this.getNode(), (parsed.body ?? { message: parsed.message }) as JsonObject, {
+			message: parsed.message,
+			level: 'error',
+		});
+	}
+
+	return parsed.body as IDataObject;
+}
+
+// Send the operation name so server logs and traces can name the request.
+// Only a single named operation is safe: several names used to be rejected,
+// and picking the first would run that one while the rest stay unused.
+function graphqlOperationName(query: string): string | undefined {
+	const operations = [
+		...query.matchAll(
+			/^[ \t]*(?:query|mutation|subscription)(?:\s+([_A-Za-z][_0-9A-Za-z]*))?\b/gm,
+		),
+	];
+	if (operations.length !== 1) {
+		return undefined;
+	}
+
+	return operations[0][1] || undefined;
+}
+
+function graphqlRequestBody(query: string, variables: IDataObject): IDataObject {
+	const body: IDataObject = {
+		query,
+		variables,
+	};
+	const operationName = graphqlOperationName(query);
+	if (operationName !== undefined) {
+		body.operationName = operationName;
+	}
+
+	return body;
+}
+
+function rethrowRequestError(this: ApiRequestContext, error: unknown): never {
+	if (error instanceof NodeApiError || error instanceof NodeOperationError) {
+		throw error;
+	}
+
+	throw new NodeApiError(this.getNode(), error as JsonObject);
+}
+
+async function proboGraphQLRequest(
+	this: ApiRequestContext,
 	apiPath: string,
 	query: string,
 	variables: IDataObject = {},
+	resultOptions?: { keepPartialResult?: boolean },
 ): Promise<IDataObject> {
 	const credentials = await this.getCredentials('proboApi');
 
@@ -45,50 +115,39 @@ async function proboGraphqlRequest(
 			'Content-Type': 'application/json',
 			'User-Agent': `probo-n8n-node/${version}`,
 		},
-		body: {
-			query,
-			variables,
-		},
+		body: graphqlRequestBody(query, variables),
 		json: true,
 	};
 
+	let response: unknown;
 	try {
-		const response = await this.helpers.httpRequestWithAuthentication.call(
+		response = await this.helpers.httpRequestWithAuthentication.call(
 			this,
 			'proboApi',
 			options,
 		);
-
-		if (response.errors && Array.isArray(response.errors) && response.errors.length > 0) {
-			const errorMessages = response.errors.map((err: IDataObject) =>
-				err.message || JSON.stringify(err)
-			).join('; ');
-			throw new NodeApiError(this.getNode(), {
-				message: `GraphQL errors: ${errorMessages}`,
-				httpCode: '200',
-			} as JsonObject);
-		}
-
-		return response;
 	} catch (error) {
-		throw new NodeApiError(this.getNode(), error as JsonObject);
+		rethrowRequestError.call(this, error);
 	}
+
+	return graphqlBodyOrThrow.call(this, response, resultOptions);
 }
 
 export async function proboApiRequest(
-	this: IExecuteFunctions | IHookFunctions,
+	this: ApiRequestContext,
 	query: string,
 	variables: IDataObject = {},
+	options?: { keepPartialResult?: boolean },
 ): Promise<IDataObject> {
-	return proboGraphqlRequest.call(this, '/api/console/v1/graphql', query, variables);
+	return proboGraphQLRequest.call(this, '/api/console/v1/graphql', query, variables, options);
 }
 
 export async function proboConnectApiRequest(
-	this: IExecuteFunctions | IHookFunctions,
+	this: ApiRequestContext,
 	query: string,
 	variables: IDataObject = {},
 ): Promise<IDataObject> {
-	return proboGraphqlRequest.call(this, '/api/connect/v1/graphql', query, variables);
+	return proboGraphQLRequest.call(this, '/api/connect/v1/graphql', query, variables);
 }
 
 async function proboGraphqlRequestAllItems(
@@ -99,7 +158,9 @@ async function proboGraphqlRequestAllItems(
 	getConnection: (response: IDataObject) => IDataObject | undefined,
 	returnAll: boolean = true,
 	limit: number = 0,
+	mapEdge?: (edge: { node: IDataObject; title?: string }) => IDataObject,
 ): Promise<IDataObject[]> {
+	const toItem = mapEdge ?? ((edge: { node: IDataObject; title?: string }) => edge.node);
 	const items: IDataObject[] = [];
 	let hasNextPage = true;
 	let cursor: string | null = null;
@@ -124,8 +185,8 @@ async function proboGraphqlRequestAllItems(
 		const connection = getConnection(responseData);
 
 		if (connection?.edges) {
-			const edges = connection.edges as Array<{ node: IDataObject }>;
-			items.push(...edges.map((edge) => edge.node));
+			const edges = connection.edges as Array<{ node: IDataObject; title?: string }>;
+			items.push(...edges.map(toItem));
 		}
 
 		if (connection?.pageInfo) {
@@ -151,15 +212,17 @@ export async function proboApiRequestAllItems(
 	getConnection: (response: IDataObject) => IDataObject | undefined,
 	returnAll: boolean = true,
 	limit: number = 0,
+	mapEdge?: (edge: { node: IDataObject; title?: string }) => IDataObject,
 ): Promise<IDataObject[]> {
 	return proboGraphqlRequestAllItems.call(
 		this,
-		proboApiRequest,
+		proboApiRequest as ApiRequestFn,
 		query,
 		variables,
 		getConnection,
 		returnAll,
 		limit,
+		mapEdge,
 	);
 }
 
@@ -173,7 +236,7 @@ export async function proboConnectApiRequestAllItems(
 ): Promise<IDataObject[]> {
 	return proboGraphqlRequestAllItems.call(
 		this,
-		proboConnectApiRequest,
+		proboConnectApiRequest as ApiRequestFn,
 		query,
 		variables,
 		getConnection,
@@ -201,7 +264,7 @@ export async function proboApiMultipartRequest(
 		.replace(/"/g, '\\"');
 	const safeMimeType = mimeType.replace(/[\r\n]/g, '');
 
-	const operations = JSON.stringify({ query, variables });
+	const operations = JSON.stringify(graphqlRequestBody(query, variables));
 	const map = JSON.stringify({ '0': [fileVariablePath] });
 
 	const parts: Buffer[] = [];
@@ -233,25 +296,36 @@ export async function proboApiMultipartRequest(
 		body,
 	};
 
+	let response: unknown;
 	try {
-		const response = await this.helpers.httpRequestWithAuthentication.call(
+		response = await this.helpers.httpRequestWithAuthentication.call(
 			this,
 			'proboApi',
 			options,
 		);
-
-		if (response.errors && Array.isArray(response.errors) && response.errors.length > 0) {
-			const errorMessages = response.errors.map((err: IDataObject) =>
-				err.message || JSON.stringify(err)
-			).join('; ');
-			throw new NodeApiError(this.getNode(), {
-				message: `GraphQL errors: ${errorMessages}`,
-				httpCode: '200',
-			} as JsonObject);
-		}
-
-		return response;
 	} catch (error) {
-		throw new NodeApiError(this.getNode(), error as JsonObject);
+		rethrowRequestError.call(this, error);
 	}
+
+	return graphqlBodyOrThrow.call(this, response);
+}
+
+export function toPeriod(
+	start?: string | null,
+	end?: string | null,
+): { start?: string; end?: string } | undefined {
+	if (!start && !end) {
+		return undefined;
+	}
+
+	const period: { start?: string; end?: string } = {};
+	if (start) {
+		period.start = start;
+	}
+
+	if (end) {
+		period.end = end;
+	}
+
+	return period;
 }

@@ -5,22 +5,33 @@ enum ReauthenticationReason {
 }
 
 extend type Mutation {
-  signIn(input: SignInInput!): SignInPayload @authentication(required: OPTIONAL)
-  signUp(input: SignUpInput!): SignUpPayload @authentication(required: NONE)
-  sendMagicLink(input: SendMagicLinkInput!): SendMagicLinkPayload
+  signIn(input: SignInInput!): SignInPayload
+    @rateLimit
     @authentication(required: OPTIONAL)
-  verifyMagicLink(input: VerifyMagicLinkInput!): VerifyMagicLinkPayload
-    @authentication(required: OPTIONAL)
+  signUp(input: SignUpInput!): SignUpPayload
+    @rateLimit
+    @authentication(required: NONE)
   signOut: SignOutPayload @authentication(required: PRESENT) @sessionOnly
-  activateAccount(
-    input: ActivateAccountInput!
-  ): ActivateAccountPayload @authentication(required: OPTIONAL)
+  activateAccountFromInvitation(
+    input: ActivateAccountFromInvitationInput!
+  ): ActivateAccountFromInvitationPayload @authentication(required: OPTIONAL)
+  acceptInvitation(
+    input: AcceptInvitationInput!
+  ): AcceptInvitationPayload
+    @authentication(required: PRESENT)
+    @sessionOnly
   forgotPassword(input: ForgotPasswordInput!): ForgotPasswordPayload
+    @rateLimit
     @authentication(required: NONE)
   resetPassword(input: ResetPasswordInput!): ResetPasswordPayload
     @authentication(required: NONE)
   verifyEmail(input: VerifyEmailInput!): VerifyEmailPayload
     @authentication(required: OPTIONAL)
+  resendVerificationEmail(
+    input: ResendVerificationEmailInput!
+  ): ResendVerificationEmailPayload
+    @rateLimit
+    @authentication(required: NONE)
   changePassword(input: ChangePasswordInput!): ChangePasswordPayload
     @authentication(required: PRESENT) @sessionOnly
   changeEmail(input: ChangeEmailInput!): ChangeEmailPayload
@@ -28,6 +39,9 @@ extend type Mutation {
   assumeOrganizationSession(
     input: AssumeOrganizationSessionInput!
   ): AssumeOrganizationSessionPayload @authentication(required: PRESENT) @sessionOnly
+  assumeEmployeePortalSession(
+    input: AssumeEmployeePortalSessionInput!
+  ): AssumeEmployeePortalSessionPayload @authentication(required: PRESENT) @sessionOnly
 
   revokeSession(input: RevokeSessionInput!): RevokeSessionPayload!
     @authentication(required: PRESENT) @sessionOnly
@@ -89,19 +103,12 @@ input SignUpInput {
   fullName: String!
 }
 
-input SendMagicLinkInput {
-  email: EmailAddr!
-  "Brands the email with an organization name when sign-in was org-scoped."
-  organizationId: ID
-  continue: String
-}
-
-input VerifyMagicLinkInput {
+input ActivateAccountFromInvitationInput {
   token: String!
 }
 
-input ActivateAccountInput {
-  token: String!
+input AcceptInvitationInput {
+  organizationId: ID!
 }
 
 input ForgotPasswordInput {
@@ -117,6 +124,10 @@ input VerifyEmailInput {
   token: String!
 }
 
+input ResendVerificationEmailInput {
+  email: EmailAddr!
+}
+
 input ChangePasswordInput {
   currentPassword: String!
   newPassword: String!
@@ -129,6 +140,11 @@ input ChangeEmailInput {
 
 input AssumeOrganizationSessionInput {
   organizationId: ID!
+  continue: String!
+}
+
+input AssumeEmployeePortalSessionInput {
+  employeePortalId: ID!
   continue: String!
 }
 
@@ -149,17 +165,12 @@ type SignOutPayload {
   success: Boolean!
 }
 
-type SendMagicLinkPayload {
-  success: Boolean!
-}
-
-type VerifyMagicLinkPayload {
-  continue: String
-}
-
-type ActivateAccountPayload {
-  createPasswordToken: String
+type ActivateAccountFromInvitationPayload {
   ssoLoginUrl: String
+  profile: Profile
+}
+
+type AcceptInvitationPayload {
   profile: Profile
 }
 
@@ -172,6 +183,10 @@ type ResetPasswordPayload {
 }
 
 type VerifyEmailPayload {
+  success: Boolean!
+}
+
+type ResendVerificationEmailPayload {
   success: Boolean!
 }
 
@@ -202,6 +217,11 @@ type SAMLAuthenticationRequired {
 }
 
 type AssumeOrganizationSessionPayload {
+  result: AssumeOrganizationSessionResult!
+}
+
+type AssumeEmployeePortalSessionPayload {
+  organizationId: ID!
   result: AssumeOrganizationSessionResult!
 }
 

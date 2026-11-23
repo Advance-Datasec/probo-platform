@@ -1,29 +1,45 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
-import { Button, Field, IconChevronLeft, useToast } from "@probo/ui";
-import { type FormEventHandler, useEffect, useState } from "react";
+import { Field } from "@base-ui/react/field";
+import { Form } from "@base-ui/react/form";
+import { Button } from "@probo/ui/src/v2/Button/Button";
+import { TextField } from "@probo/ui/src/v2/form/TextField";
+import { Link } from "@probo/ui/src/v2/Link/Link";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
+import { Heading } from "@probo/ui/src/v2/typography/Heading";
+import { Text } from "@probo/ui/src/v2/typography/Text";
+import { Suspense, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   type PreloadedQuery,
   usePreloadedQuery,
   useQueryLoader,
 } from "react-relay";
-import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
+import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { graphql } from "relay-runtime";
 
 import type { SSOSignInPageQuery } from "#/__generated__/iam/SSOSignInPageQuery.graphql";
+import { usePostAuthRedirectUrl } from "#/hooks/usePostAuthRedirectUrl";
+
+import { CreateAccountFooterLazy } from "./_components/CreateAccountFooter";
 
 const ssoAvailabilityQuery = graphql`
   query SSOSignInPageQuery($email: EmailAddr!) {
@@ -33,70 +49,75 @@ const ssoAvailabilityQuery = graphql`
 
 export default function SSOSignInPage() {
   const location = useLocation();
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   const [queryRef, loadQuery]
     = useQueryLoader<SSOSignInPageQuery>(ssoAvailabilityQuery);
   const [checking, setChecking] = useState(false);
 
-  const handleSSOCheck: FormEventHandler<HTMLFormElement> = (e) => {
-    e.preventDefault();
-    setChecking(true);
-    const formData = new FormData(e.currentTarget);
-    const email = formData.get("email") ? (formData.get("email") as string).toString() : "";
-
-    if (!email) return;
-
-    loadQuery({ email }, { fetchPolicy: "network-only" });
-  };
-
   return (
     <>
-      <form className="space-y-6 w-full max-w-md mx-auto pt-4" onSubmit={handleSSOCheck}>
-        <Link
-          to={{ pathname: "/auth/login", search: location.search }}
-          className="flex items-center gap-2 text-txt-secondary hover:text-txt-primary transition-colors mb-4"
+      <div className="flex w-full flex-col gap-8">
+        <div className="flex flex-col gap-1">
+          <Heading level={1} size={4} weight="medium" align="center" highContrast>
+            {t("ssoSignInPage.title")}
+          </Heading>
+          <Text size={2} align="center" className="block">
+            {t("ssoSignInPage.description")}
+          </Text>
+        </div>
+
+        <Form
+          className="flex flex-col gap-5"
+          onFormSubmit={(values) => {
+            const email = String(values.email ?? "");
+            if (!email) return;
+            setChecking(true);
+            loadQuery({ email }, { fetchPolicy: "network-only" });
+          }}
         >
-          <IconChevronLeft size={20} />
-          <span className="text-sm">{__("Back")}</span>
-        </Link>
+          <Field.Root name="email" className="flex flex-col gap-1.5">
+            <Field.Label className="text-1 font-medium text-sand-12">
+              {t("ssoSignInPage.fields.workEmail")}
+            </Field.Label>
+            <TextField type="email" name="email" required autoFocus />
+            <Field.Error className="text-1 text-red-11" />
+          </Field.Root>
 
-        <h1 className="text-center text-2xl font-bold">
-          {__("Login with SSO")}
-        </h1>
-        <p className="text-center text-txt-tertiary mt-1 mb-6">
-          {__("Enter your work email to continue with SSO")}
-        </p>
-
-        <Field
-          required
-          placeholder={__("Work Email")}
-          name="email"
-          type="email"
-          label={__("Work Email")}
-          autoFocus
-        />
-
-        <Button className="w-xs h-10 mx-auto mt-6" disabled={checking}>
-          {checking ? __("Checking...") : __("Continue with SSO")}
-        </Button>
-
-        {/* <div className="text-center mt-6 text-sm text-txt-secondary">
-          {__("Don't have an account ?")}
-          {" "}
-          <Link
-            to={{ pathname: "/auth/register", search: location.search }}
-            className="underline hover:text-txt-primary"
+          <Button
+            type="submit"
+            variant="solid"
+            color="neutral"
+            highContrast
+            size={3}
+            className="w-full"
+            loading={checking}
           >
-            {__("Register")}
-          </Link>
-        </div> */}
-      </form>
+            {t("ssoSignInPage.actions.continue")}
+          </Button>
+        </Form>
+
+        <div className="flex flex-col gap-2">
+          <Suspense fallback={null}>
+            <CreateAccountFooterLazy
+              prefix={t("ssoSignInPage.noAccount")}
+              label={t("ssoSignInPage.actions.register")}
+            />
+          </Suspense>
+
+          <Text align="center" size={2} className="block">
+            <Link to={{ pathname: "/auth/login", search: location.search }}>
+              {t("ssoSignInPage.actions.backToLogin")}
+            </Link>
+          </Text>
+        </div>
+      </div>
 
       {queryRef && (
         <NavigateToSSOLoginURL
           onSSOAvailabilityCheck={setChecking}
           queryRef={queryRef}
+          loginSearch={location.search}
         />
       )}
     </>
@@ -106,13 +127,15 @@ export default function SSOSignInPage() {
 function NavigateToSSOLoginURL(props: {
   queryRef: PreloadedQuery<SSOSignInPageQuery>;
   onSSOAvailabilityCheck: (checking: boolean) => void;
+  loginSearch: string;
 }) {
-  const { queryRef } = props;
+  const { queryRef, loginSearch } = props;
 
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const postAuthRedirectUrl = usePostAuthRedirectUrl();
 
   const { ssoLoginURL } = usePreloadedQuery<SSOSignInPageQuery>(
     ssoAvailabilityQuery,
@@ -121,33 +144,40 @@ function NavigateToSSOLoginURL(props: {
 
   useEffect(() => {
     if (!ssoLoginURL.ok) {
-      toast({
-        title: __("Error"),
+      toast.add({
+        title: t("common.error"),
         description:
           ssoLoginURL.errors[0] instanceof Error
             ? ssoLoginURL.errors[0].message
-            : __("SSO not available for this email domain"),
-        variant: "error",
+            : t("ssoSignInPage.errors.unavailable"),
+        type: "error",
       });
 
-      void navigate("/auth/login");
+      void navigate({ pathname: "/auth/login", search: loginSearch });
       return;
     }
 
     if (!ssoLoginURL.value) {
-      toast({
-        title: __("Error"),
-        description: __("SSO not available for this email domain"),
-        variant: "error",
+      toast.add({
+        title: t("common.error"),
+        description: t("ssoSignInPage.errors.unavailable"),
+        type: "error",
       });
+
+      void navigate({ pathname: "/auth/login", search: loginSearch });
       return;
     }
 
     const url = new URL(ssoLoginURL.value);
-    url.search = searchParams.toString();
+    url.searchParams.set("continue", postAuthRedirectUrl);
+    for (const [key, value] of searchParams.entries()) {
+      if (key !== "continue") {
+        url.searchParams.set(key, value);
+      }
+    }
 
     window.location.href = url.toString();
-  }, [__, navigate, ssoLoginURL, toast, searchParams]);
+  }, [t, loginSearch, navigate, postAuthRedirectUrl, searchParams, ssoLoginURL, toast]);
 
   return null;
 }

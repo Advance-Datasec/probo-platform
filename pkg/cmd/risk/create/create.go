@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package create
 
@@ -25,20 +31,14 @@ import (
 )
 
 const createMutation = `
-mutation($input: CreateRiskInput!) {
+mutation RiskCreate($input: CreateRiskInput!) {
   createRisk(input: $input) {
     riskEdge {
       node {
         id
+        referenceId
         name
         category
-        treatment
-        inherentLikelihood
-        inherentImpact
-        inherentRiskScore
-        residualLikelihood
-        residualImpact
-        residualRiskScore
       }
     }
   }
@@ -49,16 +49,10 @@ type createResponse struct {
 	CreateRisk struct {
 		RiskEdge struct {
 			Node struct {
-				ID                 string `json:"id"`
-				Name               string `json:"name"`
-				Category           string `json:"category"`
-				Treatment          string `json:"treatment"`
-				InherentLikelihood int    `json:"inherentLikelihood"`
-				InherentImpact     int    `json:"inherentImpact"`
-				InherentRiskScore  int    `json:"inherentRiskScore"`
-				ResidualLikelihood int    `json:"residualLikelihood"`
-				ResidualImpact     int    `json:"residualImpact"`
-				ResidualRiskScore  int    `json:"residualRiskScore"`
+				ID          string `json:"id"`
+				ReferenceID string `json:"referenceId"`
+				Name        string `json:"name"`
+				Category    string `json:"category"`
 			} `json:"node"`
 		} `json:"riskEdge"`
 	} `json:"createRisk"`
@@ -66,27 +60,21 @@ type createResponse struct {
 
 func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 	var (
-		flagOrg                string
-		flagName               string
-		flagCategory           string
-		flagTreatment          string
-		flagInherentLikelihood int
-		flagInherentImpact     int
-		flagResidualLikelihood int
-		flagResidualImpact     int
-		flagDescription        string
-		flagNote               string
-		flagOwner              string
+		flagOrg         string
+		flagName        string
+		flagCategory    string
+		flagDescription string
+		flagNote        string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a new risk",
 		Example: `  # Create a risk interactively
-  prb risk create --inherent-likelihood 3 --inherent-impact 4
+  prb risk create
 
   # Create a risk non-interactively
-  prb risk create --name "Data breach" --category "Security" --treatment MITIGATED --inherent-likelihood 3 --inherent-impact 4`,
+  prb risk create --name "Data breach" --category "Security"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := f.Config()
 			if err != nil {
@@ -106,12 +94,9 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 				cmdutil.TokenRefreshOption(cfg, host, hc),
 			)
 
-			if flagOrg == "" {
-				flagOrg = hc.Organization
-			}
-
-			if flagOrg == "" {
-				return fmt.Errorf("organization is required; pass --org or set a default with 'prb auth login'")
+			flagOrg, err = cmdutil.ResolveOrganization(flagOrg, hc.Organization)
+			if err != nil {
+				return err
 			}
 
 			if f.IOStreams.IsInteractive() {
@@ -134,22 +119,6 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 						return err
 					}
 				}
-
-				if flagTreatment == "" {
-					err := huh.NewSelect[string]().
-						Title("Risk treatment").
-						Options(
-							huh.NewOption("Mitigated", "MITIGATED"),
-							huh.NewOption("Accepted", "ACCEPTED"),
-							huh.NewOption("Avoided", "AVOIDED"),
-							huh.NewOption("Transferred", "TRANSFERRED"),
-						).
-						Value(&flagTreatment).
-						Run()
-					if err != nil {
-						return err
-					}
-				}
 			}
 
 			if flagName == "" {
@@ -160,17 +129,10 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("category is required; pass --category or run interactively")
 			}
 
-			if flagTreatment == "" {
-				return fmt.Errorf("treatment is required; pass --treatment or run interactively")
-			}
-
 			input := map[string]any{
-				"organizationId":     flagOrg,
-				"name":               flagName,
-				"category":           flagCategory,
-				"treatment":          flagTreatment,
-				"inherentLikelihood": flagInherentLikelihood,
-				"inherentImpact":     flagInherentImpact,
+				"organizationId": flagOrg,
+				"name":           flagName,
+				"category":       flagCategory,
 			}
 
 			if flagDescription != "" {
@@ -179,18 +141,6 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 
 			if flagNote != "" {
 				input["note"] = flagNote
-			}
-
-			if flagOwner != "" {
-				input["ownerId"] = flagOwner
-			}
-
-			if cmd.Flags().Changed("residual-likelihood") {
-				input["residualLikelihood"] = flagResidualLikelihood
-			}
-
-			if cmd.Flags().Changed("residual-impact") {
-				input["residualImpact"] = flagResidualImpact
 			}
 
 			data, err := client.Do(
@@ -209,7 +159,8 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 			r := resp.CreateRisk.RiskEdge.Node
 			_, _ = fmt.Fprintf(
 				f.IOStreams.Out,
-				"Created risk %s (%s)\n",
+				"Created risk %s %s (%s)\n",
+				r.ReferenceID,
 				r.ID,
 				r.Name,
 			)
@@ -218,20 +169,11 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&flagOrg, "org", "", "Organization ID")
+	cmdutil.AddOrganizationFlag(cmd, &flagOrg, "Organization ID")
 	cmd.Flags().StringVar(&flagName, "name", "", "Risk name (required)")
 	cmd.Flags().StringVar(&flagCategory, "category", "", "Risk category (required)")
-	cmd.Flags().StringVar(&flagTreatment, "treatment", "", "Risk treatment: MITIGATED, ACCEPTED, AVOIDED, TRANSFERRED (required)")
-	cmd.Flags().IntVar(&flagInherentLikelihood, "inherent-likelihood", 0, "Inherent likelihood 1-5 (required)")
-	cmd.Flags().IntVar(&flagInherentImpact, "inherent-impact", 0, "Inherent impact 1-5 (required)")
-	cmd.Flags().IntVar(&flagResidualLikelihood, "residual-likelihood", 0, "Residual likelihood 1-5")
-	cmd.Flags().IntVar(&flagResidualImpact, "residual-impact", 0, "Residual impact 1-5")
 	cmd.Flags().StringVar(&flagDescription, "description", "", "Risk description")
 	cmd.Flags().StringVar(&flagNote, "note", "", "Risk note")
-	cmd.Flags().StringVar(&flagOwner, "owner", "", "Owner profile ID")
-
-	_ = cmd.MarkFlagRequired("inherent-likelihood")
-	_ = cmd.MarkFlagRequired("inherent-impact")
 
 	return cmd
 }

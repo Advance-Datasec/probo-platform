@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -36,14 +42,29 @@ import (
 type NetlifyDriver struct {
 	httpClient  *http.Client
 	accountSlug string
+	baseURL     string
 }
 
 var _ Driver = (*NetlifyDriver)(nil)
 
-func NewNetlifyDriver(httpClient *http.Client, accountSlug string) *NetlifyDriver {
+const (
+	netlifyAccountsSegment = "accounts"
+	netlifyMembersSegment  = "members"
+)
+
+// netlifyDefaultBaseURL is the Netlify API root. It backs only the exported
+// ListNetlifyOrganizations, and only when its caller resolves no APIBase for
+// the provider (unregistered, or registered without one). Every other path
+// goes through the injected baseURL instead.
+const netlifyDefaultBaseURL = "https://api.netlify.com/api/v1"
+
+// NewNetlifyDriver builds a driver against baseURL, the versioned Netlify
+// API origin (e.g. https://api.netlify.com/api/v1).
+func NewNetlifyDriver(httpClient *http.Client, accountSlug, baseURL string) *NetlifyDriver {
 	return &NetlifyDriver{
 		httpClient:  httpClient,
 		accountSlug: accountSlug,
+		baseURL:     baseURL,
 	}
 }
 
@@ -57,7 +78,9 @@ type netlifyMember struct {
 func (d *NetlifyDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error) {
 	var records []AccountRecord
 
-	u, err := url.JoinPath("https://api.netlify.com", "api", "v1", url.PathEscape(d.accountSlug), "members")
+	// The members endpoint hangs the account slug straight off the version
+	// root — there is no "accounts" segment, unlike the account endpoint.
+	u, err := url.JoinPath(d.baseURL, url.PathEscape(d.accountSlug), netlifyMembersSegment)
 	if err != nil {
 		return nil, fmt.Errorf("cannot build netlify members URL: %w", err)
 	}
@@ -98,9 +121,14 @@ func (d *NetlifyDriver) ListAccounts(ctx context.Context) ([]AccountRecord, erro
 			records = append(records, record)
 		}
 
-		next = rfc5988.FindByRel(linkHeader, "next")
-		if next == "" {
+		rawNext := rfc5988.FindByRel(linkHeader, "next")
+		if rawNext == "" {
 			return records, nil
+		}
+
+		next, err = sameHostNextPageURL("netlify", d.baseURL, rawNext)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -132,4 +160,107 @@ func (d *NetlifyDriver) queryMembers(ctx context.Context, endpoint string) ([]ne
 	}
 
 	return members, httpResp.Header.Get("Link"), nil
+}
+
+// netlifyNameResolver resolves the Netlify account name.
+type netlifyNameResolver struct {
+	httpClient  *http.Client
+	accountSlug string
+	baseURL     string
+}
+
+// NewNetlifyNameResolver resolves the account name against baseURL, the
+// versioned Netlify API origin (e.g. https://api.netlify.com/api/v1).
+func NewNetlifyNameResolver(httpClient *http.Client, accountSlug, baseURL string) NameResolver {
+	return &netlifyNameResolver{httpClient: httpClient, accountSlug: accountSlug, baseURL: baseURL}
+}
+
+func (r *netlifyNameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
+	if r.accountSlug == "" {
+		return "", nil
+	}
+
+	endpoint, err := url.JoinPath(r.baseURL, netlifyAccountsSegment, url.PathEscape(r.accountSlug))
+	if err != nil {
+		return "", fmt.Errorf("cannot build netlify account URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("cannot create netlify account request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	httpResp, err := r.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("cannot execute netlify account request: %w", err)
+	}
+
+	defer func() { _ = httpResp.Body.Close() }()
+
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return "", nameStatusError("netlify account", httpResp.StatusCode)
+	}
+
+	var resp struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		return "", fmt.Errorf("cannot decode netlify account response: %w", err)
+	}
+
+	return resp.Name, nil
+}
+
+// ListNetlifyOrganizations fetches the Netlify accounts the authenticated
+// user belongs to, from baseURL ("" for the Netlify SaaS API).
+func ListNetlifyOrganizations(ctx context.Context, httpClient *http.Client, baseURL string) ([]Organization, error) {
+	if baseURL == "" {
+		baseURL = netlifyDefaultBaseURL
+	}
+
+	endpoint, err := url.JoinPath(baseURL, netlifyAccountsSegment)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build netlify organizations URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create netlify organizations request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("cannot fetch netlify organizations: %w", err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cannot fetch netlify organizations: unexpected status %d", resp.StatusCode)
+	}
+
+	var accounts []struct {
+		Slug string `json:"slug"`
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&accounts); err != nil {
+		return nil, fmt.Errorf("cannot decode netlify organizations response: %w", err)
+	}
+
+	result := make([]Organization, len(accounts))
+	for i, a := range accounts {
+		displayName := a.Name
+		if displayName == "" {
+			displayName = a.Slug
+		}
+
+		result[i] = Organization{Slug: a.Slug, DisplayName: displayName}
+	}
+
+	return result, nil
 }

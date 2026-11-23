@@ -1,82 +1,65 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { ClipboardTextIcon, CodeIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
-import { formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
-import {
-  Badge,
-  Breadcrumb,
-  Button,
-  IconGlobe,
-  IconPageTextLine,
-  IconSettingsGear2,
-  IconSquareBehindSquare2,
-  PageHeader,
-  TabLink,
-  Tabs,
-  useToast,
-} from "@probo/ui";
-import { type PreloadedQuery, useMutation, usePreloadedQuery } from "react-relay";
-import { Link, Outlet, useParams } from "react-router";
+import { CheckCircleIcon, CopyIcon, WarningIcon } from "@phosphor-icons/react";
+import { usePageTitle } from "@probo/hooks";
+import { Button } from "@probo/ui/src/v2/Button/Button";
+import { IconButton } from "@probo/ui/src/v2/IconButton/IconButton";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
+import { Heading } from "@probo/ui/src/v2/typography/Heading";
+import { Text } from "@probo/ui/src/v2/typography/Text";
+import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import { type PreloadedQuery, useFragment, usePreloadedQuery } from "react-relay";
+import { Outlet } from "react-router";
 import { graphql } from "relay-runtime";
 
-import type { CookieBannerConfigLayoutActivateMutation } from "#/__generated__/core/CookieBannerConfigLayoutActivateMutation.graphql";
-import type { CookieBannerConfigLayoutDeactivateMutation } from "#/__generated__/core/CookieBannerConfigLayoutDeactivateMutation.graphql";
+import type { CookieBannerConfigLayout_cookieBanner$key } from "#/__generated__/core/CookieBannerConfigLayout_cookieBanner.graphql";
 import type { CookieBannerConfigLayoutPublishMutation } from "#/__generated__/core/CookieBannerConfigLayoutPublishMutation.graphql";
 import type { CookieBannerConfigLayoutQuery } from "#/__generated__/core/CookieBannerConfigLayoutQuery.graphql";
-import { useOrganizationId } from "#/hooks/useOrganizationId";
+import { TonedCard } from "#/components/TonedCard/TonedCard";
+import type { TonedCardTone } from "#/components/TonedCard/variants";
+import { NotFoundError } from "#/lib/relay/errors";
+import { useMutation } from "#/lib/relay/useMutation";
+
+import { cookieBannerConfigLayout } from "../variants";
+
+const cookieBannerFragment = graphql`
+  fragment CookieBannerConfigLayout_cookieBanner on CookieBanner {
+    id
+    name
+    state
+    latestVersion {
+      id
+      version
+      state
+    }
+  }
+`;
 
 export const cookieBannerConfigLayoutQuery = graphql`
   query CookieBannerConfigLayoutQuery($cookieBannerId: ID!) {
     node(id: $cookieBannerId) {
       __typename
       ... on CookieBanner {
-        id
-        name
-        origin
-        state
-        latestVersion {
-          id
-          version
-          state
-        }
-        policyDocument {
-          id
-        }
-      }
-    }
-  }
-`;
-
-const activateMutation = graphql`
-  mutation CookieBannerConfigLayoutActivateMutation($input: ActivateCookieBannerInput!) {
-    activateCookieBanner(input: $input) {
-      cookieBanner {
-        id
-        state
-      }
-    }
-  }
-`;
-
-const deactivateMutation = graphql`
-  mutation CookieBannerConfigLayoutDeactivateMutation($input: DeactivateCookieBannerInput!) {
-    deactivateCookieBanner(input: $input) {
-      cookieBanner {
-        id
-        state
+        ...CookieBannerConfigLayout_cookieBanner
       }
     }
   }
@@ -91,11 +74,11 @@ const publishMutation = graphql`
         state
       }
       cookieBanner {
-        id
-        latestVersion {
+        ...CookieBannerConfigLayout_cookieBanner
+        publishedVersion {
           id
-          version
-          state
+          gvlVendorCount
+          gvlVendorIds
         }
       }
     }
@@ -106,175 +89,154 @@ interface CookieBannerConfigLayoutProps {
   queryRef: PreloadedQuery<CookieBannerConfigLayoutQuery>;
 }
 
-export default function CookieBannerConfigLayout({ queryRef }: CookieBannerConfigLayoutProps) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
-  const organizationId = useOrganizationId();
-  const { cookieBannerId } = useParams<{ cookieBannerId: string }>();
+export function CookieBannerConfigLayout({
+  queryRef,
+}: CookieBannerConfigLayoutProps) {
+  const { t } = useTranslation("organizations/cookie-banners");
+  const toast = useToast();
+  const {
+    root,
+    lead,
+    title,
+    meta,
+    id,
+    version: versionClass,
+    body,
+  } = cookieBannerConfigLayout();
 
-  const data = usePreloadedQuery<CookieBannerConfigLayoutQuery>(cookieBannerConfigLayoutQuery, queryRef);
-  if (data.node.__typename !== "CookieBanner") {
-    throw new Error("invalid type for node");
+  const data = usePreloadedQuery<CookieBannerConfigLayoutQuery>(
+    cookieBannerConfigLayoutQuery,
+    queryRef,
+  );
+  const banner = useFragment<CookieBannerConfigLayout_cookieBanner$key>(
+    cookieBannerFragment,
+    data.node.__typename === "CookieBanner" ? data.node : null,
+  );
+  if (banner == null) {
+    throw new NotFoundError("Cookie banner not found");
+  }
+  usePageTitle(banner.name);
+
+  const [publish, isPublishing] = useMutation<CookieBannerConfigLayoutPublishMutation>(
+    publishMutation,
+    {
+      successMessage: t("configLayout.messages.published"),
+      errorToast: t("configLayout.errors.publish"),
+    },
+  );
+  const hasDraft = banner.latestVersion?.state === "DRAFT";
+  const isDeactivated = banner.state !== "ACTIVE";
+  const version = banner.latestVersion?.version;
+
+  let message: string;
+  if (isDeactivated && hasDraft && version != null) {
+    message = t("configLayout.callout.deactivatedDraft", { version });
+  } else if (isDeactivated) {
+    message = t("configLayout.callout.deactivated");
+  } else if (hasDraft && version != null) {
+    message = t("configLayout.callout.draft");
+  } else if (version != null) {
+    message = t("configLayout.callout.published");
+  } else {
+    message = t("configLayout.callout.unpublished");
   }
 
-  const banner = data.node;
+  let tone: TonedCardTone;
+  let icon: ReactNode;
+  if (isDeactivated) {
+    tone = "amber";
+    icon = <WarningIcon size={24} weight="duotone" />;
+  } else if (hasDraft) {
+    tone = "amber";
+    icon = <WarningIcon size={24} weight="duotone" />;
+  } else {
+    tone = "green";
+    icon = <CheckCircleIcon size={24} weight="duotone" />;
+  }
 
-  const [activate, isActivating] = useMutation<CookieBannerConfigLayoutActivateMutation>(activateMutation);
-  const [deactivate, isDeactivating] = useMutation<CookieBannerConfigLayoutDeactivateMutation>(
-    deactivateMutation,
-  );
-  const [publish, isPublishing] = useMutation<CookieBannerConfigLayoutPublishMutation>(publishMutation);
+  const bannerId = banner.id;
 
-  const handleToggleState = () => {
-    if (banner.state === "ACTIVE") {
-      deactivate({
-        variables: { input: { cookieBannerId: banner.id } },
-        onCompleted() {
-          toast({ title: __("Success"), description: __("Banner deactivated"), variant: "success" });
-        },
-        onError(error) {
-          toast({ title: __("Error"), description: formatError(__("Failed to deactivate"), error), variant: "error" });
-        },
-      });
-    } else {
-      activate({
-        variables: { input: { cookieBannerId: banner.id } },
-        onCompleted() {
-          toast({ title: __("Success"), description: __("Banner activated"), variant: "success" });
-        },
-        onError(error) {
-          toast({ title: __("Error"), description: formatError(__("Failed to activate"), error), variant: "error" });
-        },
-      });
-    }
-  };
-
-  const handlePublish = () => {
-    publish({
-      variables: { input: { cookieBannerId: banner.id } },
-      onCompleted() {
-        toast({ title: __("Success"), description: __("Version published"), variant: "success" });
+  function handleCopyId() {
+    void navigator.clipboard.writeText(bannerId).then(
+      () => {
+        toast.add({
+          title: t("configLayout.messages.copiedTitle"),
+          description: t("configLayout.messages.idCopied"),
+          type: "success",
+        });
       },
-      onError(error) {
-        toast({ title: __("Error"), description: formatError(__("Failed to publish"), error), variant: "error" });
+      () => {
+        toast.add({
+          title: t("configLayout.errors.title"),
+          description: t("configLayout.errors.copy"),
+          type: "error",
+        });
       },
-    });
-  };
-
-  const hasDraft = banner.latestVersion?.state === "DRAFT";
+    );
+  }
 
   return (
-    <div className="space-y-6">
-      <Breadcrumb
-        items={[
-          {
-            label: __("Cookie Banners"),
-            to: `/organizations/${organizationId}/cookie-banners`,
-          },
-          {
-            label: banner.name,
-          },
-        ]}
-      />
-
-      <PageHeader
-        title={(
-          <div className="align-baseline">
-            {banner.name}
-            {banner.latestVersion?.version != null && (
-              <span className="font-mono text-base text-txt-secondary ml-2">
-                v
-                {banner.latestVersion.version}
-                {banner.latestVersion.state === "DRAFT" && (
-                  <span className="text-xs font-sans">
-                    &nbsp;(draft)
-                  </span>
-                )}
-              </span>
-            )}
+    <div className={root()}>
+      <TonedCard
+        tone={tone}
+        icon={icon}
+        lead={(
+          <div className={lead()}>
+            <Heading
+              level={2}
+              size={4}
+              weight="medium"
+              highContrast
+              className={title()}
+            >
+              {banner.name}
+            </Heading>
+            <div className={meta()}>
+              <Text size={2} color="neutral" className={id()}>
+                {banner.id}
+              </Text>
+              <IconButton
+                size={1}
+                variant="ghost"
+                color="neutral"
+                aria-label={t("configLayout.actions.copyId")}
+                onClick={handleCopyId}
+              >
+                <CopyIcon />
+              </IconButton>
+              {version != null && (
+                <Text size={2} color="neutral" className={versionClass()}>
+                  {t("configLayout.callout.version", { version })}
+                </Text>
+              )}
+            </div>
           </div>
         )}
-        description={(
-          <span className="flex items-center gap-3 text-sm text-txt-secondary">
-            <span>
-              <span className="font-medium text-txt-primary">{__("Origin")}</span>
-              {" "}
-              {banner.origin}
-            </span>
-            <span className="text-border-primary">·</span>
-            <span className="flex items-center gap-1">
-              <span className="font-medium text-txt-primary">{__("ID")}</span>
-              {" "}
-              {banner.id}
-              <button
-                type="button"
-                className="p-1 rounded hover:bg-bg-hover transition-colors cursor-pointer"
+        control={hasDraft
+          ? (
+              <Button
+                size={2}
+                variant="solid"
+                color="neutral"
+                highContrast
+                loading={isPublishing}
                 onClick={() => {
-                  void navigator.clipboard.writeText(banner.id);
-                  toast({ title: __("Copied"), description: __("Banner ID copied to clipboard"), variant: "success" });
+                  void publish({
+                    variables: { input: { cookieBannerId: banner.id } },
+                  }).catch(() => {
+                    // Error toast is already shown by useMutation.
+                  });
                 }}
               >
-                <IconSquareBehindSquare2 size={16} />
-              </button>
-            </span>
-            {banner.policyDocument && (
-              <>
-                <span className="text-border-primary">·</span>
-                <Link
-                  to={`/organizations/${organizationId}/documents/${banner.policyDocument.id}`}
-                  className="font-medium text-txt-primary underline"
-                >
-                  {__("Cookie Policy")}
-                </Link>
-              </>
-            )}
-          </span>
-        )}
+                {t("configLayout.actions.publish")}
+              </Button>
+            )
+          : null}
       >
-        <Badge variant={banner.state === "ACTIVE" ? "success" : "danger"}>
-          {banner.state === "ACTIVE" ? __("Active") : __("Inactive")}
-        </Badge>
-        {hasDraft && (
-          <Button onClick={handlePublish} disabled={isPublishing}>
-            {isPublishing ? __("Publishing...") : __("Publish Changes")}
-          </Button>
-        )}
-        <Button
-          variant="secondary"
-          onClick={handleToggleState}
-          disabled={isActivating || isDeactivating}
-        >
-          {banner.state === "ACTIVE" ? __("Deactivate") : __("Activate")}
-        </Button>
-      </PageHeader>
-
-      <Tabs>
-        <TabLink to={`/organizations/${organizationId}/cookie-banners/${cookieBannerId}/display`}>
-          <IconPageTextLine size={20} />
-          {__("Display")}
-        </TabLink>
-        <TabLink to={`/organizations/${organizationId}/cookie-banners/${cookieBannerId}/settings`}>
-          <IconSettingsGear2 size={20} />
-          {__("Settings")}
-        </TabLink>
-        <TabLink to={`/organizations/${organizationId}/cookie-banners/${cookieBannerId}/translations`}>
-          <IconGlobe size={20} />
-          {__("Translations")}
-        </TabLink>
-        <TabLink to={`/organizations/${organizationId}/cookie-banners/${cookieBannerId}/trackers`}>
-          <MagnifyingGlassIcon size={20} />
-          {__("Trackers")}
-        </TabLink>
-        <TabLink to={`/organizations/${organizationId}/cookie-banners/${cookieBannerId}/resources`}>
-          <CodeIcon size={20} />
-          {__("Resources")}
-        </TabLink>
-        <TabLink to={`/organizations/${organizationId}/cookie-banners/${cookieBannerId}/consent-records`}>
-          <ClipboardTextIcon size={20} />
-          {__("Consent Records")}
-        </TabLink>
-      </Tabs>
-
+        <div className={body()}>
+          <Text size={2} color="neutral">{message}</Text>
+        </div>
+      </TonedCard>
       <Outlet />
     </div>
   );

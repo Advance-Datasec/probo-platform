@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package testutil
 
@@ -18,9 +24,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,24 +47,29 @@ func generateUniqueID() string {
 type TestRole string
 
 const (
-	RoleOwner    TestRole = "OWNER"
-	RoleAdmin    TestRole = "ADMIN"
-	RoleViewer   TestRole = "VIEWER"
-	RoleEmployee TestRole = "EMPLOYEE"
-	RoleAuditor  TestRole = "AUDITOR"
+	RoleOwner                         TestRole = "OWNER"
+	RoleAdmin                         TestRole = "ADMIN"
+	RoleViewer                        TestRole = "VIEWER"
+	RoleEmployee                      TestRole = "EMPLOYEE"
+	RoleAuditor                       TestRole = "AUDITOR"
+	RoleCompliancePortalManager       TestRole = "COMPLIANCE_PORTAL_MANAGER"
+	RoleCompliancePortalAccessManager TestRole = "COMPLIANCE_PORTAL_ACCESS_MANAGER"
 )
 
 type Client struct {
-	T              testing.TB
-	httpClient     *http.Client
-	baseURL        string
-	mailpitBaseURL string
-	role           TestRole
-	userID         gid.GID
-	profileID      gid.GID
-	organizationID gid.GID
-	email          string
-	password       string
+	T               testing.TB
+	httpClient      *http.Client
+	proboHTTPClient *http.Client
+	trustClient     *http.Client
+	trustHost       string
+	baseURL         string
+	mailpitBaseURL  string
+	role            TestRole
+	userID          gid.GID
+	profileID       gid.GID
+	organizationID  gid.GID
+	email           string
+	password        string
 }
 
 func NewClient(t testing.TB, role TestRole) *Client {
@@ -116,6 +129,9 @@ func (c *Client) setupTestUser() {
 	// Sign up
 	c.userID = c.signUp(email, password, fullName)
 
+	// Confirm email so password sign-in works for later re-authentication.
+	c.verifyEmail(c.GetEmailConfirmationToken(email))
+
 	// Create organization (this makes the user an OWNER)
 	orgName := fmt.Sprintf("Test Org %s", uniqueID)
 	c.organizationID = c.createOrganization(orgName)
@@ -135,6 +151,9 @@ func (c *Client) SetupTestUserInOrg(ownerClient *Client) {
 	password := "TestPassword123!"
 	fullName := fmt.Sprintf("Test User %s", uniqueID)
 
+	c.email = email
+	c.password = password
+
 	// Owner invites user to organization
 	profileID, identityID := ownerClient.createUser(email, fullName, coredata.MembershipRole(c.role))
 	c.userID = identityID
@@ -142,7 +161,9 @@ func (c *Client) SetupTestUserInOrg(ownerClient *Client) {
 	ownerClient.inviteUser(profileID)
 
 	token := c.getActivationToken(email)
-	passwordToken := c.activateUser(token)
+	c.activateUser(token)
+	c.forgotPassword(email)
+	passwordToken := c.getPasswordResetToken(email)
 	c.resetPassword(password, passwordToken)
 	c.signIn(email, password)
 
@@ -183,28 +204,7 @@ func (c *Client) signUp(email, password, fullName string) gid.GID {
 }
 
 func (c *Client) signIn(email string, password string) {
-	const query = `
-		mutation($input: SignInInput!) {
-			signIn(input: $input) {
-				identity { id }
-			}
-		}
-	`
-
-	var result struct {
-		SignIn struct {
-			Identity struct {
-				ID string `json:"id"`
-			} `json:"identity"`
-		} `json:"signIn"`
-	}
-
-	err := c.ExecuteConnect(query, map[string]any{
-		"input": map[string]any{
-			"email":    email,
-			"password": password,
-		},
-	}, &result)
+	err := c.SignIn(email, password)
 	require.NoError(c.T, err, "signIn mutation failed")
 }
 
@@ -400,49 +400,28 @@ func (c *Client) inviteUser(profileID gid.GID) {
 }
 
 func (c *Client) getActivationToken(email string) string {
-	deadline := time.Now().Add(10 * time.Second)
-
-	for time.Now().Before(deadline) {
-		searchMails, err := c.SearchMails(fmt.Sprintf("to:%s subject:\"Invitation to join\"", email))
-		require.NoError(c.T, err, "mailpit messages search failed")
-
-		for _, msg := range searchMails.Messages {
-			linksCheck, err := c.CheckMessageLinks(msg.ID)
-			require.NoError(c.T, err, "mailpit link check failed")
-
-			for _, link := range linksCheck.Links {
-				linkURL, err := url.Parse(link.URL)
-				require.NoError(c.T, err, "mailpit link invalid URL")
-
-				query := linkURL.Query()
-				if query.Get("token") != "" {
-					return query.Get("token")
-				}
-			}
-		}
-
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	c.T.Logf("activation token not found")
-	c.T.FailNow()
-
-	return ""
+	return c.PollForLinkToken(fmt.Sprintf("to:%s subject:\"Invitation to join\"", email))
 }
 
-func (c *Client) activateUser(token string) string {
+func (c *Client) GetEmailConfirmationToken(email string) string {
+	c.T.Helper()
+
+	return c.PollForLinkToken(fmt.Sprintf("to:%s subject:\"Confirm your email address\"", email))
+}
+
+func (c *Client) verifyEmail(token string) {
 	const query = `
-		mutation($input: ActivateAccountInput!) {
-			activateAccount(input: $input) {
-				createPasswordToken
+		mutation($input: VerifyEmailInput!) {
+			verifyEmail(input: $input) {
+				success
 			}
 		}
 	`
 
 	var result struct {
-		ActivateAccount struct {
-			CreatePasswordToken string `json:"createPasswordToken"`
-		} `json:"activateAccount"`
+		VerifyEmail struct {
+			Success bool `json:"success"`
+		} `json:"verifyEmail"`
 	}
 
 	err := c.ExecuteConnect(query, map[string]any{
@@ -450,9 +429,201 @@ func (c *Client) activateUser(token string) string {
 			"token": token,
 		},
 	}, &result)
-	require.NoError(c.T, err, "activateAccount mutation failed")
+	require.NoError(c.T, err, "verifyEmail mutation failed")
+	require.True(c.T, result.VerifyEmail.Success, "verifyEmail should succeed")
+}
 
-	return result.ActivateAccount.CreatePasswordToken
+func (c *Client) ResendVerificationEmail(email string) {
+	c.T.Helper()
+
+	const query = `
+		mutation($input: ResendVerificationEmailInput!) {
+			resendVerificationEmail(input: $input) {
+				success
+			}
+		}
+	`
+
+	var result struct {
+		ResendVerificationEmail struct {
+			Success bool `json:"success"`
+		} `json:"resendVerificationEmail"`
+	}
+
+	err := c.ExecuteConnect(query, map[string]any{
+		"input": map[string]any{
+			"email": email,
+		},
+	}, &result)
+	require.NoError(c.T, err, "resendVerificationEmail mutation failed")
+	require.True(c.T, result.ResendVerificationEmail.Success, "resendVerificationEmail should succeed")
+}
+
+func (c *Client) SignOut() {
+	c.T.Helper()
+
+	const query = `
+		mutation {
+			signOut {
+				success
+			}
+		}
+	`
+
+	var result struct {
+		SignOut struct {
+			Success bool `json:"success"`
+		} `json:"signOut"`
+	}
+
+	err := c.ExecuteConnect(query, nil, &result)
+	require.NoError(c.T, err, "signOut mutation failed")
+}
+
+// SignIn attempts password sign-in and returns any GraphQL/transport error.
+func (c *Client) SignIn(email string, password string) error {
+	c.T.Helper()
+
+	const query = `
+		mutation($input: SignInInput!) {
+			signIn(input: $input) {
+				identity { id }
+			}
+		}
+	`
+
+	var result struct {
+		SignIn struct {
+			Identity struct {
+				ID string `json:"id"`
+			} `json:"identity"`
+		} `json:"signIn"`
+	}
+
+	return c.ExecuteConnect(query, map[string]any{
+		"input": map[string]any{
+			"email":    email,
+			"password": password,
+		},
+	}, &result)
+}
+
+// NewUnauthenticatedClient returns a Connect client with no session cookie.
+func NewUnauthenticatedClient(t testing.TB) *Client {
+	t.Helper()
+
+	return NewUnauthenticatedClientFor(t, GetBaseURL())
+}
+
+// NewUnauthenticatedClientFor returns a client pointed at baseURL with no
+// session cookie. Used with IsolatedEnv to exercise process-config gates.
+func NewUnauthenticatedClientFor(t testing.TB, baseURL string) *Client {
+	t.Helper()
+
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err, "cannot create cookie jar")
+
+	return &Client{
+		T:              t,
+		baseURL:        baseURL,
+		mailpitBaseURL: GetMailpitBaseURL(),
+		httpClient: &http.Client{
+			Jar:     jar,
+			Timeout: 30 * time.Second,
+		},
+	}
+}
+
+// SignInWithMagicLink opens a session for email via the magic-link HTTP flow.
+// When the email is unknown, AuthService creates the identity (even when
+// password signup is disabled), which is how compliance-portal visitors and
+// invitees reach a session on private instances.
+func (c *Client) SignInWithMagicLink(email string) {
+	c.T.Helper()
+
+	continueURL := c.baseURL + "/"
+	c.postConnectMagicLink(email, continueURL)
+
+	token := c.PollForLinkToken(fmt.Sprintf("to:%s subject:\"Connect to\"", email))
+	resp := c.postConnectMagicLinkVerify(c.httpClient, token)
+	require.Equal(
+		c.T,
+		http.StatusFound,
+		resp.StatusCode,
+		"magic-link verify must redirect after opening a session",
+	)
+}
+
+// PollForLinkToken polls mailpit for a message matching searchQuery and
+// returns the first "token" query parameter found among its links.
+func (c *Client) PollForLinkToken(searchQuery string) string {
+	c.T.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for time.Now().Before(deadline) {
+		searchMails, err := c.SearchMails(searchQuery)
+		require.NoError(c.T, err, "mailpit messages search failed")
+
+		for _, msg := range searchMails.Messages {
+			linksCheck, err := c.CheckMessageLinks(msg.ResolvedID())
+			require.NoError(c.T, err, "mailpit link check failed")
+
+			for _, link := range linksCheck.Links {
+				linkURL, err := url.Parse(link.URL)
+				require.NoError(c.T, err, "mailpit link invalid URL")
+
+				if token := linkURL.Query().Get("token"); token != "" {
+					return token
+				}
+			}
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	c.T.Logf("link token not found in mailpit")
+	c.T.FailNow()
+
+	return ""
+}
+
+func (c *Client) activateUser(token string) {
+	const query = `
+		mutation($input: ActivateAccountFromInvitationInput!) {
+			activateAccountFromInvitation(input: $input) {
+				profile { id }
+			}
+		}
+	`
+
+	err := c.ExecuteConnect(query, map[string]any{
+		"input": map[string]any{
+			"token": token,
+		},
+	}, nil)
+	require.NoError(c.T, err, "activateAccount mutation failed")
+}
+
+func (c *Client) forgotPassword(email string) {
+	const query = `
+		mutation($input: ForgotPasswordInput!) {
+			forgotPassword(input: $input) {
+				success
+			}
+		}
+	`
+
+	err := c.ExecuteConnect(query, map[string]any{
+		"input": map[string]any{
+			"email": email,
+		},
+	}, nil)
+	require.NoError(c.T, err, "forgotPassword mutation failed")
+}
+
+func (c *Client) getPasswordResetToken(email string) string {
+	return c.PollForLinkToken(fmt.Sprintf("to:%s subject:\"Reset your password\"", email))
 }
 
 func (c *Client) resetPassword(password string, token string) {
@@ -528,6 +699,256 @@ func NewClientWithNewSession(t testing.TB, from *Client) *Client {
 	client.signIn(client.email, client.password)
 
 	return client
+}
+
+func SelfProvisionCompliancePortalVisitor(t testing.TB, trustHost string) *Client {
+	t.Helper()
+
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err, "cannot create cookie jar")
+
+	email := fmt.Sprintf("visitor-%s@e2e.probo.test", generateUniqueID())
+
+	visitor := &Client{
+		T:              t,
+		baseURL:        GetBaseURL(),
+		mailpitBaseURL: GetMailpitBaseURL(),
+		email:          email,
+		trustHost:      trustHost,
+		httpClient: &http.Client{
+			Jar:     jar,
+			Timeout: 30 * time.Second,
+		},
+		trustClient: trustHTTPClientWithJar(trustHost, jar),
+		proboHTTPClient: &http.Client{
+			Jar:     jar,
+			Timeout: 30 * time.Second,
+		},
+	}
+
+	visitor.connectViaCIMD(email)
+
+	return visitor
+}
+
+func (c *Client) connectViaCIMD(email string) {
+	c.T.Helper()
+
+	WaitForCompliancePortalHTTPS(c.T, c.trustHost)
+
+	initiateURL := fmt.Sprintf(
+		"https://%s/initiate?continue=/overview",
+		c.trustHost,
+	)
+
+	authorizeURL := c.redirectLocation(c.trustClient, initiateURL)
+	require.NotEmpty(c.T, authorizeURL, "oauth initiate must redirect to authorize")
+
+	loginURL := c.redirectLocation(c.proboHTTPClient, authorizeURL)
+	require.Contains(c.T, loginURL, "/auth/login", "unauthenticated authorize must redirect to login")
+	require.Contains(c.T, loginURL, "continue=", "login redirect must preserve continue URL")
+
+	continueURL := extractContinueQueryParam(loginURL)
+	require.NotEmpty(c.T, continueURL)
+	require.Contains(c.T, continueURL, "/api/connect/v1/oauth2/authorize")
+
+	c.postConnectMagicLink(email, continueURL)
+
+	token := c.PollForLinkToken(fmt.Sprintf("to:%s", email))
+	verifyResp := c.postConnectMagicLinkVerify(c.proboHTTPClient, token)
+	require.Equal(
+		c.T,
+		http.StatusFound,
+		verifyResp.StatusCode,
+		"magic-link verify must redirect after opening a session",
+	)
+	resumeAuthorizeURL := resolveRedirectURL(
+		c.baseURL+"/api/connect/v1/magic-link/verify",
+		verifyResp.Header.Get("Location"),
+	)
+	require.Contains(c.T, resumeAuthorizeURL, "/api/connect/v1/oauth2/authorize")
+
+	authorizeResp := c.redirectHTTPResponse(c.proboHTTPClient, resumeAuthorizeURL)
+	require.False(
+		c.T,
+		IsConsentRedirect(authorizeResp),
+		"compliance portal CIMD must skip oauth consent screen",
+	)
+	require.Equal(c.T, http.StatusFound, authorizeResp.StatusCode)
+
+	_, err := OAuth2AuthorizeCodeFromRedirect(authorizeResp)
+	require.NoError(c.T, err, "compliance portal CIMD must issue authorization code without consent")
+
+	callbackURL := resolveRedirectURL(resumeAuthorizeURL, authorizeResp.Header.Get("Location"))
+	require.Contains(c.T, callbackURL, "/callback")
+
+	finalURL := c.redirectLocation(c.trustClient, callbackURL)
+	require.True(
+		c.T,
+		strings.HasSuffix(finalURL, "/overview") || strings.Contains(finalURL, "/overview"),
+		"oauth callback must redirect to continue URL, got %q",
+		finalURL,
+	)
+}
+
+func (c *Client) postConnectMagicLink(email, continueURL string) {
+	c.T.Helper()
+
+	body := url.Values{}
+	body.Set("email", email)
+	body.Set("continue", continueURL)
+
+	req, err := http.NewRequest(
+		"POST",
+		c.baseURL+"/api/connect/v1/magic-link/send",
+		strings.NewReader(body.Encode()),
+	)
+	require.NoError(c.T, err)
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	httpClient := c.proboHTTPClient
+	if httpClient == nil {
+		httpClient = c.httpClient
+	}
+
+	resp, err := httpClient.Do(req)
+	require.NoError(c.T, err, "magic-link send request failed")
+
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(c.T, http.StatusNoContent, resp.StatusCode, "magic-link send must return 204")
+}
+
+func (c *Client) postConnectMagicLinkVerify(httpClient *http.Client, token string) *OAuth2HTTPResponse {
+	c.T.Helper()
+
+	body := url.Values{}
+	body.Set("token", token)
+
+	req, err := http.NewRequest(
+		http.MethodPost,
+		c.baseURL+"/api/connect/v1/magic-link/verify",
+		strings.NewReader(body.Encode()),
+	)
+	require.NoError(c.T, err)
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := noRedirectHTTPClient(httpClient).Do(req)
+	require.NoError(c.T, err, "magic-link verify request failed")
+
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(c.T, err)
+
+	return &OAuth2HTTPResponse{
+		StatusCode: resp.StatusCode,
+		Header:     resp.Header,
+		Body:       respBody,
+	}
+}
+
+func (c *Client) GetNoRedirect(rawURL string) *OAuth2HTTPResponse {
+	c.T.Helper()
+
+	return c.redirectHTTPResponse(c.httpClient, rawURL)
+}
+
+func (c *Client) redirectLocation(client *http.Client, rawURL string) string {
+	c.T.Helper()
+
+	resp := c.redirectHTTPResponse(client, rawURL)
+	require.True(
+		c.T,
+		resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest,
+		"expected redirect from %s, got %d",
+		rawURL,
+		resp.StatusCode,
+	)
+
+	location := resp.Header.Get("Location")
+	require.NotEmpty(c.T, location, "redirect from %s missing Location header", rawURL)
+
+	return resolveRedirectURL(rawURL, location)
+}
+
+func noRedirectHTTPClient(httpClient *http.Client) *http.Client {
+	return &http.Client{
+		Jar:       httpClient.Jar,
+		Timeout:   httpClient.Timeout,
+		Transport: httpClient.Transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+func (c *Client) redirectHTTPResponse(client *http.Client, rawURL string) *OAuth2HTTPResponse {
+	c.T.Helper()
+
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	require.NoError(c.T, err)
+
+	resp, err := noRedirectHTTPClient(client).Do(req)
+	require.NoError(c.T, err, "request to %s failed", rawURL)
+
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(c.T, err)
+
+	return &OAuth2HTTPResponse{
+		StatusCode: resp.StatusCode,
+		Header:     resp.Header,
+		Body:       body,
+	}
+}
+
+func resolveRedirectURL(baseURL, location string) string {
+	locURL, err := url.Parse(location)
+	if err != nil {
+		return location
+	}
+
+	if locURL.IsAbs() {
+		return locURL.String()
+	}
+
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return location
+	}
+
+	return base.ResolveReference(locURL).String()
+}
+
+func extractContinueQueryParam(loginURL string) string {
+	parsed, err := url.Parse(loginURL)
+	if err != nil {
+		return ""
+	}
+
+	return parsed.Query().Get("continue")
+}
+
+// ForTest returns a shallow copy of c bound to t for correct failure
+// attribution in parallel subtests while sharing the HTTP session and
+// identity metadata.
+func (c *Client) ForTest(t testing.TB) *Client {
+	t.Helper()
+
+	if c == nil {
+		t.Fatal("client is nil")
+
+		return nil
+	}
+
+	bound := *c
+	bound.T = t
+
+	return &bound
 }
 
 func (c *Client) GetEmail() string {

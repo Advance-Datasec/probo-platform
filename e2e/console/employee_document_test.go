@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_test
 
@@ -114,7 +120,8 @@ func TestEmployeeDocument_ExportPDF(t *testing.T) {
 	owner := testutil.NewClient(t, testutil.RoleOwner)
 	employee := testutil.NewClientInOrg(t, testutil.RoleEmployee, owner)
 
-	_, docVersionID := createTestDocument(t, owner)
+	docID, _ := createTestDocument(t, owner)
+	docVersionID := publishMajorDocumentVersion(t, owner, docID)
 
 	t.Run("employee cannot use exportDocumentVersionPDF", func(t *testing.T) {
 		t.Parallel()
@@ -1151,4 +1158,238 @@ func TestEmployeeDocument_ApprovableDocumentNestedFields(t *testing.T) {
 		})
 		require.NoError(t, err, "owner approver should use exportEmployeeDocumentVersionPDF")
 	})
+}
+
+func TestEmployeeDocument_SignableDocumentsFilter(t *testing.T) {
+	t.Parallel()
+
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	employee := testutil.NewClientInOrg(t, testutil.RoleEmployee, owner)
+	orgID := employee.GetOrganizationID().String()
+
+	docID, _ := createTestDocument(t, owner)
+	publishedVersionID := publishMajorDocumentVersion(t, owner, docID)
+	requestDocumentSignature(t, owner, publishedVersionID, employee.GetProfileID().String())
+
+	pending, pendingID := querySignableDocumentCounts(t, employee, orgID, false)
+	assert.Equal(t, 1, pending)
+	assert.Equal(t, docID, pendingID)
+
+	completed, _ := querySignableDocumentCounts(t, employee, orgID, true)
+	assert.Equal(t, 0, completed)
+
+	signDocumentVersion(t, employee, publishedVersionID)
+
+	pending, _ = querySignableDocumentCounts(t, employee, orgID, false)
+	assert.Equal(t, 0, pending)
+
+	completed, _ = querySignableDocumentCounts(t, employee, orgID, true)
+	assert.Equal(t, 1, completed)
+
+	var countOnly struct {
+		Viewer struct {
+			SignableDocuments struct {
+				TotalCount int `json:"totalCount"`
+			} `json:"signableDocuments"`
+		} `json:"viewer"`
+	}
+
+	err := employee.Execute(`
+		query($orgId: ID!) {
+			viewer {
+				signableDocuments(organizationId: $orgId, filter: { signed: true }) {
+					totalCount
+				}
+			}
+		}
+	`, map[string]any{"orgId": orgID}, &countOnly)
+	require.NoError(t, err)
+	assert.Equal(t, 1, countOnly.Viewer.SignableDocuments.TotalCount)
+}
+
+func TestEmployeeDocument_ApprovableDocumentsFilter(t *testing.T) {
+	t.Parallel()
+
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	employee := testutil.NewClientInOrg(t, testutil.RoleEmployee, owner)
+	orgID := employee.GetOrganizationID().String()
+
+	docID, _ := createTestDocument(t, owner)
+	requestDocumentApproval(t, owner, docID, []string{employee.GetProfileID().String()})
+
+	pending, pendingID := queryApprovableDocumentCounts(t, employee, orgID, []string{"PENDING"})
+	assert.Equal(t, 1, pending)
+	assert.Equal(t, docID, pendingID)
+
+	completed, _ := queryApprovableDocumentCounts(t, employee, orgID, []string{"APPROVED", "REJECTED"})
+	assert.Equal(t, 0, completed)
+
+	_, err := employee.Do(`
+		mutation($input: ApproveDocumentVersionInput!) {
+			approveDocumentVersion(input: $input) {
+				approvalDecision { id }
+			}
+		}
+	`, map[string]any{
+		"input": map[string]any{
+			"documentVersionId": latestDocumentVersionID(t, owner, docID),
+		},
+	})
+	require.NoError(t, err)
+
+	pending, _ = queryApprovableDocumentCounts(t, employee, orgID, []string{"PENDING"})
+	assert.Equal(t, 0, pending)
+
+	completed, _ = queryApprovableDocumentCounts(t, employee, orgID, []string{"APPROVED", "REJECTED"})
+	assert.Equal(t, 1, completed)
+}
+
+func TestEmployeeDocument_SignableDocumentsFilter_LatestMajor(t *testing.T) {
+	t.Parallel()
+
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	employee := testutil.NewClientInOrg(t, testutil.RoleEmployee, owner)
+	orgID := employee.GetOrganizationID().String()
+
+	docID, _ := createTestDocument(t, owner)
+	v1ID := publishMajorDocumentVersion(t, owner, docID)
+	requestDocumentSignature(t, owner, v1ID, employee.GetProfileID().String())
+	signDocumentVersion(t, employee, v1ID)
+
+	pending, _ := querySignableDocumentCounts(t, employee, orgID, false)
+	completed, _ := querySignableDocumentCounts(t, employee, orgID, true)
+	assert.Equal(t, 0, pending)
+	assert.Equal(t, 1, completed)
+
+	updateDocumentContent(t, owner, docID, "Updated content for v2")
+	v2ID := publishMajorDocumentVersion(t, owner, docID)
+	requestDocumentSignature(t, owner, v2ID, employee.GetProfileID().String())
+
+	pending, pendingID := querySignableDocumentCounts(t, employee, orgID, false)
+	completed, _ = querySignableDocumentCounts(t, employee, orgID, true)
+	assert.Equal(t, 1, pending)
+	assert.Equal(t, docID, pendingID)
+	assert.Equal(t, 0, completed)
+}
+
+func TestEmployeeDocument_ApprovableDocumentsFilter_LatestDecision(t *testing.T) {
+	t.Parallel()
+
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	employee := testutil.NewClientInOrg(t, testutil.RoleEmployee, owner)
+	orgID := employee.GetOrganizationID().String()
+
+	docID, _ := createTestDocument(t, owner)
+	requestDocumentApproval(t, owner, docID, []string{employee.GetProfileID().String()})
+
+	_, err := employee.Do(`
+		mutation($input: ApproveDocumentVersionInput!) {
+			approveDocumentVersion(input: $input) {
+				approvalDecision { id }
+			}
+		}
+	`, map[string]any{
+		"input": map[string]any{
+			"documentVersionId": latestDocumentVersionID(t, owner, docID),
+		},
+	})
+	require.NoError(t, err)
+
+	pending, _ := queryApprovableDocumentCounts(t, employee, orgID, []string{"PENDING"})
+	completed, _ := queryApprovableDocumentCounts(t, employee, orgID, []string{"APPROVED"})
+	assert.Equal(t, 0, pending)
+	assert.Equal(t, 1, completed)
+
+	updateDocumentContent(t, owner, docID, "Updated content for v2")
+	requestDocumentApproval(t, owner, docID, []string{employee.GetProfileID().String()})
+
+	pending, pendingID := queryApprovableDocumentCounts(t, employee, orgID, []string{"PENDING"})
+	completed, _ = queryApprovableDocumentCounts(t, employee, orgID, []string{"APPROVED"})
+	assert.Equal(t, 1, pending)
+	assert.Equal(t, docID, pendingID)
+	assert.Equal(t, 0, completed)
+}
+
+func querySignableDocumentCounts(
+	t *testing.T,
+	client *testutil.Client,
+	orgID string,
+	signed bool,
+) (totalCount int, firstID string) {
+	t.Helper()
+
+	var result struct {
+		Viewer struct {
+			SignableDocuments struct {
+				TotalCount int `json:"totalCount"`
+				Edges      []struct {
+					Node struct {
+						ID string `json:"id"`
+					} `json:"node"`
+				} `json:"edges"`
+			} `json:"signableDocuments"`
+		} `json:"viewer"`
+	}
+
+	err := client.Execute(`
+		query($orgId: ID!, $signed: Boolean) {
+			viewer {
+				signableDocuments(organizationId: $orgId, first: 1, filter: { signed: $signed }) {
+					totalCount
+					edges { node { id } }
+				}
+			}
+		}
+	`, map[string]any{"orgId": orgID, "signed": signed}, &result)
+	require.NoError(t, err)
+
+	if len(result.Viewer.SignableDocuments.Edges) > 0 {
+		firstID = result.Viewer.SignableDocuments.Edges[0].Node.ID
+	}
+
+	return result.Viewer.SignableDocuments.TotalCount, firstID
+}
+
+func queryApprovableDocumentCounts(
+	t *testing.T,
+	client *testutil.Client,
+	orgID string,
+	states []string,
+) (totalCount int, firstID string) {
+	t.Helper()
+
+	var result struct {
+		Viewer struct {
+			ApprovableDocuments struct {
+				TotalCount int `json:"totalCount"`
+				Edges      []struct {
+					Node struct {
+						ID string `json:"id"`
+					} `json:"node"`
+				} `json:"edges"`
+			} `json:"approvableDocuments"`
+		} `json:"viewer"`
+	}
+
+	err := client.Execute(`
+		query($orgId: ID!, $states: [DocumentVersionApprovalDecisionState!]) {
+			viewer {
+				approvableDocuments(
+					organizationId: $orgId
+					first: 1
+					filter: { approvalStates: $states }
+				) {
+					totalCount
+					edges { node { id } }
+				}
+			}
+		}
+	`, map[string]any{"orgId": orgID, "states": states}, &result)
+	require.NoError(t, err)
+
+	if len(result.Viewer.ApprovableDocuments.Edges) > 0 {
+		firstID = result.Viewer.ApprovableDocuments.Edges[0].Node.ID
+	}
+
+	return result.Viewer.ApprovableDocuments.TotalCount, firstID
 }

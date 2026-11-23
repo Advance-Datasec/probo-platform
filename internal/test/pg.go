@@ -1,21 +1,27 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 // Package test provides shared Postgres test fixtures for packages that
 // exercise the database layer against a real Postgres instance. Centralizing
-// the connection bootstrap and agent_runs schema setup here keeps a single
-// copy of that logic so it cannot drift between the coredata and agentrun
+// the connection bootstrap and agent_executions schema setup here keeps a single
+// copy of that logic so it cannot drift between the coredata and agentexecution
 // test suites.
 package test
 
@@ -42,9 +48,7 @@ const (
 	pgURLEnvVar = "PROBO_TEST_PG_URL"
 
 	// defaultPGURL targets the local compose Postgres so tests run with zero
-	// configuration against a developer's stack. When the database is not
-	// reachable (e.g. in CI, where `make test` runs without Postgres) the
-	// connection check fails and the test is skipped.
+	// configuration against a developer's stack.
 	defaultPGURL = "postgres://probod:probod@localhost:5432/probod_test"
 )
 
@@ -58,11 +62,13 @@ var (
 
 // PGClient returns a process-wide shared pg.Client connected to the test
 // database described by the PROBO_TEST_PG_URL environment variable (falling
-// back to a local compose Postgres), applying the agent_runs migrations on
-// first use. The test is skipped when no database is reachable so `make test`
-// stays a pure unit-test run.
+// back to a local compose Postgres), applying the agent_executions migrations on
+// first use. The test is skipped when the default local database is unreachable,
+// but fails when an explicitly configured database is unreachable.
 func PGClient(t *testing.T) *pg.Client {
 	t.Helper()
+
+	pgURLConfigured := os.Getenv(pgURLEnvVar) != ""
 
 	pgOnce.Do(
 		func() {
@@ -118,6 +124,10 @@ func PGClient(t *testing.T) *pg.Client {
 	)
 
 	if pgInitErr != nil {
+		if pgURLConfigured {
+			t.Fatalf("cannot connect to configured test database: %v", pgInitErr)
+		}
+
 		t.Skipf("cannot connect to test database: %v", pgInitErr)
 	}
 

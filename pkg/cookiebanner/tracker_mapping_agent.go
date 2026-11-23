@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package cookiebanner
 
@@ -98,7 +104,8 @@ type TrackerMappingAgentResult struct {
 	Category             coredata.ThirdPartyCategory `json:"category" jsonschema:"Third party category"`
 	ThirdPartyConfidence float64                     `json:"third_party_confidence" jsonschema:"Confidence (0.0 to 1.0) in which company or service set this tracker, independent of whether the artifact is a classic web tracker. Set below 0.5 if unsure who set it."`
 	EvidenceSource       string                      `json:"evidence_source" jsonschema:"The concrete evidence that backs the attribution: 'database_match' (exact pattern in the database), 'naming_convention' (the tracker's meaningful prefix or an embedded vendor name), 'web_search' (a web result naming the setter), 'browser_page' (a page you opened that names the setter), or 'none' when there is no concrete evidence. Must be 'none' whenever third_party_name is empty."`
-	IsFirstParty         bool                        `json:"is_first_party" jsonschema:"True when the artifact has no third party at all: it is the scanned site's own tracker, a generic library or log key (e.g. 'loglevel'), a browser-extension key that embeds the scanned site's origin, or otherwise not attributable to any external vendor. Leave false when a vendor is or might be responsible."`
+	IsFirstParty         bool                        `json:"is_first_party" jsonschema:"True only when the artifact evidences no data leaving the browser to any party other than the site operator: the site's own tracker, or a bundled library that stores state locally and egresses nothing (e.g. 'i18next', 'loglevel'). A bundled vendor SDK that transmits to the vendor's endpoint (PostHog, Mixpanel, Sentry) is NOT first-party. Leave false when data is or might be sent externally, or when you cannot tell."`
+	IsNotAttributable    bool                        `json:"is_not_attributable" jsonschema:"True when the artifact comes from software the visitor installed rather than the site: a browser extension key (e.g. '__darkreader__*', 'h265ify', a key embedding a chrome-extension origin), a userscript, or other visitor-side tooling. The site operator did not write it and cannot remove it, so it is neither theirs nor a vendor they engaged. Leave false for anything the site itself loads, including bundled libraries and vendor SDKs."`
 }
 
 // evidenceSupportsAttribution reports whether the agent supplied a

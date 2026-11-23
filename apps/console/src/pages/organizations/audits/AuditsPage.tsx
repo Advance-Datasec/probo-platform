@@ -1,43 +1,39 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import {
-  formatDate,
-  getAuditStateLabel,
-  getAuditStateVariant,
-} from "@probo/helpers";
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
 import {
-  ActionDropdown,
-  Badge,
   Button,
-  DropdownItem,
   IconPlusLarge,
-  IconTrashCan,
   IconUpload,
   PageHeader,
   Tbody,
-  Td,
   Th,
   Thead,
   Tr,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDropzone } from "react-dropzone";
+import { useTranslation } from "react-i18next";
 import {
   graphql,
   type PreloadedQuery,
@@ -47,15 +43,14 @@ import {
 
 import type { AuditGraphListQuery } from "#/__generated__/core/AuditGraphListQuery.graphql";
 import type {
-  AuditsPageFragment$data,
   AuditsPageFragment$key,
 } from "#/__generated__/core/AuditsPageFragment.graphql";
 import { SortableTable } from "#/components/SortableTable";
 import { useOrganizationId } from "#/hooks/useOrganizationId";
-import type { NodeOf } from "#/types";
 
-import { auditsQuery, useDeleteAudit } from "../../../hooks/graph/AuditGraph";
+import { auditsQuery } from "../../../hooks/graph/AuditGraph";
 
+import { AuditListItem } from "./_components/AuditListItem";
 import { CreateAuditDialog } from "./dialogs/CreateAuditDialog";
 
 const paginatedAuditsFragment = graphql`
@@ -79,34 +74,22 @@ const paginatedAuditsFragment = graphql`
       edges {
         node {
           id
-          name
-          validFrom
-          validUntil
-          reportFile {
-            id
-          }
-          state
-          framework {
-            id
-            name
-          }
           canUpdate: permission(action: "core:audit:update")
           canDelete: permission(action: "core:audit:delete")
+          ...AuditListItem_audit
         }
       }
     }
   }
 `;
 
-type AuditEntry = NodeOf<AuditsPageFragment$data["audits"]>;
-
 type Props = {
   queryRef: PreloadedQuery<AuditGraphListQuery>;
 };
 
 export default function AuditsPage(props: Props) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
   const organizationId = useOrganizationId();
 
   const data = usePreloadedQuery<AuditGraphListQuery>(auditsQuery, props.queryRef);
@@ -118,7 +101,7 @@ export default function AuditsPage(props: Props) {
   const audits = pagination.data.audits?.edges?.map(edge => edge.node) ?? [];
   const connectionId = pagination.data.audits.__id;
 
-  usePageTitle(__("Audits"));
+  usePageTitle(t("auditsPage.title"));
 
   const hasAnyAction = audits.some(
     audit => audit.canDelete || audit.canUpdate,
@@ -135,10 +118,10 @@ export default function AuditsPage(props: Props) {
       setIsDragging(false);
       dragCounterRef.current = 0;
       if (fileRejections.length > 0) {
-        toast({
-          title: __("Unsupported file type"),
-          description: __("Only PDF files are supported."),
-          variant: "error",
+        toast.add({
+          title: t("auditsPage.errors.unsupportedFileType.title"),
+          description: t("auditsPage.errors.unsupportedFileType.description"),
+          type: "error",
         });
         return;
       }
@@ -146,7 +129,7 @@ export default function AuditsPage(props: Props) {
       setDroppedFile(acceptedFiles[0]);
       dropDialogRef.current?.open();
     },
-    [canCreateAudit, dropDialogRef, toast, __],
+    [canCreateAudit, dropDialogRef, toast, t],
   );
 
   useEffect(() => {
@@ -213,42 +196,42 @@ export default function AuditsPage(props: Props) {
           <input {...getInputProps()} />
           <IconUpload className="text-primary mb-2 size-8" />
           <p className="text-primary text-sm font-medium">
-            {__("Drop a PDF to create an audit with a report")}
+            {t("auditsPage.dropzoneOverlay")}
           </p>
         </div>
       )}
       <PageHeader
-        title={__("Audits")}
-        description={__(
-          "Manage your organization's compliance audits and their progress.",
-        )}
+        title={t("auditsPage.title")}
+        description={t("auditsPage.description")}
       >
         {canCreateAudit && (
           <CreateAuditDialog
             connection={connectionId}
             organizationId={organizationId}
           >
-            <Button icon={IconPlusLarge}>{__("Add audit")}</Button>
+            <Button icon={IconPlusLarge}>
+              {t("auditsPage.actions.addAudit")}
+            </Button>
           </CreateAuditDialog>
         )}
       </PageHeader>
       <SortableTable {...pagination} pageSize={10}>
         <Thead>
           <Tr>
-            <Th>{__("Name")}</Th>
-            <Th>{__("Framework")}</Th>
-            <Th>{__("State")}</Th>
-            <Th>{__("Valid From")}</Th>
-            <Th>{__("Valid Until")}</Th>
-            <Th>{__("Report")}</Th>
+            <Th>{t("auditsPage.columns.name")}</Th>
+            <Th>{t("auditsPage.columns.framework")}</Th>
+            <Th>{t("auditsPage.columns.state")}</Th>
+            <Th>{t("auditsPage.columns.auditPeriod")}</Th>
+            <Th>{t("auditsPage.columns.validityPeriod")}</Th>
+            <Th>{t("auditsPage.columns.report")}</Th>
             {hasAnyAction && <Th></Th>}
           </Tr>
         </Thead>
         <Tbody>
           {audits.map(entry => (
-            <AuditRow
+            <AuditListItem
               key={entry.id}
-              entry={entry}
+              auditKey={entry}
               connectionId={connectionId}
               hasAnyAction={hasAnyAction}
             />
@@ -265,59 +248,5 @@ export default function AuditsPage(props: Props) {
         />
       )}
     </div>
-  );
-}
-
-function AuditRow({
-  entry,
-  connectionId,
-  hasAnyAction,
-}: {
-  entry: AuditEntry;
-  connectionId: string;
-  hasAnyAction: boolean;
-}) {
-  const organizationId = useOrganizationId();
-  const { __ } = useTranslate();
-  const deleteAudit = useDeleteAudit(entry, connectionId);
-
-  return (
-    <Tr to={`/organizations/${organizationId}/audits/${entry.id}`}>
-      <Td>{entry.name || __("Untitled")}</Td>
-      <Td>{entry.framework?.name ?? __("Unknown Framework")}</Td>
-      <Td>
-        <Badge variant={getAuditStateVariant(entry.state)}>
-          {getAuditStateLabel(__, entry.state)}
-        </Badge>
-      </Td>
-      <Td>{formatDate(entry.validFrom) || __("Not set")}</Td>
-      <Td>{formatDate(entry.validUntil) || __("Not set")}</Td>
-      <Td>
-        {entry.reportFile
-          ? (
-              <div className="flex flex-col">
-                <Badge variant="success">{__("Uploaded")}</Badge>
-              </div>
-            )
-          : (
-              <Badge variant="neutral">{__("Not uploaded")}</Badge>
-            )}
-      </Td>
-      {hasAnyAction && (
-        <Td noLink width={50} className="text-end">
-          <ActionDropdown>
-            {entry.canDelete && (
-              <DropdownItem
-                onClick={deleteAudit}
-                variant="danger"
-                icon={IconTrashCan}
-              >
-                {__("Delete")}
-              </DropdownItem>
-            )}
-          </ActionDropdown>
-        </Td>
-      )}
-    </Tr>
   );
 }

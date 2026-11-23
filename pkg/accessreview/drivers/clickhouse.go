@@ -1,20 +1,27 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -26,7 +33,10 @@ import (
 	"go.probo.inc/probo/pkg/coredata"
 )
 
-const clickhouseAPIBaseURL = "https://api.clickhouse.cloud"
+const (
+	clickhouseOrganizationsPath = "organizations"
+	clickhouseMembersPath       = "members"
+)
 
 // ClickHouseDriver lists the members of a single ClickHouse Cloud
 // organization. A key/secret pair (HTTP Basic) is scoped to exactly one
@@ -35,6 +45,7 @@ const clickhouseAPIBaseURL = "https://api.clickhouse.cloud"
 // configured. The Basic credential is applied by the connection transport.
 type ClickHouseDriver struct {
 	httpClient *http.Client
+	baseURL    string
 }
 
 var _ Driver = (*ClickHouseDriver)(nil)
@@ -61,8 +72,10 @@ type clickhouseMember struct {
 	} `json:"assignedRoles"`
 }
 
-func NewClickHouseDriver(httpClient *http.Client) *ClickHouseDriver {
-	return &ClickHouseDriver{httpClient: httpClient}
+// NewClickHouseDriver builds a driver against baseURL, the versioned
+// ClickHouse Cloud control-plane origin (e.g. https://api.clickhouse.cloud/v1).
+func NewClickHouseDriver(httpClient *http.Client, baseURL string) *ClickHouseDriver {
+	return &ClickHouseDriver{httpClient: httpClient, baseURL: baseURL}
 }
 
 func (d *ClickHouseDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error) {
@@ -86,9 +99,9 @@ func (d *ClickHouseDriver) ListAccounts(ctx context.Context) ([]AccountRecord, e
 
 		record := AccountRecord{
 			Email:       email,
-			FullName:    clickhouseFullName(m, email),
+			FullName:    cmp.Or(strings.TrimSpace(m.Name), email),
 			Roles:       clickhouseRoles(m),
-			IsAdmin:     clickhouseIsAdmin(m),
+			IsAdmin:     new(clickhouseIsAdmin(m)),
 			MFAStatus:   coredata.MFAStatusUnknown,
 			AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
 			AccountType: coredata.AccessReviewEntryAccountTypeUser,
@@ -108,7 +121,7 @@ func (d *ClickHouseDriver) ListAccounts(ctx context.Context) ([]AccountRecord, e
 }
 
 func (d *ClickHouseDriver) resolveOrganizationID(ctx context.Context) (string, error) {
-	endpoint, err := url.JoinPath(clickhouseAPIBaseURL, "v1", "organizations")
+	endpoint, err := url.JoinPath(d.baseURL, clickhouseOrganizationsPath)
 	if err != nil {
 		return "", fmt.Errorf("cannot build clickhouse organizations URL: %w", err)
 	}
@@ -126,7 +139,7 @@ func (d *ClickHouseDriver) resolveOrganizationID(ctx context.Context) (string, e
 }
 
 func (d *ClickHouseDriver) fetchMembers(ctx context.Context, organizationID string) ([]clickhouseMember, error) {
-	endpoint, err := url.JoinPath(clickhouseAPIBaseURL, "v1", "organizations", url.PathEscape(organizationID), "members")
+	endpoint, err := url.JoinPath(d.baseURL, clickhouseOrganizationsPath, url.PathEscape(organizationID), clickhouseMembersPath)
 	if err != nil {
 		return nil, fmt.Errorf("cannot build clickhouse members URL: %w", err)
 	}
@@ -165,14 +178,6 @@ func (d *ClickHouseDriver) getJSON(ctx context.Context, endpoint, what string, o
 	}
 
 	return nil
-}
-
-func clickhouseFullName(m clickhouseMember, fallback string) string {
-	if name := strings.TrimSpace(m.Name); name != "" {
-		return name
-	}
-
-	return fallback
 }
 
 // clickhouseRoles prefers the custom/system roles in assignedRoles (the live

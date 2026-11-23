@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package view
 
@@ -25,17 +31,23 @@ import (
 )
 
 const viewQuery = `
-query($id: ID!) {
+query TaskView($id: ID!) {
   node(id: $id) {
     __typename
     ... on Task {
       id
       name
-      description
+      content
       state
       priority
       timeEstimate
       deadline
+      externalLink {
+        provider
+        identifier
+        url
+        origin
+      }
       createdAt
       updatedAt
     }
@@ -48,13 +60,19 @@ type viewResponse struct {
 		Typename     string  `json:"__typename"`
 		ID           string  `json:"id"`
 		Name         string  `json:"name"`
-		Description  *string `json:"description"`
+		Content      string  `json:"content"`
 		State        string  `json:"state"`
 		Priority     string  `json:"priority"`
 		TimeEstimate *string `json:"timeEstimate"`
 		Deadline     *string `json:"deadline"`
-		CreatedAt    string  `json:"createdAt"`
-		UpdatedAt    string  `json:"updatedAt"`
+		ExternalLink *struct {
+			Provider   string `json:"provider"`
+			Identifier string `json:"identifier"`
+			URL        string `json:"url"`
+			Origin     string `json:"origin"`
+		} `json:"externalLink"`
+		CreatedAt string `json:"createdAt"`
+		UpdatedAt string `json:"updatedAt"`
 	} `json:"node"`
 }
 
@@ -125,8 +143,13 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("State:"), t.State)
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Priority:"), t.Priority)
 
-			if t.Description != nil && *t.Description != "" {
-				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Description:"), *t.Description)
+			content, err := cmdutil.FormatRichText(t.Content)
+			if err != nil {
+				return fmt.Errorf("cannot format task content: %w", err)
+			}
+
+			if content != "" {
+				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Content:"), content)
 			}
 
 			if t.TimeEstimate != nil && *t.TimeEstimate != "" {
@@ -135,6 +158,16 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 
 			if t.Deadline != nil && *t.Deadline != "" {
 				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Deadline:"), *t.Deadline)
+			}
+
+			if t.ExternalLink != nil {
+				_, _ = fmt.Fprintf(
+					out,
+					"%s%s (%s)\n",
+					label.Render("External:"),
+					t.ExternalLink.Identifier,
+					t.ExternalLink.URL,
+				)
 			}
 
 			_, _ = fmt.Fprintln(out)

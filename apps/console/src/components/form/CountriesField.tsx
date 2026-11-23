@@ -1,23 +1,34 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { countries, type CountryCode, getCountryName, getCountryOptions } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
+import { countries, type CountryCode, getCountryName } from "@probo/helpers";
 import { Badge, IconCrossLargeX, Input } from "@probo/ui";
 import { clsx } from "clsx";
 import { useEffect, useState } from "react";
-import { type Control, Controller, type FieldPath, type FieldValues } from "react-hook-form";
+import {
+  type Control,
+  Controller,
+  type FieldPath,
+  type FieldValues,
+} from "react-hook-form";
+import { useTranslation } from "react-i18next";
 
 type Props<T extends FieldValues = FieldValues> = {
   control: Control<T>;
@@ -25,7 +36,11 @@ type Props<T extends FieldValues = FieldValues> = {
   disabled?: boolean;
 };
 
-export function CountriesField<T extends FieldValues = FieldValues>({ control, name, disabled }: Props<T>) {
+export function CountriesField<T extends FieldValues = FieldValues>({
+  control,
+  name,
+  disabled,
+}: Props<T>) {
   return (
     <Controller
       control={control}
@@ -48,8 +63,16 @@ type CountriesFieldInputProps = {
 };
 
 function CountriesFieldInput(props: CountriesFieldInputProps) {
-  const { __ } = useTranslate();
+  const { t, i18n } = useTranslation();
   const [animateBadge, setAnimateBadge] = useState(false);
+
+  const countryLabel = (code: CountryCode) => {
+    // GLOBAL is not a valid Intl region code; use the translated label.
+    if (code === "GLOBAL") {
+      return t("country.GLOBAL");
+    }
+    return getCountryName(i18n.language, code);
+  };
 
   const addCountry = (code: string) => {
     setAnimateBadge(true);
@@ -79,7 +102,7 @@ function CountriesFieldInput(props: CountriesFieldInputProps) {
                     && "starting:opacity-0 starting:w-0 w-max transition-all duration-500 starting:bg-accent",
                   )}
                 >
-                  {getCountryName(__, countryCode as CountryCode)}
+                  {countryLabel(countryCode as CountryCode)}
                   <div className="w-0 overflow-hidden group-hover:w-4 duration-200">
                     <IconCrossLargeX size={12} />
                   </div>
@@ -95,6 +118,7 @@ function CountriesFieldInput(props: CountriesFieldInputProps) {
             (c: CountryCode) => !props.value.includes(c),
           )}
           onAdd={addCountry}
+          countryLabel={countryLabel}
         />
       )}
     </div>
@@ -104,13 +128,17 @@ function CountriesFieldInput(props: CountriesFieldInputProps) {
 type CountryInputProps = {
   availableCountries: readonly CountryCode[];
   onAdd: (code: string) => void;
+  countryLabel: (code: CountryCode) => string;
 };
 
-function CountryInput({ availableCountries, onAdd }: CountryInputProps) {
-  const { __ } = useTranslate();
+function CountryInput({ availableCountries, onAdd, countryLabel }: CountryInputProps) {
+  const { t } = useTranslation();
   const [search, setSearch] = useState("");
   const [isOpen, setIsOpen] = useState(false);
-  const countryOptions = getCountryOptions(__);
+  const countryOptions = availableCountries.map(code => ({
+    value: code,
+    label: countryLabel(code),
+  }));
 
   useEffect(() => {
     document.body.style.overflow = isOpen ? "hidden" : "";
@@ -120,7 +148,9 @@ function CountryInput({ availableCountries, onAdd }: CountryInputProps) {
   }, [isOpen]);
 
   const filteredCountries = countryOptions
-    .filter((option: { value: string; label: string }) => availableCountries.includes(option.value as CountryCode))
+    .filter((option: { value: string; label: string }) =>
+      availableCountries.includes(option.value as CountryCode),
+    )
     .filter((option: { value: string; label: string }) =>
       option.label.toLowerCase().includes(search.toLowerCase()),
     );
@@ -139,7 +169,7 @@ function CountryInput({ availableCountries, onAdd }: CountryInputProps) {
             value={search}
             onChange={e => setSearch(e.target.value)}
             onFocus={() => setIsOpen(true)}
-            placeholder={__("Search and add countries...")}
+            placeholder={t("countriesField.searchPlaceholder")}
             className="w-full pr-8"
           />
           <button
@@ -180,10 +210,7 @@ function CountryInput({ availableCountries, onAdd }: CountryInputProps) {
       )}
 
       {isOpen && (
-        <div
-          className="fixed inset-0 z-40"
-          onClick={() => setIsOpen(false)}
-        />
+        <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
       )}
     </div>
   );

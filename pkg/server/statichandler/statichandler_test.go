@@ -1,0 +1,281 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+package statichandler_test
+
+import (
+	"bytes"
+	"compress/gzip"
+	"io"
+	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"testing/fstest"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.probo.inc/probo/pkg/server/statichandler"
+)
+
+type requestPage struct {
+	Title string
+	statichandler.IndexData
+}
+
+func TestNewIndexRenderer(t *testing.T) {
+	t.Parallel()
+
+	staticFiles := indexFiles(
+		`{{if .FaroEnabled}}<meta content="{{.FaroCollectorURL}}">{{end}}`,
+	)
+
+	t.Run(
+		"renders escaped faro values",
+		func(t *testing.T) {
+			t.Parallel()
+
+			renderer, err := statichandler.NewIndexRenderer(
+				staticFiles,
+				"dist",
+				statichandler.IndexData{
+					FaroEnabled:      true,
+					FaroCollectorURL: `https://example.com/c?a=1&b="x"`,
+					FaroAPIKey:       "key",
+				},
+			)
+			require.NoError(t, err)
+
+			body := renderIndex(t, renderer, httptest.NewRequest(http.MethodGet, "/", nil))
+			assert.Equal(
+				t,
+				`<meta content="https://example.com/c?a=1&amp;b=&#34;x&#34;">`,
+				body,
+			)
+		},
+	)
+
+	t.Run(
+		"omits faro tags when disabled",
+		func(t *testing.T) {
+			t.Parallel()
+
+			renderer, err := statichandler.NewIndexRenderer(
+				staticFiles,
+				"dist",
+				statichandler.IndexData{
+					FaroEnabled:      false,
+					FaroCollectorURL: "https://example.com/c",
+					FaroAPIKey:       "key",
+				},
+			)
+			require.NoError(t, err)
+
+			body := renderIndex(t, renderer, httptest.NewRequest(http.MethodGet, "/", nil))
+			assert.Empty(t, body)
+		},
+	)
+
+	t.Run(
+		"missing index.html",
+		func(t *testing.T) {
+			t.Parallel()
+
+			_, err := statichandler.NewIndexRenderer(
+				fstest.MapFS{
+					"dist/app.js": &fstest.MapFile{Data: []byte("console.log(1)")},
+				},
+				"dist",
+				statichandler.IndexData{},
+			)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "cannot read index.html")
+		},
+	)
+}
+
+func TestNewRequestIndexRenderer_RendersPerRequest(t *testing.T) {
+	t.Parallel()
+
+	renderer, err := statichandler.NewRequestIndexRenderer(
+		indexFiles(
+			`<title>{{.Title}}</title>{{if .FaroEnabled}}<meta content="{{.FaroCollectorURL}}">{{end}}`,
+		),
+		"dist",
+		func(r *http.Request) any {
+			if r.URL.Query().Get("page") == "a" {
+				return requestPage{
+					Title:            "Alpha",
+					FaroEnabled:      true,
+					FaroCollectorURL: `https://a.example/?q=1&x="y"`,
+				}
+			}
+
+			return requestPage{Title: "Beta"}
+		},
+	)
+	require.NoError(t, err)
+
+	alpha := renderIndex(
+		t,
+		renderer,
+		httptest.NewRequest(http.MethodGet, "/?page=a", nil),
+	)
+	beta := renderIndex(
+		t,
+		renderer,
+		httptest.NewRequest(http.MethodGet, "/?page=b", nil),
+	)
+
+	assert.Equal(
+		t,
+		`<title>Alpha</title><meta content="https://a.example/?q=1&amp;x=&#34;y&#34;">`,
+		alpha,
+	)
+	assert.Equal(t, "<title>Beta</title>", beta)
+}
+
+func TestServeHTTP_MapFileIsImmutable(t *testing.T) {
+	t.Parallel()
+
+	server := newMapServer(t)
+
+	plain := httptest.NewRecorder()
+	server.ServeHTTP(
+		plain,
+		httptest.NewRequest(http.MethodGet, "/assets/app.js.map", nil),
+	)
+
+	assert.Equal(t, http.StatusOK, plain.Code)
+	assert.Equal(
+		t,
+		"public, max-age=31536000, immutable",
+		plain.Header().Get("Cache-Control"),
+	)
+	assert.Empty(t, plain.Header().Get("Content-Encoding"))
+
+	gzipped := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/assets/app.js.map", nil)
+	request.Header.Set("Accept-Encoding", "gzip")
+	server.ServeHTTP(gzipped, request)
+
+	assert.Equal(t, http.StatusOK, gzipped.Code)
+	assert.Equal(t, "gzip", gzipped.Header().Get("Content-Encoding"))
+	assert.Equal(t, "Accept-Encoding", gzipped.Header().Get("Vary"))
+	assert.Equal(
+		t,
+		"public, max-age=31536000, immutable",
+		gzipped.Header().Get("Cache-Control"),
+	)
+	assert.Equal(t, []byte(`{"version":3}`), gunzipBody(t, gzipped.Body))
+}
+
+func TestServeHTTP_RefusesGzipQualityZero(t *testing.T) {
+	t.Parallel()
+
+	server := newMapServer(t)
+
+	tests := []struct {
+		name     string
+		encoding string
+		gzip     bool
+	}{
+		{name: "plain gzip", encoding: "gzip", gzip: true},
+		{name: "quality zero", encoding: "gzip;q=0", gzip: false},
+		{name: "quality zero decimal", encoding: "gzip;q=0.0", gzip: false},
+		{name: "identity only", encoding: "identity", gzip: false},
+		{name: "gzip after another coding", encoding: "deflate, gzip;q=0.8", gzip: true},
+	}
+
+	for _, test := range tests {
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				t.Parallel()
+
+				request := httptest.NewRequest(http.MethodGet, "/assets/app.js.map", nil)
+				request.Header.Set("Accept-Encoding", test.encoding)
+
+				response := httptest.NewRecorder()
+				server.ServeHTTP(response, request)
+
+				require.Equal(t, http.StatusOK, response.Code)
+
+				if test.gzip {
+					assert.Equal(t, "gzip", response.Header().Get("Content-Encoding"))
+					assert.Equal(t, []byte(`{"version":3}`), gunzipBody(t, response.Body))
+
+					return
+				}
+
+				assert.Empty(t, response.Header().Get("Content-Encoding"))
+				assert.Equal(t, []byte(`{"version":3}`), response.Body.Bytes())
+			},
+		)
+	}
+}
+
+func newMapServer(t *testing.T) *statichandler.Server {
+	t.Helper()
+
+	server, err := statichandler.NewServer(
+		fstest.MapFS{
+			"dist/index.html":        &fstest.MapFile{Data: []byte("index")},
+			"dist/assets/app.js.map": &fstest.MapFile{Data: []byte(`{"version":3}`)},
+		},
+		"dist",
+		statichandler.GzipOptions{
+			EnableFileTypeCheck: true,
+			FileTypes:           []string{".map"},
+		},
+	)
+	require.NoError(t, err)
+
+	return server
+}
+
+func gunzipBody(t *testing.T, body io.Reader) []byte {
+	t.Helper()
+
+	reader, err := gzip.NewReader(body)
+	require.NoError(t, err)
+
+	decoded, err := io.ReadAll(reader)
+	require.NoError(t, err)
+
+	return decoded
+}
+
+func indexFiles(indexHTML string) fs.FS {
+	return fstest.MapFS{
+		"dist/index.html": &fstest.MapFile{Data: []byte(indexHTML)},
+	}
+}
+
+func renderIndex(t *testing.T, renderer statichandler.FileRenderer, r *http.Request) string {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	err := renderer(&buf, r)
+	require.NoError(t, err)
+
+	return buf.String()
+}

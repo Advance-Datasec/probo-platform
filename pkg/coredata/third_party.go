@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -23,6 +29,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"go.gearno.de/kit/pg"
+	"go.gearno.de/x/ref"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/iam/policy"
 	"go.probo.inc/probo/pkg/page"
@@ -141,6 +148,10 @@ WHERE
 	return nil
 }
 
+var (
+	_ Searchable = (*ThirdParty)(nil)
+)
+
 type (
 	ThirdParty struct {
 		ID                            gid.GID                  `db:"id"`
@@ -160,13 +171,11 @@ type (
 		SubprocessorsListURL          *string                  `db:"subprocessors_list_url"`
 		Certifications                []string                 `db:"certifications"`
 		Countries                     CountryCodes             `db:"countries"`
-		BusinessOwnerID               *gid.GID                 `db:"business_owner_profile_id"`
-		SecurityOwnerID               *gid.GID                 `db:"security_owner_profile_id"`
 		StatusPageURL                 *string                  `db:"status_page_url"`
 		TermsOfServiceURL             *string                  `db:"terms_of_service_url"`
 		SecurityPageURL               *string                  `db:"security_page_url"`
 		TrustPageURL                  *string                  `db:"trust_page_url"`
-		ShowOnTrustCenter             bool                     `db:"show_on_trust_center"`
+		ShowOnCompliancePortal        bool                     `db:"-"`
 		Level                         int                      `db:"level"`
 		VettingStatus                 *ThirdPartyVettingStatus `db:"vetting_status"`
 		VettingWebsiteURL             *string                  `db:"vetting_website_url"`
@@ -191,6 +200,10 @@ func (v ThirdParty) CursorKey(orderBy ThirdPartyOrderField) page.CursorKey {
 	}
 
 	panic(fmt.Sprintf("unsupported order by: %s", orderBy))
+}
+
+func (v ThirdParty) SearchText() []string {
+	return []string{v.Name, ref.UnrefOrZero(v.Description), ref.UnrefOrZero(v.LegalName)}
 }
 
 func (v *ThirdParty) AuthorizationAttributes(
@@ -257,13 +270,10 @@ SELECT
     subprocessors_list_url,
     certifications,
     countries,
-    business_owner_profile_id,
-    security_owner_profile_id,
     status_page_url,
     terms_of_service_url,
     security_page_url,
     trust_page_url,
-    show_on_trust_center,
     level,
     vetting_status,
     vetting_website_url,
@@ -330,13 +340,10 @@ SELECT
     subprocessors_list_url,
     certifications,
     countries,
-    business_owner_profile_id,
-    security_owner_profile_id,
     status_page_url,
     terms_of_service_url,
     security_page_url,
     trust_page_url,
-    show_on_trust_center,
     level,
     vetting_status,
     vetting_website_url,
@@ -405,13 +412,10 @@ SELECT
     subprocessors_list_url,
     certifications,
     countries,
-    business_owner_profile_id,
-    security_owner_profile_id,
     status_page_url,
     terms_of_service_url,
     security_page_url,
     trust_page_url,
-    show_on_trust_center,
     level,
     vetting_status,
     vetting_website_url,
@@ -483,13 +487,10 @@ SELECT
     subprocessors_list_url,
     certifications,
     countries,
-    business_owner_profile_id,
-    security_owner_profile_id,
     status_page_url,
     terms_of_service_url,
     security_page_url,
     trust_page_url,
-    show_on_trust_center,
     level,
     vetting_status,
     vetting_website_url,
@@ -560,13 +561,10 @@ SELECT
     subprocessors_list_url,
     certifications,
     countries,
-    business_owner_profile_id,
-    security_owner_profile_id,
     status_page_url,
     terms_of_service_url,
     security_page_url,
     trust_page_url,
-    show_on_trust_center,
     level,
     vetting_status,
     vetting_website_url,
@@ -599,6 +597,10 @@ WHERE
 
 	*v = thirdParties
 
+	if len(thirdParties) != len(gid.NewSet(thirdPartyIDs...)) {
+		return ErrResourceNotFound
+	}
+
 	return nil
 }
 
@@ -628,13 +630,10 @@ INSERT INTO
         subprocessors_list_url,
         certifications,
         countries,
-        business_owner_profile_id,
-        security_owner_profile_id,
         status_page_url,
         terms_of_service_url,
         security_page_url,
         trust_page_url,
-        show_on_trust_center,
         level,
         vetting_status,
         vetting_website_url,
@@ -663,13 +662,10 @@ VALUES (
     @subprocessors_list_url,
     @certifications,
     @countries,
-    @business_owner_profile_id,
-    @security_owner_profile_id,
     @status_page_url,
     @terms_of_service_url,
     @security_page_url,
     @trust_page_url,
-    @show_on_trust_center,
     @level,
     @vetting_status,
     @vetting_website_url,
@@ -700,13 +696,10 @@ VALUES (
 		"subprocessors_list_url":           v.SubprocessorsListURL,
 		"certifications":                   v.Certifications,
 		"countries":                        v.Countries,
-		"business_owner_profile_id":        v.BusinessOwnerID,
-		"security_owner_profile_id":        v.SecurityOwnerID,
 		"status_page_url":                  v.StatusPageURL,
 		"terms_of_service_url":             v.TermsOfServiceURL,
 		"security_page_url":                v.SecurityPageURL,
 		"trust_page_url":                   v.TrustPageURL,
-		"show_on_trust_center":             v.ShowOnTrustCenter,
 		"level":                            v.Level,
 		"vetting_status":                   v.VettingStatus,
 		"vetting_website_url":              v.VettingWebsiteURL,
@@ -727,7 +720,10 @@ func (v ThirdParty) Delete(
 	scope Scoper,
 ) error {
 	q := `
-DELETE FROM third_parties WHERE %s AND id = @third_party_id
+DELETE FROM third_parties
+WHERE
+	%s
+	AND id = @third_party_id
 `
 
 	q = fmt.Sprintf(q, scope.SQLFragment())
@@ -740,6 +736,175 @@ DELETE FROM third_parties WHERE %s AND id = @third_party_id
 	return err
 }
 
+func (v *ThirdParties) LoadIDsByParentThirdPartyID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	parentThirdPartyID gid.GID,
+) ([]gid.GID, error) {
+	q := `
+SELECT
+	id
+FROM
+	third_parties
+WHERE
+	%s
+	AND parent_third_party_id = @parent_third_party_id
+`
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"parent_third_party_id": parentThirdPartyID}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return nil, fmt.Errorf("cannot query child third party ids: %w", err)
+	}
+
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[gid.GID])
+	if err != nil {
+		return nil, fmt.Errorf("cannot collect child third party ids: %w", err)
+	}
+
+	return ids, nil
+}
+
+// CountByCompliancePortalID counts the third parties published on the given
+// portal. Like LoadByCompliancePortalID it owns the portal restriction so the
+// count can never disagree with the list it accompanies.
+func (v *ThirdParties) CountByCompliancePortalID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	compliancePortalID gid.GID,
+	organizationID gid.GID,
+	filter *ThirdPartyFilter,
+) (int, error) {
+	if filter == nil {
+		filter = NewThirdPartyFilter(nil, nil, nil, nil)
+	}
+
+	filter = filter.withCompliancePortalID(compliancePortalID)
+
+	return v.CountByOrganizationID(ctx, conn, scope, organizationID, filter)
+}
+
+// ThirdPartyOrganizationLink identifies one organization's third party that
+// links a catalog entry. It carries the organization so a caller can scope
+// per-tenant work, and the third party so it can be linked to.
+type ThirdPartyOrganizationLink struct {
+	OrganizationID gid.GID `db:"organization_id"`
+	ThirdPartyID   gid.GID `db:"id"`
+}
+
+// LoadOrganizationLinksByCommonThirdPartyID returns, for every tenant, the
+// organization third parties that link the given catalog entry.
+//
+// A catalog merge uses this to re-point each affected organization's tracker
+// patterns at the third party that organization already manages. It spans
+// tenants deliberately, because a global catalog entry is referenced from
+// every organization that imported it.
+//
+// One organization can hold several matching rows (nothing enforces
+// uniqueness on the pair), so the lowest id per organization wins, matching
+// what LoadByOrganizationIDAndCommonThirdPartyID resolves to.
+func (v *ThirdParties) LoadOrganizationLinksByCommonThirdPartyID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	commonThirdPartyID gid.GID,
+) ([]ThirdPartyOrganizationLink, error) {
+	q := `
+SELECT DISTINCT ON (organization_id)
+    organization_id,
+    id
+FROM
+    third_parties
+WHERE
+    %s
+    AND common_third_party_id = @common_third_party_id
+ORDER BY
+    organization_id,
+    id ASC
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"common_third_party_id": commonThirdPartyID}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return nil, fmt.Errorf("cannot query third party organization links: %w", err)
+	}
+
+	links, err := pgx.CollectRows(rows, pgx.RowToStructByName[ThirdPartyOrganizationLink])
+	if err != nil {
+		return nil, fmt.Errorf("cannot collect third party organization links: %w", err)
+	}
+
+	return links, nil
+}
+
+// CountByCommonThirdPartyID returns how many organization third parties
+// link to each catalog entry, keyed by catalog id.
+//
+// Catalog cleanup needs the whole histogram to rank merge winners, so this
+// aggregates in one round trip rather than counting per candidate row.
+// Callers pass NewNoScope to span tenants: the catalog is global, so a
+// single entry's references are spread across every tenant that imported
+// it, and a tenant-scoped count would understate its true usage.
+func (v *ThirdParties) CountByCommonThirdPartyID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+) (map[gid.GID]int, error) {
+	q := `
+SELECT
+    common_third_party_id,
+    COUNT(id)
+FROM
+    third_parties
+WHERE
+    %s
+    AND common_third_party_id IS NOT NULL
+GROUP BY
+    common_third_party_id
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return nil, fmt.Errorf("cannot count third parties by common third party: %w", err)
+	}
+	defer rows.Close()
+
+	counts := make(map[gid.GID]int)
+
+	for rows.Next() {
+		var (
+			id    gid.GID
+			count int
+		)
+
+		if err := rows.Scan(&id, &count); err != nil {
+			return nil, fmt.Errorf("cannot scan third party count: %w", err)
+		}
+
+		counts[id] = count
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("cannot iterate third party counts: %w", err)
+	}
+
+	return counts, nil
+}
+
 func (v *ThirdParties) CountByOrganizationID(
 	ctx context.Context,
 	conn pg.Querier,
@@ -747,6 +912,10 @@ func (v *ThirdParties) CountByOrganizationID(
 	organizationID gid.GID,
 	filter *ThirdPartyFilter,
 ) (int, error) {
+	if filter == nil {
+		filter = NewThirdPartyFilter(nil, nil, nil, nil)
+	}
+
 	q := `
 SELECT
     COUNT(id)
@@ -776,6 +945,105 @@ WHERE
 	return count, nil
 }
 
+func (v *ThirdParties) LoadDistinctCompliancePortalCategoriesByCompliancePortalID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	compliancePortalID gid.GID,
+) ([]ThirdPartyCategory, error) {
+	q := `
+SELECT DISTINCT
+    category
+FROM
+    third_parties
+WHERE
+    %s
+    AND id IN (
+        SELECT third_party_id
+        FROM cp_third_parties
+        WHERE compliance_portal_id = @compliance_portal_id
+    )
+ORDER BY
+    category ASC
+`
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"compliance_portal_id": compliancePortalID}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return nil, fmt.Errorf("cannot query thirdParty categories: %w", err)
+	}
+
+	categories, err := pgx.CollectRows(rows, pgx.RowTo[ThirdPartyCategory])
+	if err != nil {
+		return nil, fmt.Errorf("cannot collect thirdParty categories: %w", err)
+	}
+
+	return categories, nil
+}
+
+func (v *ThirdParties) LoadDistinctCompliancePortalCountriesByCompliancePortalID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	compliancePortalID gid.GID,
+) ([]CountryCode, error) {
+	q := `
+SELECT DISTINCT
+    unnest(countries) AS country
+FROM
+    third_parties
+WHERE
+    %s
+    AND id IN (
+        SELECT third_party_id
+        FROM cp_third_parties
+        WHERE compliance_portal_id = @compliance_portal_id
+    )
+ORDER BY
+    country ASC
+`
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"compliance_portal_id": compliancePortalID}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return nil, fmt.Errorf("cannot query thirdParty countries: %w", err)
+	}
+
+	countries, err := pgx.CollectRows(rows, pgx.RowTo[CountryCode])
+	if err != nil {
+		return nil, fmt.Errorf("cannot collect thirdParty countries: %w", err)
+	}
+
+	return countries, nil
+}
+
+// LoadByCompliancePortalID loads the third parties published on the given
+// portal. The portal restriction is applied here rather than left to the
+// caller, so a filter built from a request can only narrow the published set.
+func (v *ThirdParties) LoadByCompliancePortalID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	compliancePortalID gid.GID,
+	organizationID gid.GID,
+	cursor *page.Cursor[ThirdPartyOrderField],
+	filter *ThirdPartyFilter,
+) error {
+	if filter == nil {
+		filter = NewThirdPartyFilter(nil, nil, nil, nil)
+	}
+
+	filter = filter.withCompliancePortalID(compliancePortalID)
+
+	return v.LoadByOrganizationID(ctx, conn, scope, organizationID, cursor, filter)
+}
+
 func (v *ThirdParties) LoadByOrganizationID(
 	ctx context.Context,
 	conn pg.Querier,
@@ -784,6 +1052,10 @@ func (v *ThirdParties) LoadByOrganizationID(
 	cursor *page.Cursor[ThirdPartyOrderField],
 	filter *ThirdPartyFilter,
 ) error {
+	if filter == nil {
+		filter = NewThirdPartyFilter(nil, nil, nil, nil)
+	}
+
 	q := `
 SELECT
 	id,
@@ -803,13 +1075,10 @@ SELECT
 	subprocessors_list_url,
 	certifications,
 	countries,
-	business_owner_profile_id,
-	security_owner_profile_id,
 	status_page_url,
 	terms_of_service_url,
 	security_page_url,
 	trust_page_url,
-	show_on_trust_center,
 	level,
 	vetting_status,
 	vetting_website_url,
@@ -875,9 +1144,6 @@ SET
 	terms_of_service_url = @terms_of_service_url,
 	security_page_url = @security_page_url,
 	trust_page_url = @trust_page_url,
-	business_owner_profile_id = @business_owner_profile_id,
-	security_owner_profile_id = @security_owner_profile_id,
-	show_on_trust_center = @show_on_trust_center,
 	level = @level,
 	vetting_status = @vetting_status,
 	vetting_website_url = @vetting_website_url,
@@ -912,9 +1178,6 @@ WHERE %s
 		"terms_of_service_url":             v.TermsOfServiceURL,
 		"security_page_url":                v.SecurityPageURL,
 		"trust_page_url":                   v.TrustPageURL,
-		"business_owner_profile_id":        v.BusinessOwnerID,
-		"security_owner_profile_id":        v.SecurityOwnerID,
-		"show_on_trust_center":             v.ShowOnTrustCenter,
 		"level":                            v.Level,
 		"vetting_status":                   v.VettingStatus,
 		"vetting_website_url":              v.VettingWebsiteURL,
@@ -1039,13 +1302,10 @@ WITH vend AS (
 		v.subprocessors_list_url,
 		v.certifications,
 		v.countries,
-		v.business_owner_profile_id,
-		v.security_owner_profile_id,
 		v.status_page_url,
 		v.terms_of_service_url,
 		v.security_page_url,
 		v.trust_page_url,
-		v.show_on_trust_center,
 		v.level,
 		v.vetting_status,
 		v.vetting_website_url,
@@ -1079,13 +1339,10 @@ SELECT
 	subprocessors_list_url,
 	certifications,
 	countries,
-	business_owner_profile_id,
-	security_owner_profile_id,
 	status_page_url,
 	terms_of_service_url,
 	security_page_url,
 	trust_page_url,
-	show_on_trust_center,
 	level,
 	vetting_status,
 	vetting_website_url,
@@ -1188,13 +1445,10 @@ WITH vend AS (
 		v.subprocessors_list_url,
 		v.certifications,
 		v.countries,
-		v.business_owner_profile_id,
-		v.security_owner_profile_id,
 		v.status_page_url,
 		v.terms_of_service_url,
 		v.security_page_url,
 		v.trust_page_url,
-		v.show_on_trust_center,
 		v.level,
 		v.vetting_status,
 		v.vetting_website_url,
@@ -1228,13 +1482,10 @@ SELECT
 	subprocessors_list_url,
 	certifications,
 	countries,
-	business_owner_profile_id,
-	security_owner_profile_id,
 	status_page_url,
 	terms_of_service_url,
 	security_page_url,
 	trust_page_url,
-	show_on_trust_center,
 	level,
 	vetting_status,
 	vetting_website_url,
@@ -1269,6 +1520,113 @@ WHERE %s
 	return nil
 }
 
+func (v *ThirdParties) CountByIDs(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	thirdPartyIDs []gid.GID,
+) (int, error) {
+	if len(thirdPartyIDs) == 0 {
+		return 0, nil
+	}
+
+	q := `
+SELECT
+	COUNT(id)
+FROM
+	third_parties
+WHERE
+	%s
+	AND id = ANY(@third_party_ids)
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"third_party_ids": thirdPartyIDs}
+	maps.Copy(args, scope.SQLArguments())
+
+	row := conn.QueryRow(ctx, q, args)
+
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("cannot count thirdParties: %w", err)
+	}
+
+	return count, nil
+}
+
+func (v *ThirdParties) LoadByIDsWithCursor(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	thirdPartyIDs []gid.GID,
+	cursor *page.Cursor[ThirdPartyOrderField],
+) error {
+	if len(thirdPartyIDs) == 0 {
+		*v = nil
+		return nil
+	}
+
+	q := `
+SELECT
+	id,
+	organization_id,
+	parent_third_party_id,
+	common_third_party_id,
+	name,
+	description,
+	category,
+	headquarter_address,
+	legal_name,
+	website_url,
+	privacy_policy_url,
+	service_level_agreement_url,
+	data_processing_agreement_url,
+	business_associate_agreement_url,
+	subprocessors_list_url,
+	certifications,
+	countries,
+	status_page_url,
+	terms_of_service_url,
+	security_page_url,
+	trust_page_url,
+	level,
+	vetting_status,
+	vetting_website_url,
+	vetting_procedure,
+	vetting_processing_started_at,
+	vetting_error_message,
+	created_at,
+	updated_at
+FROM
+	third_parties
+WHERE
+	%s
+	AND id = ANY(@third_party_ids)
+	AND %s
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment(), cursor.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"third_party_ids": thirdPartyIDs}
+	maps.Copy(args, scope.SQLArguments())
+	maps.Copy(args, cursor.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query thirdParties: %w", err)
+	}
+
+	thirdParties, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[ThirdParty])
+	if err != nil {
+		return fmt.Errorf("cannot collect thirdParties: %w", err)
+	}
+
+	*v = thirdParties
+
+	return nil
+}
+
 func (v *ThirdParties) LoadByProcessingActivityID(
 	ctx context.Context,
 	conn pg.Querier,
@@ -1297,13 +1655,10 @@ WITH vend AS (
 		v.subprocessors_list_url,
 		v.certifications,
 		v.countries,
-		v.business_owner_profile_id,
-		v.security_owner_profile_id,
 		v.status_page_url,
 		v.terms_of_service_url,
 		v.security_page_url,
 		v.trust_page_url,
-		v.show_on_trust_center,
 		v.level,
 		v.vetting_status,
 		v.vetting_website_url,
@@ -1337,13 +1692,10 @@ SELECT
 	subprocessors_list_url,
 	certifications,
 	countries,
-	business_owner_profile_id,
-	security_owner_profile_id,
 	status_page_url,
 	terms_of_service_url,
 	security_page_url,
 	trust_page_url,
-	show_on_trust_center,
 	level,
 	vetting_status,
 	vetting_website_url,
@@ -1473,13 +1825,10 @@ SELECT
 	subprocessors_list_url,
 	certifications,
 	countries,
-	business_owner_profile_id,
-	security_owner_profile_id,
 	status_page_url,
 	terms_of_service_url,
 	security_page_url,
 	trust_page_url,
-	show_on_trust_center,
 	level,
 	vetting_status,
 	vetting_website_url,
@@ -1526,11 +1875,11 @@ LIMIT 1;
 	return nil
 }
 
-func (v *ThirdParties) CountByMeasureID(
+func (v *ThirdParties) CountByInternalControlID(
 	ctx context.Context,
 	conn pg.Querier,
 	scope Scoper,
-	measureID gid.GID,
+	internalControlID gid.GID,
 ) (int, error) {
 	q := `
 WITH tps AS (
@@ -1540,9 +1889,9 @@ WITH tps AS (
 	FROM
 		third_parties v
 	INNER JOIN
-		measures_third_parties mtp ON v.id = mtp.third_party_id
+		internal_controls_third_parties mtp ON v.id = mtp.third_party_id
 	WHERE
-		mtp.measure_id = @measure_id
+		mtp.internal_control_id = @internal_control_id
 )
 SELECT
 	COUNT(id)
@@ -1552,7 +1901,7 @@ WHERE %s
 `
 	q = fmt.Sprintf(q, scope.SQLFragment())
 
-	args := pgx.StrictNamedArgs{"measure_id": measureID}
+	args := pgx.StrictNamedArgs{"internal_control_id": internalControlID}
 	maps.Copy(args, scope.SQLArguments())
 
 	row := conn.QueryRow(ctx, q, args)
@@ -1566,11 +1915,11 @@ WHERE %s
 	return count, nil
 }
 
-func (v *ThirdParties) LoadByMeasureID(
+func (v *ThirdParties) LoadByInternalControlID(
 	ctx context.Context,
 	conn pg.Querier,
 	scope Scoper,
-	measureID gid.GID,
+	internalControlID gid.GID,
 	cursor *page.Cursor[ThirdPartyOrderField],
 ) error {
 	q := `
@@ -1594,13 +1943,10 @@ WITH tps AS (
 		v.subprocessors_list_url,
 		v.certifications,
 		v.countries,
-		v.business_owner_profile_id,
-		v.security_owner_profile_id,
 		v.status_page_url,
 		v.terms_of_service_url,
 		v.security_page_url,
 		v.trust_page_url,
-		v.show_on_trust_center,
 		v.level,
 		v.vetting_status,
 		v.vetting_website_url,
@@ -1612,9 +1958,9 @@ WITH tps AS (
 	FROM
 		third_parties v
 	INNER JOIN
-		measures_third_parties mtp ON v.id = mtp.third_party_id
+		internal_controls_third_parties mtp ON v.id = mtp.third_party_id
 	WHERE
-		mtp.measure_id = @measure_id
+		mtp.internal_control_id = @internal_control_id
 )
 SELECT
 	id,
@@ -1634,13 +1980,10 @@ SELECT
 	subprocessors_list_url,
 	certifications,
 	countries,
-	business_owner_profile_id,
-	security_owner_profile_id,
 	status_page_url,
 	terms_of_service_url,
 	security_page_url,
 	trust_page_url,
-	show_on_trust_center,
 	level,
 	vetting_status,
 	vetting_website_url,
@@ -1656,7 +1999,7 @@ WHERE %s
 `
 	q = fmt.Sprintf(q, scope.SQLFragment(), cursor.SQLFragment())
 
-	args := pgx.StrictNamedArgs{"measure_id": measureID}
+	args := pgx.StrictNamedArgs{"internal_control_id": internalControlID}
 	maps.Copy(args, scope.SQLArguments())
 	maps.Copy(args, cursor.SQLArguments())
 
@@ -1732,13 +2075,10 @@ WITH RECURSIVE ancestor_chain AS (
 		tp.subprocessors_list_url,
 		tp.certifications,
 		tp.countries,
-		tp.business_owner_profile_id,
-		tp.security_owner_profile_id,
 		tp.status_page_url,
 		tp.terms_of_service_url,
 		tp.security_page_url,
 		tp.trust_page_url,
-		tp.show_on_trust_center,
 		tp.level,
 		tp.vetting_status,
 		tp.vetting_website_url,
@@ -1777,13 +2117,10 @@ WITH RECURSIVE ancestor_chain AS (
 		tp.subprocessors_list_url,
 		tp.certifications,
 		tp.countries,
-		tp.business_owner_profile_id,
-		tp.security_owner_profile_id,
 		tp.status_page_url,
 		tp.terms_of_service_url,
 		tp.security_page_url,
 		tp.trust_page_url,
-		tp.show_on_trust_center,
 		tp.level,
 		tp.vetting_status,
 		tp.vetting_website_url,
@@ -1816,13 +2153,10 @@ SELECT
 	subprocessors_list_url,
 	certifications,
 	countries,
-	business_owner_profile_id,
-	security_owner_profile_id,
 	status_page_url,
 	terms_of_service_url,
 	security_page_url,
 	trust_page_url,
-	show_on_trust_center,
 	level,
 	vetting_status,
 	vetting_website_url,
@@ -1883,13 +2217,10 @@ SELECT
 	subprocessors_list_url,
 	certifications,
 	countries,
-	business_owner_profile_id,
-	security_owner_profile_id,
 	status_page_url,
 	terms_of_service_url,
 	security_page_url,
 	trust_page_url,
-	show_on_trust_center,
 	level,
 	vetting_status,
 	vetting_website_url,

@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_test
 
@@ -35,11 +41,10 @@ func TestRisk_Create(t *testing.T) {
 					riskEdge {
 						node {
 							id
+							referenceId
 							name
 							category
-							treatment
-							inherentLikelihood
-							inherentImpact
+							description
 						}
 					}
 				}
@@ -50,12 +55,11 @@ func TestRisk_Create(t *testing.T) {
 			CreateRisk struct {
 				RiskEdge struct {
 					Node struct {
-						ID                 string `json:"id"`
-						Name               string `json:"name"`
-						Category           string `json:"category"`
-						Treatment          string `json:"treatment"`
-						InherentLikelihood int    `json:"inherentLikelihood"`
-						InherentImpact     int    `json:"inherentImpact"`
+						ID          string  `json:"id"`
+						ReferenceID string  `json:"referenceId"`
+						Name        string  `json:"name"`
+						Category    string  `json:"category"`
+						Description *string `json:"description"`
 					} `json:"node"`
 				} `json:"riskEdge"`
 			} `json:"createRisk"`
@@ -63,109 +67,66 @@ func TestRisk_Create(t *testing.T) {
 
 		err := owner.Execute(query, map[string]any{
 			"input": map[string]any{
-				"organizationId":     owner.GetOrganizationID().String(),
-				"name":               "Data Breach Risk",
-				"description":        "Risk of unauthorized data access",
-				"category":           "SECURITY",
-				"treatment":          "MITIGATED",
-				"inherentLikelihood": 2,
-				"inherentImpact":     3,
+				"organizationId": owner.GetOrganizationID().String(),
+				"name":           "Data Breach Risk",
+				"description":    "Risk of unauthorized data access",
+				"category":       "SECURITY",
 			},
 		}, &result)
 		require.NoError(t, err)
 
 		risk := result.CreateRisk.RiskEdge.Node
 		assert.NotEmpty(t, risk.ID)
+		assert.Regexp(t, `^RSK-\d{3,}$`, risk.ReferenceID)
 		assert.Equal(t, "Data Breach Risk", risk.Name)
 		assert.Equal(t, "SECURITY", risk.Category)
-		assert.Equal(t, "MITIGATED", risk.Treatment)
-		assert.Equal(t, 2, risk.InherentLikelihood)
-		assert.Equal(t, 3, risk.InherentImpact)
+		require.NotNil(t, risk.Description)
+		assert.Equal(t, "Risk of unauthorized data access", *risk.Description)
 	})
 
-	t.Run("with different treatments", func(t *testing.T) {
-		treatments := []struct {
-			name      string
-			treatment string
-		}{
-			{"Mitigated", "MITIGATED"},
-			{"Transferred", "TRANSFERRED"},
-			{"Accepted", "ACCEPTED"},
-			{"Avoided", "AVOIDED"},
-		}
-
-		for _, tt := range treatments {
-			t.Run(tt.name, func(t *testing.T) {
-				riskID := factory.NewRisk(owner).
-					WithName("Risk with " + tt.treatment).
-					WithTreatment(tt.treatment).
-					Create()
-
-				query := `
-					query GetRisk($id: ID!) {
-						node(id: $id) {
-							... on Risk {
-								id
-								treatment
-							}
+	t.Run("with required fields only", func(t *testing.T) {
+		query := `
+			mutation CreateRisk($input: CreateRiskInput!) {
+				createRisk(input: $input) {
+					riskEdge {
+						node {
+							id
+							referenceId
+							name
+							category
 						}
 					}
-				`
-
-				var result struct {
-					Node struct {
-						ID        string `json:"id"`
-						Treatment string `json:"treatment"`
-					} `json:"node"`
 				}
-
-				err := owner.Execute(query, map[string]any{"id": riskID}, &result)
-				require.NoError(t, err)
-				assert.Equal(t, tt.treatment, result.Node.Treatment)
-			})
-		}
-	})
-
-	t.Run("with different likelihood and impact", func(t *testing.T) {
-		levelNames := map[int]string{1: "Low", 2: "Medium", 3: "High", 4: "Critical"}
-
-		for likelihood := 1; likelihood <= 4; likelihood++ {
-			for impact := 1; impact <= 4; impact++ {
-				testName := levelNames[likelihood] + "_" + levelNames[impact]
-				t.Run(testName, func(t *testing.T) {
-					riskID := factory.NewRisk(owner).
-						WithName("Risk " + testName).
-						WithLikelihood(likelihood).
-						WithImpact(impact).
-						Create()
-
-					query := `
-						query GetRisk($id: ID!) {
-							node(id: $id) {
-								... on Risk {
-									id
-									inherentLikelihood
-									inherentImpact
-								}
-							}
-						}
-					`
-
-					var result struct {
-						Node struct {
-							ID                 string `json:"id"`
-							InherentLikelihood int    `json:"inherentLikelihood"`
-							InherentImpact     int    `json:"inherentImpact"`
-						} `json:"node"`
-					}
-
-					err := owner.Execute(query, map[string]any{"id": riskID}, &result)
-					require.NoError(t, err)
-					assert.Equal(t, likelihood, result.Node.InherentLikelihood)
-					assert.Equal(t, impact, result.Node.InherentImpact)
-				})
 			}
+		`
+
+		var result struct {
+			CreateRisk struct {
+				RiskEdge struct {
+					Node struct {
+						ID          string `json:"id"`
+						ReferenceID string `json:"referenceId"`
+						Name        string `json:"name"`
+						Category    string `json:"category"`
+					} `json:"node"`
+				} `json:"riskEdge"`
+			} `json:"createRisk"`
 		}
+
+		err := owner.Execute(query, map[string]any{
+			"input": map[string]any{
+				"organizationId": owner.GetOrganizationID().String(),
+				"name":           "Catalog Risk",
+				"category":       "SECURITY",
+			},
+		}, &result)
+		require.NoError(t, err)
+
+		risk := result.CreateRisk.RiskEdge.Node
+		assert.NotEmpty(t, risk.ID)
+		assert.Regexp(t, `^RSK-\d{3,}$`, risk.ReferenceID)
+		assert.Equal(t, "Catalog Risk", risk.Name)
+		assert.Equal(t, "SECURITY", risk.Category)
 	})
 }
 
@@ -183,7 +144,6 @@ func TestRisk_Update(t *testing.T) {
 				risk {
 					id
 					name
-					treatment
 				}
 			}
 		}
@@ -192,27 +152,23 @@ func TestRisk_Update(t *testing.T) {
 	var result struct {
 		UpdateRisk struct {
 			Risk struct {
-				ID        string `json:"id"`
-				Name      string `json:"name"`
-				Treatment string `json:"treatment"`
+				ID   string `json:"id"`
+				Name string `json:"name"`
 			} `json:"risk"`
 		} `json:"updateRisk"`
 	}
 
 	err := owner.Execute(query, map[string]any{
 		"input": map[string]any{
-			"id":                 riskID,
-			"name":               "Updated Risk Name",
-			"description":        "Updated by owner",
-			"treatment":          "TRANSFERRED",
-			"inherentLikelihood": 3,
+			"id":          riskID,
+			"name":        "Updated Risk Name",
+			"description": "Updated by owner",
 		},
 	}, &result)
 	require.NoError(t, err)
 
 	assert.Equal(t, riskID, result.UpdateRisk.Risk.ID)
 	assert.Equal(t, "Updated Risk Name", result.UpdateRisk.Risk.Name)
-	assert.Equal(t, "TRANSFERRED", result.UpdateRisk.Risk.Treatment)
 }
 
 func TestRisk_Delete(t *testing.T) {
@@ -243,6 +199,51 @@ func TestRisk_Delete(t *testing.T) {
 	}, &result)
 	require.NoError(t, err)
 	assert.Equal(t, riskID, result.DeleteRisk.DeletedRiskID)
+}
+
+func TestRisk_ReferenceID(t *testing.T) {
+	t.Parallel()
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+
+	query := `
+		mutation CreateRisk($input: CreateRiskInput!) {
+			createRisk(input: $input) {
+				riskEdge {
+					node {
+						referenceId
+					}
+				}
+			}
+		}
+	`
+
+	create := func(name string) string {
+		t.Helper()
+
+		var result struct {
+			CreateRisk struct {
+				RiskEdge struct {
+					Node struct {
+						ReferenceID string `json:"referenceId"`
+					} `json:"node"`
+				} `json:"riskEdge"`
+			} `json:"createRisk"`
+		}
+
+		err := owner.Execute(query, map[string]any{
+			"input": map[string]any{
+				"organizationId": owner.GetOrganizationID().String(),
+				"name":           name,
+				"category":       "SECURITY",
+			},
+		}, &result)
+		require.NoError(t, err)
+
+		return result.CreateRisk.RiskEdge.Node.ReferenceID
+	}
+
+	assert.Equal(t, "RSK-001", create("First sequential risk"))
+	assert.Equal(t, "RSK-002", create("Second sequential risk"))
 }
 
 func TestRisk_List(t *testing.T) {
@@ -312,11 +313,8 @@ func TestRisk_RequiredFields(t *testing.T) {
 		{
 			name: "missing organizationId",
 			input: map[string]any{
-				"name":               "Test Risk",
-				"category":           "SECURITY",
-				"treatment":          "MITIGATED",
-				"inherentLikelihood": 2,
-				"inherentImpact":     2,
+				"name":     "Test Risk",
+				"category": "SECURITY",
 			},
 			skipOrganization:  true,
 			wantErrorContains: "organizationId",
@@ -324,63 +322,16 @@ func TestRisk_RequiredFields(t *testing.T) {
 		{
 			name: "missing name",
 			input: map[string]any{
-				"category":           "SECURITY",
-				"treatment":          "MITIGATED",
-				"inherentLikelihood": 2,
-				"inherentImpact":     2,
+				"category": "SECURITY",
 			},
 			wantErrorContains: "name",
 		},
 		{
 			name: "missing category",
 			input: map[string]any{
-				"name":               "Test Risk",
-				"treatment":          "MITIGATED",
-				"inherentLikelihood": 2,
-				"inherentImpact":     2,
+				"name": "Test Risk",
 			},
 			wantErrorContains: "category",
-		},
-		{
-			name: "missing treatment",
-			input: map[string]any{
-				"name":               "Test Risk",
-				"category":           "SECURITY",
-				"inherentLikelihood": 2,
-				"inherentImpact":     2,
-			},
-			wantErrorContains: "treatment",
-		},
-		{
-			name: "missing inherentLikelihood",
-			input: map[string]any{
-				"name":           "Test Risk",
-				"category":       "SECURITY",
-				"treatment":      "MITIGATED",
-				"inherentImpact": 2,
-			},
-			wantErrorContains: "inherentLikelihood",
-		},
-		{
-			name: "missing inherentImpact",
-			input: map[string]any{
-				"name":               "Test Risk",
-				"category":           "SECURITY",
-				"treatment":          "MITIGATED",
-				"inherentLikelihood": 2,
-			},
-			wantErrorContains: "inherentImpact",
-		},
-		{
-			name: "invalid treatment enum",
-			input: map[string]any{
-				"name":               "Test Risk",
-				"category":           "SECURITY",
-				"treatment":          "INVALID_TREATMENT",
-				"inherentLikelihood": 2,
-				"inherentImpact":     2,
-			},
-			wantErrorContains: "treatment",
 		},
 	}
 
@@ -408,49 +359,6 @@ func TestRisk_RequiredFields(t *testing.T) {
 			_, err := owner.Do(query, map[string]any{"input": input})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErrorContains)
-		})
-	}
-}
-
-func TestRisk_TreatmentEnum(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
-
-	treatments := []string{
-		"MITIGATED",
-		"ACCEPTED",
-		"TRANSFERRED",
-		"AVOIDED",
-	}
-
-	for _, treatment := range treatments {
-		t.Run("create with treatment "+treatment, func(t *testing.T) {
-			riskID := factory.NewRisk(owner).
-				WithName("Treatment Test " + treatment).
-				WithTreatment(treatment).
-				Create()
-
-			query := `
-				query($id: ID!) {
-					node(id: $id) {
-						... on Risk {
-							id
-							treatment
-						}
-					}
-				}
-			`
-
-			var result struct {
-				Node struct {
-					ID        string `json:"id"`
-					Treatment string `json:"treatment"`
-				} `json:"node"`
-			}
-
-			err := owner.Execute(query, map[string]any{"id": riskID}, &result)
-			require.NoError(t, err)
-			assert.Equal(t, treatment, result.Node.Treatment)
 		})
 	}
 }
@@ -517,9 +425,6 @@ func TestRisk_SubResolvers(t *testing.T) {
 						name
 						description
 						category
-						treatment
-						inherentLikelihood
-						inherentImpact
 					}
 				}
 			}
@@ -527,13 +432,10 @@ func TestRisk_SubResolvers(t *testing.T) {
 
 		var result struct {
 			Node struct {
-				ID                 string  `json:"id"`
-				Name               string  `json:"name"`
-				Description        *string `json:"description"`
-				Category           string  `json:"category"`
-				Treatment          string  `json:"treatment"`
-				InherentLikelihood int     `json:"inherentLikelihood"`
-				InherentImpact     int     `json:"inherentImpact"`
+				ID          string  `json:"id"`
+				Name        string  `json:"name"`
+				Description *string `json:"description"`
+				Category    string  `json:"category"`
 			} `json:"node"`
 		}
 
@@ -574,13 +476,13 @@ func TestRisk_SubResolvers(t *testing.T) {
 		assert.NotEmpty(t, result.Node.Organization.Name)
 	})
 
-	t.Run("measures sub-resolver (empty)", func(t *testing.T) {
+	t.Run("internal controls sub-resolver (empty)", func(t *testing.T) {
 		query := `
 			query($id: ID!) {
 				node(id: $id) {
 					... on Risk {
 						id
-						measures(first: 10) {
+						internalControls(first: 10) {
 							edges {
 								node {
 									id
@@ -598,8 +500,8 @@ func TestRisk_SubResolvers(t *testing.T) {
 
 		var result struct {
 			Node struct {
-				ID       string `json:"id"`
-				Measures struct {
+				ID               string `json:"id"`
+				InternalControls struct {
 					Edges []struct {
 						Node struct {
 							ID   string `json:"id"`
@@ -609,13 +511,13 @@ func TestRisk_SubResolvers(t *testing.T) {
 					PageInfo struct {
 						HasNextPage bool `json:"hasNextPage"`
 					} `json:"pageInfo"`
-				} `json:"measures"`
+				} `json:"internalControls"`
 			} `json:"node"`
 		}
 
 		err := owner.Execute(query, map[string]any{"id": riskID}, &result)
 		require.NoError(t, err)
-		assert.NotNil(t, result.Node.Measures.Edges)
+		assert.NotNil(t, result.Node.InternalControls.Edges)
 	})
 
 	t.Run("documents sub-resolver (empty)", func(t *testing.T) {
@@ -652,36 +554,6 @@ func TestRisk_SubResolvers(t *testing.T) {
 		err := owner.Execute(query, map[string]any{"id": riskID}, &result)
 		require.NoError(t, err)
 		assert.NotNil(t, result.Node.Documents.Edges)
-	})
-
-	t.Run("owner sub-resolver (null)", func(t *testing.T) {
-		query := `
-			query($id: ID!) {
-				node(id: $id) {
-					... on Risk {
-						id
-						owner {
-							id
-							fullName
-						}
-					}
-				}
-			}
-		`
-
-		var result struct {
-			Node struct {
-				ID    string `json:"id"`
-				Owner *struct {
-					ID       string `json:"id"`
-					FullName string `json:"fullName"`
-				} `json:"owner"`
-			} `json:"node"`
-		}
-
-		err := owner.Execute(query, map[string]any{"id": riskID}, &result)
-		require.NoError(t, err)
-		assert.Nil(t, result.Node.Owner)
 	})
 }
 
@@ -871,235 +743,5 @@ func TestRisk_OmittableDescription(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result.UpdateRisk.Risk.Description)
 		assert.Equal(t, "Should persist", *result.UpdateRisk.Risk.Description)
-	})
-}
-
-func TestRisk_OmittableOwner(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
-
-	// Create a people for owner assignment
-	profileID := factory.CreateUser(owner)
-	riskID := factory.NewRisk(owner).WithName("Owner Test Risk").Create()
-
-	t.Run("set owner", func(t *testing.T) {
-		query := `
-			mutation UpdateRisk($input: UpdateRiskInput!) {
-				updateRisk(input: $input) {
-					risk {
-						id
-						owner {
-							id
-							fullName
-						}
-					}
-				}
-			}
-		`
-
-		var result struct {
-			UpdateRisk struct {
-				Risk struct {
-					ID    string `json:"id"`
-					Owner struct {
-						ID       string `json:"id"`
-						FullName string `json:"fullName"`
-					} `json:"owner"`
-				} `json:"risk"`
-			} `json:"updateRisk"`
-		}
-
-		err := owner.Execute(query, map[string]any{
-			"input": map[string]any{
-				"id":      riskID,
-				"ownerId": profileID,
-			},
-		}, &result)
-		require.NoError(t, err)
-		assert.Equal(t, profileID, result.UpdateRisk.Risk.Owner.ID)
-	})
-
-	t.Run("clear owner with null", func(t *testing.T) {
-		query := `
-			mutation UpdateRisk($input: UpdateRiskInput!) {
-				updateRisk(input: $input) {
-					risk {
-						id
-						owner {
-							id
-						}
-					}
-				}
-			}
-		`
-
-		var result struct {
-			UpdateRisk struct {
-				Risk struct {
-					ID    string `json:"id"`
-					Owner *struct {
-						ID string `json:"id"`
-					} `json:"owner"`
-				} `json:"risk"`
-			} `json:"updateRisk"`
-		}
-
-		err := owner.Execute(query, map[string]any{
-			"input": map[string]any{
-				"id":      riskID,
-				"ownerId": nil,
-			},
-		}, &result)
-		require.NoError(t, err)
-		assert.Nil(t, result.UpdateRisk.Risk.Owner)
-	})
-}
-
-func TestRisk_TenantIsolation(t *testing.T) {
-	t.Parallel()
-
-	org1Owner := testutil.NewClient(t, testutil.RoleOwner)
-	org2Owner := testutil.NewClient(t, testutil.RoleOwner)
-
-	riskID := factory.NewRisk(org1Owner).WithName("Org1 Risk").Create()
-
-	t.Run("cannot read risk from another organization", func(t *testing.T) {
-		query := `
-			query($id: ID!) {
-				node(id: $id) {
-					... on Risk {
-						id
-						name
-					}
-				}
-			}
-		`
-
-		var result struct {
-			Node *struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
-			} `json:"node"`
-		}
-
-		err := org2Owner.Execute(query, map[string]any{"id": riskID}, &result)
-		testutil.AssertNodeNotAccessible(t, err, result.Node == nil, "risk")
-	})
-
-	t.Run("cannot update risk from another organization", func(t *testing.T) {
-		query := `
-			mutation UpdateRisk($input: UpdateRiskInput!) {
-				updateRisk(input: $input) {
-					risk { id }
-				}
-			}
-		`
-
-		_, err := org2Owner.Do(query, map[string]any{
-			"input": map[string]any{
-				"id":   riskID,
-				"name": "Hijacked Risk",
-			},
-		})
-		require.Error(t, err, "Should not be able to update risk from another org")
-	})
-
-	t.Run("cannot delete risk from another organization", func(t *testing.T) {
-		query := `
-			mutation DeleteRisk($input: DeleteRiskInput!) {
-				deleteRisk(input: $input) {
-					deletedRiskId
-				}
-			}
-		`
-
-		_, err := org2Owner.Do(query, map[string]any{
-			"input": map[string]any{
-				"riskId": riskID,
-			},
-		})
-		require.Error(t, err, "Should not be able to delete risk from another org")
-	})
-}
-
-func TestRisk_LikelihoodImpactValues(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
-
-	t.Run("create with various likelihood and impact values", func(t *testing.T) {
-		// Test valid values 1-5
-		for i := 1; i <= 5; i++ {
-			riskID := factory.NewRisk(owner).
-				WithName("Likelihood Impact Test").
-				WithLikelihood(i).
-				WithImpact(i).
-				Create()
-
-			query := `
-				query($id: ID!) {
-					node(id: $id) {
-						... on Risk {
-							id
-							inherentLikelihood
-							inherentImpact
-						}
-					}
-				}
-			`
-
-			var result struct {
-				Node struct {
-					ID                 string `json:"id"`
-					InherentLikelihood int    `json:"inherentLikelihood"`
-					InherentImpact     int    `json:"inherentImpact"`
-				} `json:"node"`
-			}
-
-			err := owner.Execute(query, map[string]any{"id": riskID}, &result)
-			require.NoError(t, err)
-			assert.Equal(t, i, result.Node.InherentLikelihood)
-			assert.Equal(t, i, result.Node.InherentImpact)
-		}
-	})
-
-	t.Run("update likelihood and impact", func(t *testing.T) {
-		riskID := factory.NewRisk(owner).
-			WithName("Update Likelihood Impact Test").
-			WithLikelihood(1).
-			WithImpact(1).
-			Create()
-
-		query := `
-			mutation UpdateRisk($input: UpdateRiskInput!) {
-				updateRisk(input: $input) {
-					risk {
-						id
-						inherentLikelihood
-						inherentImpact
-					}
-				}
-			}
-		`
-
-		var result struct {
-			UpdateRisk struct {
-				Risk struct {
-					ID                 string `json:"id"`
-					InherentLikelihood int    `json:"inherentLikelihood"`
-					InherentImpact     int    `json:"inherentImpact"`
-				} `json:"risk"`
-			} `json:"updateRisk"`
-		}
-
-		err := owner.Execute(query, map[string]any{
-			"input": map[string]any{
-				"id":                 riskID,
-				"inherentLikelihood": 5,
-				"inherentImpact":     4,
-			},
-		}, &result)
-		require.NoError(t, err)
-		assert.Equal(t, 5, result.UpdateRisk.Risk.InherentLikelihood)
-		assert.Equal(t, 4, result.UpdateRisk.Risk.InherentImpact)
 	})
 }

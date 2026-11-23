@@ -1,38 +1,48 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
+import {
+  ArrowsClockwiseIcon,
+  CaretDownIcon,
+  EnvelopeSimpleIcon,
+  KeyIcon,
+  LockOpenIcon,
+  UserCircleIcon,
+  UserIcon,
+} from "@phosphor-icons/react";
 import { formatError } from "@probo/helpers";
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
-import {
-  Button,
-  IconArrowsClockwise,
-  IconChevronDown,
-  IconEnvelope,
-  IconKey,
-  IconLockOpen,
-  IconUser,
-  IconUserCircle,
-  useToast,
-} from "@probo/ui";
-import { useCallback, useMemo, useState } from "react";
+import { Button } from "@probo/ui/src/v2/Button/Button";
+import { Callout } from "@probo/ui/src/v2/Callout/Callout";
+import { Spinner } from "@probo/ui/src/v2/Spinner/Spinner";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
+import { Heading } from "@probo/ui/src/v2/typography/Heading";
+import { Text } from "@probo/ui/src/v2/typography/Text";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { type PreloadedQuery, useMutation, usePreloadedQuery } from "react-relay";
 import { graphql } from "relay-runtime";
 
 import type { ConsentPageMutation } from "#/__generated__/iam/ConsentPageMutation.graphql";
 import type { ConsentPageQuery } from "#/__generated__/iam/ConsentPageQuery.graphql";
-import { formatApiScopeLabel } from "#/pages/iam/oauthTokens/_components/scopeLabels";
+import { formatAPIScopeLabel } from "#/pages/iam/oauthTokens/_components/scopeLabels";
 
 export const consentPageQuery = graphql`
   query ConsentPageQuery($consentId: ID!) {
@@ -58,25 +68,21 @@ const approveConsentMutation = graphql`
 `;
 
 const scopeLabels: Record<string, string> = {
-  openid: "Verify your identity",
-  email: "View your email address",
-  profile: "View your profile information",
-  offline_access: "Stay signed in and access your data while you're away",
+  openid: "consentPage.scopes.openid",
+  email: "consentPage.scopes.email",
+  profile: "consentPage.scopes.profile",
+  offline_access: "consentPage.scopes.offlineAccess",
 };
 
 const scopeIcons: Record<string, React.ReactNode> = {
-  openid: <IconUser size={18} className="shrink-0 text-txt-tertiary" />,
-  email: <IconEnvelope size={18} className="shrink-0 text-txt-tertiary" />,
-  profile: <IconUserCircle size={18} className="shrink-0 text-txt-tertiary" />,
-  offline_access: <IconArrowsClockwise size={18} className="shrink-0 text-txt-tertiary" />,
+  openid: <UserIcon className="size-[18px] shrink-0 text-sand-11" />,
+  email: <EnvelopeSimpleIcon className="size-[18px] shrink-0 text-sand-11" />,
+  profile: <UserCircleIcon className="size-[18px] shrink-0 text-sand-11" />,
+  offline_access: <ArrowsClockwiseIcon className="size-[18px] shrink-0 text-sand-11" />,
 };
 
 function scopeIcon(name: string): React.ReactNode {
-  return scopeIcons[name] ?? <IconKey size={18} className="shrink-0 text-txt-tertiary" />;
-}
-
-function scopeLabel(name: string): string {
-  return scopeLabels[name] ?? formatApiScopeLabel(name);
+  return scopeIcons[name] ?? <KeyIcon className="size-[18px] shrink-0 text-sand-11" />;
 }
 
 function isApiScope(scope: string): boolean {
@@ -98,53 +104,56 @@ function partitionScopes(scopes: readonly string[]) {
   return { oidcScopes, apiScopes };
 }
 
-function ConsentScopeRow(props: {
+function ConsentScopeRow({
+  scope,
+  nested,
+}: {
   scope: string;
-  translate: (label: string) => string;
   nested?: boolean;
 }) {
-  const label = scopeLabel(props.scope);
-  const translated = label !== props.scope ? props.translate(label) : label;
+  const { t } = useTranslation();
+  const key = scopeLabels[scope];
+  const translated = key ? t(key) : formatAPIScopeLabel(scope, t);
 
   return (
     <li
       className={
-        props.nested
-          ? "flex items-center gap-2.5 py-1.5 text-sm text-txt-secondary"
-          : "flex items-center gap-2.5 px-3 py-2.5 text-sm text-txt-secondary border border-border-mid rounded-lg"
+        nested
+          ? "flex items-center gap-2.5 py-1.5 text-2 text-sand-11"
+          : "flex items-center gap-2.5 rounded-3 border border-sand-6 px-3 py-2.5 text-2 text-sand-11"
       }
     >
-      {scopeIcon(props.scope)}
+      {scopeIcon(scope)}
       {translated}
     </li>
   );
 }
 
-function ConsentApiScopesAccordion(props: {
+function ConsentApiScopesAccordion({
+  scopes,
+  summaryLabel,
+}: {
   scopes: readonly string[];
-  translate: (label: string) => string;
   summaryLabel: string;
 }) {
-  if (props.scopes.length === 0) {
+  if (scopes.length === 0) {
     return null;
   }
 
   return (
-    <details className="group border border-border-mid rounded-lg">
-      <summary className="flex cursor-pointer list-none items-center gap-2.5 px-3 py-2.5 text-sm text-txt-secondary select-none [&::-webkit-details-marker]:hidden">
-        <IconKey size={18} className="shrink-0 text-txt-tertiary" />
-        <span className="min-w-0 flex-1 text-start">{props.summaryLabel}</span>
-        <IconChevronDown
-          size={16}
-          className="shrink-0 text-txt-tertiary transition-transform group-open:rotate-180"
+    <details className="group rounded-3 border border-sand-6">
+      <summary className="flex cursor-pointer list-none items-center gap-2.5 px-3 py-2.5 text-2 text-sand-11 select-none [&::-webkit-details-marker]:hidden">
+        <KeyIcon className="size-[18px] shrink-0 text-sand-11" />
+        <span className="min-w-0 flex-1 text-start">{summaryLabel}</span>
+        <CaretDownIcon
+          className="size-4 shrink-0 text-sand-11 transition-transform group-open:rotate-180"
         />
       </summary>
-      <ul className="space-y-1 border-t border-border-mid px-3 py-2.5">
-        {props.scopes.map(scope => (
+      <ul className="space-y-1 border-t border-sand-6 px-3 py-2.5">
+        {scopes.map(scope => (
           <ConsentScopeRow
             key={scope}
             scope={scope}
-            translate={props.translate}
             nested
           />
         ))}
@@ -156,17 +165,21 @@ function ConsentApiScopesAccordion(props: {
 export default function ConsentPage(props: {
   queryRef: PreloadedQuery<ConsentPageQuery>;
 }) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
   const [deviceResult, setDeviceResult] = useState<"authorized" | "denied" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"allow" | "deny" | null>(null);
+  const [redirectState, setRedirectState] = useState<{
+    url: string;
+    approved: boolean;
+  } | null>(null);
 
   const data = usePreloadedQuery<ConsentPageQuery>(consentPageQuery, props.queryRef);
-  usePageTitle(__("Authorize Application"));
+  usePageTitle(t("consentPage.pageTitle"));
 
   const { node: consent } = data;
 
-  const [approveConsent, isInFlight]
-    = useMutation<ConsentPageMutation>(approveConsentMutation);
+  const [approveConsent] = useMutation<ConsentPageMutation>(approveConsentMutation);
 
   const { oidcScopes, apiScopes } = useMemo(
     () => partitionScopes(consent.scopes ?? []),
@@ -174,13 +187,21 @@ export default function ConsentPage(props: {
   );
 
   const apiScopesSummary = useMemo(
-    () => `${__("API access")} (${apiScopes.length})`,
-    [__, apiScopes.length],
+    () => t("consentPage.apiAccess", { count: apiScopes.length }),
+    [t, apiScopes.length],
   );
+
+  useEffect(() => {
+    if (!redirectState) return;
+
+    window.location.href = redirectState.url;
+  }, [redirectState]);
 
   const handleAction = useCallback(
     (approved: boolean) => {
-      if (!consent.id) return;
+      if (!consent.id || pendingAction !== null) return;
+
+      setPendingAction(approved ? "allow" : "deny");
 
       approveConsent({
         variables: {
@@ -191,22 +212,24 @@ export default function ConsentPage(props: {
         },
         onCompleted: (response, errors) => {
           if (errors) {
-            toast({
-              title: __("Authorization failed"),
+            setPendingAction(null);
+            toast.add({
+              title: t("consentPage.errors.authorizationFailed"),
               description: formatError(
-                __("Something went wrong. Please try again."),
+                t("consentPage.errors.generic"),
                 errors,
               ),
-              variant: "error",
+              type: "error",
             });
             return;
           }
 
           if (!response.approveConsent) {
-            toast({
-              title: __("Authorization failed"),
-              description: __("Something went wrong. Please try again."),
-              variant: "error",
+            setPendingAction(null);
+            toast.add({
+              title: t("consentPage.errors.authorizationFailed"),
+              description: t("consentPage.errors.generic"),
+              type: "error",
             });
             return;
           }
@@ -217,83 +240,111 @@ export default function ConsentPage(props: {
           }
 
           if (response.approveConsent.redirectURL) {
-            window.location.href = response.approveConsent.redirectURL;
+            setRedirectState({
+              url: response.approveConsent.redirectURL,
+              approved,
+            });
           }
         },
         onError: (err) => {
-          toast({
-            title: __("Error"),
+          setPendingAction(null);
+          toast.add({
+            title: t("common.error"),
             description:
-              err.message || __("Something went wrong. Please try again."),
-            variant: "error",
+              err.message || t("consentPage.errors.generic"),
+            type: "error",
           });
         },
       });
     },
-    [consent, approveConsent, __, toast],
+    [consent, approveConsent, t, toast, pendingAction],
   );
 
   if (!consent.application || !consent.scopes) {
     return (
-      <div className="w-full max-w-md mx-auto pt-8 space-y-6 text-center">
-        <h1 className="text-2xl font-bold">{__("Invalid Request")}</h1>
-        <p className="text-txt-tertiary">
-          {__("This consent request is invalid or has expired.")}
-        </p>
+      <div className="flex w-full flex-col gap-4">
+        <Heading level={1} size={4} weight="medium" align="center" highContrast>
+          {t("consentPage.invalidRequest.title")}
+        </Heading>
+        <Callout color="red">
+          {t("consentPage.invalidRequest.description")}
+        </Callout>
       </div>
     );
   }
 
   if (deviceResult === "authorized") {
     return (
-      <div className="w-full max-w-md mx-auto pt-8 space-y-6 text-center">
-        <h1 className="text-2xl font-bold">{__("Device Authorized")}</h1>
-        <p className="text-txt-tertiary">
-          {__("Your device has been successfully authorized. You can close this window and return to your device.")}
-        </p>
+      <div className="flex w-full flex-col gap-4">
+        <Heading level={1} size={4} weight="medium" align="center" highContrast>
+          {t("consentPage.deviceAuthorized.title")}
+        </Heading>
+        <Text size={2} align="center" className="block">
+          {t("consentPage.deviceAuthorized.description")}
+        </Text>
       </div>
     );
   }
 
   if (deviceResult === "denied") {
     return (
-      <div className="w-full max-w-md mx-auto pt-8 space-y-6 text-center">
-        <h1 className="text-2xl font-bold">{__("Access Denied")}</h1>
-        <p className="text-txt-tertiary">
-          {__("You have denied the authorization request. You can close this window.")}
-        </p>
+      <div className="flex w-full flex-col gap-4">
+        <Heading level={1} size={4} weight="medium" align="center" highContrast>
+          {t("consentPage.accessDenied.title")}
+        </Heading>
+        <Callout color="amber">
+          {t("consentPage.accessDenied.description")}
+        </Callout>
+      </div>
+    );
+  }
+
+  if (redirectState) {
+    return (
+      <div className="flex w-full flex-col items-center gap-4">
+        <Spinner size={3} aria-label={t("consentPage.redirectingTo")} />
+        <div className="flex flex-col gap-1">
+          <Heading level={1} size={4} weight="medium" align="center" highContrast>
+            {redirectState.approved ? t("consentPage.authorizationComplete") : t("consentPage.accessDenied.title")}
+          </Heading>
+          <Text size={2} align="center" className="block">
+            {t("consentPage.redirectingTo")}
+            {" "}
+            <Text size={2} weight="medium" highContrast>
+              {consent.application.name}
+            </Text>
+            …
+          </Text>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="w-full max-w-md mx-auto pt-8 space-y-6">
-      <div className="space-y-2 text-center">
-        <div className="flex justify-center mb-4">
-          <div className="w-12 h-12 rounded-full flex items-center justify-center bg-level-1">
-            <IconLockOpen size={24} />
+    <div className="flex w-full flex-col gap-8">
+      <div className="flex flex-col gap-1">
+        <div className="mb-2 flex justify-center">
+          <div className="flex size-12 items-center justify-center rounded-full bg-sand-3 text-sand-12">
+            <LockOpenIcon className="size-6" />
           </div>
         </div>
-        <h1 className="text-2xl font-bold">
-          {__("Authorize")}
+        <Heading level={1} size={4} weight="medium" align="center" highContrast>
+          {t("consentPage.authorize")}
           {" "}
-          <span className="font-bold">{consent.application.name}</span>
-        </h1>
-        <p className="text-txt-tertiary text-sm">
-          {__(
-            "This application is requesting access to your account with the following permissions:",
-          )}
-        </p>
+          {consent.application.name}
+        </Heading>
+        <Text align="center" size={2} className="block">
+          {t("consentPage.description")}
+        </Text>
       </div>
 
-      <div className="space-y-2">
+      <div className="flex flex-col gap-2">
         {oidcScopes.length > 0 && (
-          <ul className="space-y-2">
+          <ul className="flex flex-col gap-2">
             {oidcScopes.map(scope => (
               <ConsentScopeRow
                 key={scope}
                 scope={scope}
-                translate={__}
               />
             ))}
           </ul>
@@ -301,32 +352,39 @@ export default function ConsentPage(props: {
 
         <ConsentApiScopesAccordion
           scopes={apiScopes}
-          translate={__}
           summaryLabel={apiScopesSummary}
         />
       </div>
 
       <div className="flex gap-3">
         <Button
-          variant="secondary"
-          className="flex-1 h-10"
-          disabled={isInFlight}
+          variant="soft"
+          color="neutral"
+          size={3}
+          className="flex-1"
+          loading={pendingAction === "deny"}
+          disabled={pendingAction !== null}
           onClick={() => handleAction(false)}
         >
-          {__("Deny")}
+          {t("consentPage.actions.deny")}
         </Button>
         <Button
-          className="flex-1 h-10"
-          disabled={isInFlight}
+          variant="solid"
+          color="neutral"
+          highContrast
+          size={3}
+          className="flex-1"
+          loading={pendingAction === "allow"}
+          disabled={pendingAction !== null}
           onClick={() => handleAction(true)}
         >
-          {isInFlight ? __("Authorizing...") : __("Allow")}
+          {t("consentPage.actions.allow")}
         </Button>
       </div>
 
-      <p className="text-center text-xs text-txt-tertiary">
-        {__("You can revoke access at any time from your account settings.")}
-      </p>
+      <Text align="center" size={1} className="block">
+        {t("consentPage.revokeNotice")}
+      </Text>
     </div>
   );
 }

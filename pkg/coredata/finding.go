@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -23,9 +29,14 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"go.gearno.de/kit/pg"
+	"go.gearno.de/x/ref"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/iam/policy"
 	"go.probo.inc/probo/pkg/page"
+)
+
+var (
+	_ Searchable = (*Finding)(nil)
 )
 
 type (
@@ -34,6 +45,7 @@ type (
 		OrganizationID     gid.GID         `db:"organization_id"`
 		Kind               FindingKind     `db:"kind"`
 		ReferenceID        string          `db:"reference_id"`
+		Title              string          `db:"title"`
 		Description        *string         `db:"description"`
 		Source             *string         `db:"source"`
 		IdentifiedOn       *time.Time      `db:"identified_on"`
@@ -71,6 +83,18 @@ func (f *Finding) CursorKey(field FindingOrderField) page.CursorKey {
 	}
 
 	panic(fmt.Sprintf("unsupported order by: %s", field))
+}
+
+func (f Finding) SearchText() []string {
+	return []string{
+		f.Title,
+		f.ReferenceID,
+		ref.UnrefOrZero(f.Description),
+		ref.UnrefOrZero(f.Source),
+		ref.UnrefOrZero(f.RootCause),
+		ref.UnrefOrZero(f.CorrectiveAction),
+		ref.UnrefOrZero(f.EffectivenessCheck),
+	}
 }
 
 func (f *Finding) AuthorizationAttributes(
@@ -124,6 +148,7 @@ SELECT
 	organization_id,
 	kind,
 	reference_id,
+	title,
 	description,
 	source,
 	identified_on,
@@ -161,6 +186,68 @@ LIMIT 1;
 	}
 
 	*f = finding
+
+	return nil
+}
+
+func (fs *Findings) LoadByIDs(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	findingIDs []gid.GID,
+) error {
+	if len(findingIDs) == 0 {
+		*fs = nil
+		return nil
+	}
+
+	q := `
+SELECT
+	id,
+	organization_id,
+	kind,
+	reference_id,
+	title,
+	description,
+	source,
+	identified_on,
+	root_cause,
+	corrective_action,
+	owner_id,
+	due_date,
+	status,
+	priority,
+	risk_id,
+	effectiveness_check,
+	created_at,
+	updated_at
+FROM
+	findings
+WHERE
+	%s
+	AND id = ANY(@finding_ids)
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"finding_ids": findingIDs}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query findings: %w", err)
+	}
+
+	items, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[Finding])
+	if err != nil {
+		return fmt.Errorf("cannot collect findings: %w", err)
+	}
+
+	*fs = items
+
+	if len(items) != len(gid.NewSet(findingIDs...)) {
+		return ErrResourceNotFound
+	}
 
 	return nil
 }
@@ -215,6 +302,7 @@ SELECT
 	organization_id,
 	kind,
 	reference_id,
+	title,
 	description,
 	source,
 	identified_on,
@@ -290,6 +378,7 @@ INSERT INTO findings (
 	organization_id,
 	kind,
 	reference_id,
+	title,
 	description,
 	source,
 	identified_on,
@@ -310,6 +399,7 @@ SELECT
 	@organization_id,
 	@kind,
 	'FND-' || LPAD(next_ref.next_num::TEXT, 3, '0'),
+	@title,
 	@description,
 	@source,
 	@identified_on,
@@ -332,6 +422,7 @@ RETURNING reference_id
 		"tenant_id":           scope.GetTenantID(),
 		"organization_id":     f.OrganizationID,
 		"kind":                f.Kind,
+		"title":               f.Title,
 		"description":         f.Description,
 		"source":              f.Source,
 		"identified_on":       f.IdentifiedOn,
@@ -363,6 +454,7 @@ func (f *Finding) Update(
 	q := `
 UPDATE findings
 SET
+	title = @title,
 	description = @description,
 	source = @source,
 	identified_on = @identified_on,
@@ -384,6 +476,7 @@ WHERE
 
 	args := pgx.StrictNamedArgs{
 		"id":                  f.ID,
+		"title":               f.Title,
 		"description":         f.Description,
 		"source":              f.Source,
 		"identified_on":       f.IdentifiedOn,
@@ -448,6 +541,7 @@ WITH f AS (
 		fi.organization_id,
 		fi.kind,
 		fi.reference_id,
+		fi.title,
 		fi.description,
 		fi.source,
 		fi.identified_on,
@@ -460,7 +554,8 @@ WITH f AS (
 		fi.risk_id,
 		fi.effectiveness_check,
 		fi.created_at,
-		fi.updated_at
+		fi.updated_at,
+		fi.search_vector
 	FROM
 		findings fi
 	INNER JOIN
@@ -473,6 +568,7 @@ SELECT
 	organization_id,
 	kind,
 	reference_id,
+	title,
 	description,
 	source,
 	identified_on,
@@ -525,7 +621,12 @@ func (fs *Findings) CountByAuditID(
 WITH f AS (
 	SELECT
 		fi.id,
-		fi.tenant_id
+		fi.tenant_id,
+		fi.kind,
+		fi.status,
+		fi.priority,
+		fi.owner_id,
+		fi.search_vector
 	FROM
 		findings fi
 	INNER JOIN
@@ -545,6 +646,142 @@ WHERE
 	q = fmt.Sprintf(q, scope.SQLFragment(), filter.SQLFragment())
 
 	args := pgx.StrictNamedArgs{"audit_id": auditID}
+	maps.Copy(args, scope.SQLArguments())
+	maps.Copy(args, filter.SQLArguments())
+
+	row := conn.QueryRow(ctx, q, args)
+
+	var count int
+
+	err := row.Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("cannot count findings: %w", err)
+	}
+
+	return count, nil
+}
+
+func (fs *Findings) LoadByTaskID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	taskID gid.GID,
+	cursor *page.Cursor[FindingOrderField],
+	filter *FindingFilter,
+) error {
+	q := `
+WITH f AS (
+	SELECT
+		fi.id,
+		fi.tenant_id,
+		fi.organization_id,
+		fi.kind,
+		fi.reference_id,
+		fi.title,
+		fi.description,
+		fi.source,
+		fi.identified_on,
+		fi.root_cause,
+		fi.corrective_action,
+		fi.owner_id,
+		fi.due_date,
+		fi.status,
+		fi.priority,
+		fi.risk_id,
+		fi.effectiveness_check,
+		fi.created_at,
+		fi.updated_at,
+		fi.search_vector
+	FROM
+		findings fi
+	INNER JOIN
+		findings_tasks ft ON fi.id = ft.finding_id
+	WHERE
+		ft.task_id = @task_id
+)
+SELECT
+	id,
+	organization_id,
+	kind,
+	reference_id,
+	title,
+	description,
+	source,
+	identified_on,
+	root_cause,
+	corrective_action,
+	owner_id,
+	due_date,
+	status,
+	priority,
+	risk_id,
+	effectiveness_check,
+	created_at,
+	updated_at
+FROM
+	f
+WHERE %s
+	AND %s
+	AND %s
+`
+	q = fmt.Sprintf(q, scope.SQLFragment(), filter.SQLFragment(), cursor.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"task_id": taskID}
+	maps.Copy(args, scope.SQLArguments())
+	maps.Copy(args, filter.SQLArguments())
+	maps.Copy(args, cursor.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query findings: %w", err)
+	}
+
+	findings, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[Finding])
+	if err != nil {
+		return fmt.Errorf("cannot collect findings: %w", err)
+	}
+
+	*fs = findings
+
+	return nil
+}
+
+func (fs *Findings) CountByTaskID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	taskID gid.GID,
+	filter *FindingFilter,
+) (int, error) {
+	q := `
+WITH f AS (
+	SELECT
+		fi.id,
+		fi.tenant_id,
+		fi.kind,
+		fi.status,
+		fi.priority,
+		fi.owner_id,
+		fi.search_vector
+	FROM
+		findings fi
+	INNER JOIN
+		findings_tasks ft ON fi.id = ft.finding_id
+	WHERE
+		ft.task_id = @task_id
+)
+SELECT
+	COUNT(id)
+FROM
+	f
+WHERE
+	%s
+	AND %s
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment(), filter.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"task_id": taskID}
 	maps.Copy(args, scope.SQLArguments())
 	maps.Copy(args, filter.SQLArguments())
 
@@ -663,6 +900,32 @@ WHERE
 	)
 	if err != nil {
 		return fmt.Errorf("cannot clear finding list document references: %w", err)
+	}
+
+	return nil
+}
+
+func (c *Findings) DeleteByOrganizationID(
+	ctx context.Context,
+	conn pg.Tx,
+	scope Scoper,
+	organizationID gid.GID,
+) error {
+	q := `
+DELETE FROM findings
+WHERE
+	%s
+	AND organization_id = @organization_id
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"organization_id": organizationID}
+	maps.Copy(args, scope.SQLArguments())
+
+	_, err := conn.Exec(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot delete findings: %w", err)
 	}
 
 	return nil

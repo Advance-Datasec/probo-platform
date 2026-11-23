@@ -1,28 +1,43 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
-import { Badge, Checkbox, useToast } from "@probo/ui";
+import { Badge, Checkbox } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import * as Popover from "@radix-ui/react-popover";
 import { useRef, useState } from "react";
-import { useMutation } from "react-relay";
+import { useTranslation } from "react-i18next";
+import { useFragment, useMutation } from "react-relay";
 import { graphql } from "relay-runtime";
 
+import type { EntryFlagSelect_entry$key } from "#/__generated__/core/EntryFlagSelect_entry.graphql";
 import type { AccessReviewEntryFlag, EntryFlagSelectMutation } from "#/__generated__/core/EntryFlagSelectMutation.graphql";
 
-import { flagBadgeVariant, flagGroups, flagLabel } from "./accessReviewHelpers";
+import { flagBadgeVariant, flagGroups } from "./accessReviewHelpers";
+
+const entryFlagSelectFragment = graphql`
+  fragment EntryFlagSelect_entry on AccessReviewEntry {
+    id
+    flags
+  }
+`;
 
 const mutation = graphql`
   mutation EntryFlagSelectMutation($input: FlagAccessReviewEntryInput!) {
@@ -37,13 +52,14 @@ const mutation = graphql`
 `;
 
 type Props = {
-  entryId: string;
-  currentFlags: readonly AccessReviewEntryFlag[];
+  entryKey: EntryFlagSelect_entry$key;
 };
 
-export function EntryFlagSelect({ entryId, currentFlags }: Props) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+export function EntryFlagSelect({ entryKey }: Props) {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const entry = useFragment(entryFlagSelectFragment, entryKey);
+  const currentFlags = entry.flags;
   const [open, setOpen] = useState(false);
   const [localFlags, setLocalFlags] = useState<AccessReviewEntryFlag[]>([...currentFlags]);
   const openedWithRef = useRef<readonly AccessReviewEntryFlag[]>(currentFlags);
@@ -73,30 +89,30 @@ export function EntryFlagSelect({ entryId, currentFlags }: Props) {
         flagEntry({
           variables: {
             input: {
-              accessReviewEntryId: entryId,
+              accessReviewEntryId: entry.id,
               flags: localFlags,
             },
           },
           onCompleted(_, errors) {
             if (errors?.length) {
-              toast({
-                title: __("Error"),
+              toast.add({
+                title: t("entryFlagSelect.messages.error"),
                 description: formatError(
-                  __("Failed to flag entry"),
+                  t("entryFlagSelect.errors.update"),
                   errors,
                 ),
-                variant: "error",
+                type: "error",
               });
             }
           },
           onError(error) {
-            toast({
-              title: __("Error"),
+            toast.add({
+              title: t("entryFlagSelect.messages.error"),
               description: formatError(
-                __("Failed to flag entry"),
+                t("entryFlagSelect.errors.update"),
                 error,
               ),
-              variant: "error",
+              type: "error",
             });
           },
         });
@@ -123,7 +139,7 @@ export function EntryFlagSelect({ entryId, currentFlags }: Props) {
                 <div className="flex flex-wrap gap-1">
                   {displayFlags.map(f => (
                     <Badge key={f} variant={flagBadgeVariant(f)} size="sm">
-                      {flagLabel(f)}
+                      {t(`entryFlagSelect.flags.${f.toLowerCase()}`)}
                     </Badge>
                   ))}
                 </div>
@@ -138,7 +154,7 @@ export function EntryFlagSelect({ entryId, currentFlags }: Props) {
           {flagGroups.map(group => (
             <div key={group.label} className="mb-2 last:mb-0">
               <div className="px-2 py-1 text-xs font-semibold text-txt-tertiary uppercase tracking-wider">
-                {__(group.label)}
+                {t(`entryFlagSelect.groups.${group.label.toLowerCase()}`)}
               </div>
               {group.flags.map(flag => (
                 <label
@@ -149,7 +165,9 @@ export function EntryFlagSelect({ entryId, currentFlags }: Props) {
                     checked={localFlags.includes(flag.value)}
                     onChange={() => toggleFlag(flag.value)}
                   />
-                  <span className="text-sm text-txt-primary">{__(flag.label)}</span>
+                  <span className="text-sm text-txt-primary">
+                    {t(`entryFlagSelect.flags.${flag.value.toLowerCase()}`)}
+                  </span>
                 </label>
               ))}
             </div>

@@ -14,12 +14,28 @@ input FrameworkOrder
     field: FrameworkOrderField!
 }
 
-type Framework implements Node {
+type Framework implements Node & Taggable {
+    tags(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: TagOrder
+    ): TagConnection! @goField(forceResolver: true)
+
     id: ID!
     name: String!
     description: String
 
     organization: Organization! @goField(forceResolver: true)
+
+    audits(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: AuditOrder
+    ): AuditConnection! @goField(forceResolver: true)
 
     controls(
         first: Int

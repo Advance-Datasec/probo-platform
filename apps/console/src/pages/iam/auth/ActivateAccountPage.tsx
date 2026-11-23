@@ -1,54 +1,77 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatError, type GraphQLError } from "@probo/helpers";
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
-import { useToast } from "@probo/ui";
-import { useCallback, useEffect, useRef } from "react";
+import { Button } from "@probo/ui/src/v2/Button/Button";
+import { Link } from "@probo/ui/src/v2/Link/Link";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
+import { Heading } from "@probo/ui/src/v2/typography/Heading";
+import { Text } from "@probo/ui/src/v2/typography/Text";
+import { useCallback, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation } from "react-relay";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import { graphql } from "relay-runtime";
 
 import type { ActivateAccountPageMutation$data, ActivateAccountPageMutation } from "#/__generated__/iam/ActivateAccountPageMutation.graphql";
-import { useSafeContinueUrl } from "#/hooks/useSafeContinueUrl";
+import { useSafeContinueURL } from "#/hooks/useSafeContinueURL";
 
 const activateAccountMutation = graphql`
   mutation ActivateAccountPageMutation(
-    $input: ActivateAccountInput!
+    $input: ActivateAccountFromInvitationInput!
   ) {
-    activateAccount(input: $input) {
-      createPasswordToken
+    activateAccountFromInvitation(input: $input) {
       ssoLoginUrl
     }
   }
 `;
 
 export default function ActivateAccountPage() {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const submittedRef = useRef<boolean>(false);
-  const safeContinueUrl = useSafeContinueUrl();
+  const submittedRef = useRef(false);
+  const safeContinueUrl = useSafeContinueURL();
+  const token = searchParams.get("token")?.trim() ?? "";
 
-  usePageTitle(__("Activate Account"));
+  usePageTitle(t("activateAccountPage.pageTitle"));
 
-  const [activateAccount] = useMutation<ActivateAccountPageMutation>(activateAccountMutation);
+  const [activateAccount, isActivating] = useMutation<ActivateAccountPageMutation>(activateAccountMutation);
 
-  const handleActivateAccount = useCallback((token: string) => {
-    if (submittedRef.current) return;
+  const handleActivateAccount = useCallback(() => {
+    if (submittedRef.current) {
+      return;
+    }
+
+    if (token === "") {
+      toast.add({
+        title: t("activateAccountPage.errors.activationFailed"),
+        description: t("activateAccountPage.errors.missingToken"),
+        type: "error",
+      });
+      return;
+    }
+
+    submittedRef.current = true;
 
     activateAccount({
       variables: {
@@ -57,7 +80,10 @@ export default function ActivateAccountPage() {
       onCompleted: (response: ActivateAccountPageMutation$data, errors: GraphQLError[] | null) => {
         if (errors) {
           for (const err of errors) {
-            if (err.extensions?.code === "ACCOUNT_ALREADY_ACTIVATED") {
+            if (
+              err.extensions?.code === "ACCOUNT_ALREADY_ACTIVATED"
+              || err.extensions?.code === "ACTIVATION_NOT_REQUIRED"
+            ) {
               void navigate({
                 pathname: safeContinueUrl.pathname,
                 search: safeContinueUrl.search,
@@ -65,49 +91,34 @@ export default function ActivateAccountPage() {
               return;
             }
           }
-          toast({
-            title: __("Activation failed"),
-            description: formatError(__("Activation failed"), errors),
-            variant: "error",
+
+          submittedRef.current = false;
+          toast.add({
+            title: t("activateAccountPage.errors.activationFailed"),
+            description: formatError(t("activateAccountPage.errors.activationFailed"), errors),
+            type: "error",
           });
 
           return;
         }
 
-        toast({
-          title: __("Success"),
-          description: __(
-            "Account activated successfully.",
-          ),
-          variant: "success",
+        toast.add({
+          title: t("common.success"),
+          description: t("activateAccountPage.messages.activated"),
+          type: "success",
         });
 
-        const { activateAccount } = response;
+        const { activateAccountFromInvitation } = response;
 
-        if (!activateAccount) {
+        if (!activateAccountFromInvitation) {
           throw new Error("mutation data missing");
         }
 
-        if (activateAccount.ssoLoginUrl) {
-          const url = new URL(activateAccount.ssoLoginUrl);
+        if (activateAccountFromInvitation.ssoLoginUrl) {
+          const url = new URL(activateAccountFromInvitation.ssoLoginUrl);
           url.searchParams.set("continue", safeContinueUrl.toString());
 
           window.location.href = url.toString();
-          return;
-        }
-
-        if (activateAccount.createPasswordToken) {
-          const search = new URLSearchParams([
-            ["token", activateAccount.createPasswordToken],
-            ["continue", safeContinueUrl.toString()],
-          ]);
-          void navigate(
-            {
-              pathname: "/auth/create-password",
-              search: "?" + search.toString(),
-            },
-            { replace: true },
-          );
           return;
         }
 
@@ -118,39 +129,43 @@ export default function ActivateAccountPage() {
         }, { replace: true });
       },
       onError: (e) => {
-        toast({
-          title: __("Activation failed"),
+        submittedRef.current = false;
+        toast.add({
+          title: t("activateAccountPage.errors.activationFailed"),
           description: e.message,
-          variant: "error",
+          type: "error",
         });
       },
     });
-  }, [__, toast, activateAccount, navigate, safeContinueUrl]);
-
-  useEffect(() => {
-    const token = searchParams.get("token");
-    if (!submittedRef.current && token) {
-      void handleActivateAccount(token.trim());
-      submittedRef.current = true;
-    }
-  }, [handleActivateAccount, searchParams]);
+  }, [t, toast, activateAccount, navigate, safeContinueUrl, token]);
 
   return (
-    <div className="space-y-6 w-full max-w-md mx-auto pt-8">
-      <div className="space-y-2 text-center">
-        <h1 className="text-3xl font-bold">{__("Account Activation")}</h1>
-        <p className="text-txt-tertiary">
-          {__("Activating your account…")}
-        </p>
+    <div className="flex w-full flex-col gap-8">
+      <div className="flex flex-col gap-1">
+        <Heading level={1} size={4} weight="medium" align="center" highContrast>
+          {t("activateAccountPage.title")}
+        </Heading>
+        <Text size={2} align="center" className="block">
+          {t("activateAccountPage.description")}
+        </Text>
       </div>
-      <div className="text-center mt-6 text-sm text-txt-secondary">
-        <Link
-          to="/auth/login"
-          className="underline hover:text-txt-primary"
-        >
-          {__("Go back")}
+      <Button
+        type="button"
+        variant="solid"
+        color="neutral"
+        highContrast
+        size={3}
+        className="w-full"
+        loading={isActivating}
+        onClick={handleActivateAccount}
+      >
+        {t("activateAccountPage.actions.continue")}
+      </Button>
+      <Text align="center" size={2} className="block">
+        <Link to="/auth/login">
+          {t("activateAccountPage.actions.goBack")}
         </Link>
-      </div>
+      </Text>
     </div>
   );
 }

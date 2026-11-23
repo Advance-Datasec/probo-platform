@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package filevalidation
 
@@ -19,6 +25,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"go.probo.inc/probo/pkg/validator"
 )
 
 const (
@@ -64,7 +72,7 @@ var FileTypes = []FileType{
 
 	// Text types
 	{MimeType: "text/markdown", Extensions: []string{".md"}, Category: CategoryText},
-	{MimeType: "text/plain", Extensions: []string{".txt"}, Category: CategoryText},
+	{MimeType: "text/plain", Extensions: []string{".txt", ".log"}, Category: CategoryText},
 	{MimeType: "text/x-log", Extensions: []string{".log"}, Category: CategoryText},
 	{MimeType: "text/uri-list", Extensions: []string{".uri"}, Category: CategoryText},
 	{MimeType: "text/uri-list; charset=utf-8", Extensions: []string{".uri"}, Category: CategoryText},
@@ -82,6 +90,8 @@ var FileTypes = []FileType{
 	{MimeType: "text/json", Extensions: []string{".json"}, Category: CategoryData},
 	{MimeType: "text/csv", Extensions: []string{".csv"}, Category: CategoryData},
 	{MimeType: "application/csv", Extensions: []string{".csv"}, Category: CategoryData},
+	// Windows browsers report .csv as the legacy Excel type.
+	{MimeType: "application/vnd.ms-excel", Extensions: []string{".csv"}, Category: CategoryData},
 
 	// Video types
 	{MimeType: "video/mp4", Extensions: []string{".mp4"}, Category: CategoryVideo},
@@ -89,6 +99,29 @@ var FileTypes = []FileType{
 	{MimeType: "video/quicktime", Extensions: []string{".mov"}, Category: CategoryVideo},
 	{MimeType: "video/x-msvideo", Extensions: []string{".avi"}, Category: CategoryVideo},
 	{MimeType: "video/webm", Extensions: []string{".webm"}, Category: CategoryVideo},
+}
+
+// Error is a file rejected by Validate. Callers should report it to the
+// client; it is not an internal failure. Code is the validation cause.
+type Error struct {
+	message string
+	code    validator.ErrorCode
+}
+
+func (e *Error) Error() string {
+	return e.message
+}
+
+// Code returns the validation cause for this rejection.
+func (e *Error) Code() validator.ErrorCode {
+	return e.code
+}
+
+func validationError(code validator.ErrorCode, format string, args ...any) error {
+	return &Error{
+		message: fmt.Sprintf(format, args...),
+		code:    code,
+	}
 }
 
 // FileValidator is a configurable file validator
@@ -108,6 +141,18 @@ type FileValidator struct {
 
 type Option func(v *FileValidator) *FileValidator
 
+func addFileType(v *FileValidator, fileType FileType) {
+	v.AllowedMimeTypes[fileType.MimeType] = true
+
+	for _, ext := range fileType.Extensions {
+		if v.AllowedExtensions[ext] == nil {
+			v.AllowedExtensions[ext] = []string{}
+		}
+
+		v.AllowedExtensions[ext] = append(v.AllowedExtensions[ext], fileType.MimeType)
+	}
+}
+
 func WithCategories(categories ...string) Option {
 	return func(v *FileValidator) *FileValidator {
 		v.Categories = categories
@@ -119,15 +164,42 @@ func WithCategories(categories ...string) Option {
 
 		for _, fileType := range FileTypes {
 			if categoryMap[fileType.Category] {
-				v.AllowedMimeTypes[fileType.MimeType] = true
-				for _, ext := range fileType.Extensions {
-					if v.AllowedExtensions[ext] == nil {
-						v.AllowedExtensions[ext] = []string{}
-					}
-
-					v.AllowedExtensions[ext] = append(v.AllowedExtensions[ext], fileType.MimeType)
-				}
+				addFileType(v, fileType)
 			}
+		}
+
+		return v
+	}
+}
+
+func WithMimeTypes(mimeTypes ...string) Option {
+	return func(v *FileValidator) *FileValidator {
+		wanted := make(map[string]bool, len(mimeTypes))
+		for _, mimeType := range mimeTypes {
+			wanted[mimeType] = true
+		}
+
+		found := make(map[string]bool, len(wanted))
+
+		for _, fileType := range FileTypes {
+			if !wanted[fileType.MimeType] {
+				continue
+			}
+
+			found[fileType.MimeType] = true
+			addFileType(v, fileType)
+		}
+
+		unknown := make([]string, 0, len(wanted))
+		for mimeType := range wanted {
+			if !found[mimeType] {
+				unknown = append(unknown, mimeType)
+			}
+		}
+
+		if len(unknown) > 0 {
+			slices.Sort(unknown)
+			panic("filevalidation: unknown MIME types: " + strings.Join(unknown, ", "))
 		}
 
 		return v
@@ -156,40 +228,83 @@ func NewValidator(opts ...Option) *FileValidator {
 	return v
 }
 
+// NewAttachmentValidator returns the validator used for attachment uploads.
+func NewAttachmentValidator() *FileValidator {
+	return NewValidator(
+		WithCategories(
+			CategoryDocument,
+			CategorySpreadsheet,
+			CategoryPresentation,
+			CategoryText,
+			CategoryImage,
+			CategoryData,
+		),
+	)
+}
+
+// ContentTypeForAttachment returns the MIME type accepted for filename.
+func ContentTypeForAttachment(filename string) (string, bool) {
+	return NewAttachmentValidator().ContentTypeForFilename(filename)
+}
+
 // WithMaxFileSize sets the maximum file size and returns the validator
 func (v *FileValidator) WithMaxFileSize(maxSize int64) *FileValidator {
 	v.MaxFileSize = maxSize
 	return v
 }
 
+// ContentTypeForFilename returns the first allowed MIME type for filename's extension.
+func (v *FileValidator) ContentTypeForFilename(filename string) (string, bool) {
+	ext := strings.ToLower(filepath.Ext(filename))
+	if ext == "" {
+		return "", false
+	}
+
+	contentTypes := v.AllowedExtensions[ext]
+	if len(contentTypes) == 0 {
+		return "", false
+	}
+
+	return contentTypes[0], true
+}
+
 // Validate validates that the file meets the configured requirements
 func (v *FileValidator) Validate(filename string, contentType string, size int64) error {
 	if size == 0 {
-		return fmt.Errorf("file can't be empty")
+		return validationError(validator.ErrorCodeOutOfRange, "file can't be empty")
 	}
 
 	if size > v.MaxFileSize {
-		return fmt.Errorf("file size exceeds maximum allowed size of %d bytes", v.MaxFileSize)
+		return validationError(
+			validator.ErrorCodeOutOfRange,
+			"file size exceeds maximum allowed size of %d bytes",
+			v.MaxFileSize,
+		)
 	}
 
 	if !v.AllowedMimeTypes[contentType] {
-		return fmt.Errorf("content type %q is not allowed", contentType)
+		return validationError(validator.ErrorCodeInvalidFormat, "content type %q is not allowed", contentType)
 	}
 
 	ext := strings.ToLower(filepath.Ext(filename))
 	if ext == "" {
-		return fmt.Errorf("file has no extension")
+		return validationError(validator.ErrorCodeInvalidFormat, "file has no extension")
 	}
 
 	allowedTypes, extAllowed := v.AllowedExtensions[ext]
 	if !extAllowed {
-		return fmt.Errorf("file extension %q is not allowed", ext)
+		return validationError(validator.ErrorCodeInvalidFormat, "file extension %q is not allowed", ext)
 	}
 
 	validType := slices.Contains(allowedTypes, contentType)
 
 	if !validType {
-		return fmt.Errorf("content type %q does not match extension %q", contentType, ext)
+		return validationError(
+			validator.ErrorCodeInvalidFormat,
+			"content type %q does not match extension %q",
+			contentType,
+			ext,
+		)
 	}
 
 	return nil

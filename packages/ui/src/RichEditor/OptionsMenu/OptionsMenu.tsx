@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
-// Use of this source code is governed by the ISC license
+// Use of this source code is governed by the MIT license
 // that can be found in the LICENSE file.
 
 import {
@@ -32,9 +32,10 @@ export type OptionsMenuFloating = {
 
 type OptionsMenuProps = {
   editor: Editor;
+  compact?: boolean;
 };
 
-export function OptionsMenu({ editor }: OptionsMenuProps) {
+export function OptionsMenu({ editor, compact = false }: OptionsMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [triggerEl, setTriggerEl] = useState<Element | null>(null);
   const [dropdownEl, setDropdownEl] = useState<HTMLElement | null>(null);
@@ -67,6 +68,7 @@ export function OptionsMenu({ editor }: OptionsMenuProps) {
     <>
       <OptionsMenuTrigger
         editor={editor}
+        compact={compact}
         hoveredBlock={hoveredBlock}
         setHoveredBlock={setHoveredBlock}
         setTriggerEl={setTriggerEl}

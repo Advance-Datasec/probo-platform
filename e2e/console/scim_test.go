@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_test
 
@@ -32,6 +38,7 @@ type scimClient struct {
 	client   *http.Client
 	token    string
 	endpoint string
+	configID string
 }
 
 func newSCIMClient(t testing.TB, owner *testutil.Client) *scimClient {
@@ -63,19 +70,19 @@ func newSCIMClient(t testing.TB, owner *testutil.Client) *scimClient {
 	require.NoError(t, err, "GraphQL request failed")
 
 	require.NotEmpty(t, result.CreateSCIMConfiguration.Token)
+	require.NotEmpty(t, result.CreateSCIMConfiguration.ScimConfiguration.ID)
 
 	return &scimClient{
 		t:        t,
 		client:   &http.Client{},
 		token:    result.CreateSCIMConfiguration.Token,
 		endpoint: testutil.GetBaseURL() + "/api/connect/v1/scim/2.0",
+		configID: result.CreateSCIMConfiguration.ScimConfiguration.ID,
 	}
 }
 
-func (sc *scimClient) createUser(userName, fullName, externalID string, active bool) (string, int) {
-	sc.t.Helper()
-
-	payload := map[string]any{
+func buildUserPayload(userName, fullName, externalID string, active bool) map[string]any {
+	return map[string]any{
 		"schemas":    []string{"urn:ietf:params:scim:schemas:core:2.0:User"},
 		"userName":   userName,
 		"active":     active,
@@ -89,8 +96,12 @@ func (sc *scimClient) createUser(userName, fullName, externalID string, active b
 			{"value": userName, "primary": true},
 		},
 	}
+}
 
-	return sc.doRequest("POST", "/Users", payload)
+func (sc *scimClient) createUser(userName, fullName, externalID string, active bool) (string, int) {
+	sc.t.Helper()
+
+	return sc.doRequest("POST", "/Users", buildUserPayload(userName, fullName, externalID, active))
 }
 
 func (sc *scimClient) listUsers() (string, int) {
@@ -106,6 +117,23 @@ func (sc *scimClient) getUser(id string) (string, int) {
 func (sc *scimClient) deleteUser(id string) (string, int) {
 	sc.t.Helper()
 	return sc.doRequest("DELETE", "/Users/"+id, nil)
+}
+
+func (sc *scimClient) replaceUser(id, userName, fullName, externalID string, active bool) (string, int) {
+	sc.t.Helper()
+
+	return sc.doRequest("PUT", "/Users/"+id, buildUserPayload(userName, fullName, externalID, active))
+}
+
+func (sc *scimClient) patchUser(id string, operations []map[string]any) (string, int) {
+	sc.t.Helper()
+
+	payload := map[string]any{
+		"schemas":    []string{"urn:ietf:params:scim:api:messages:2.0:PatchOp"},
+		"Operations": operations,
+	}
+
+	return sc.doRequest("PATCH", "/Users/"+id, payload)
 }
 
 func (sc *scimClient) doRequest(method, path string, payload any) (string, int) {
@@ -167,6 +195,23 @@ func TestSCIM_CreateUser(t *testing.T) {
 		require.Equal(t, http.StatusCreated, status)
 
 		_, status = sc.createUser(email, "Dup User", "ext-dup-1", true)
+		assert.Equal(t, http.StatusConflict, status)
+	})
+
+	t.Run("deactivated user still returns 409", func(t *testing.T) {
+		t.Parallel()
+
+		email := factory.SafeEmail()
+		body, status := sc.createUser(email, "Inactive Dup", "ext-dup-inactive", true)
+		require.Equal(t, http.StatusCreated, status, body)
+
+		var created map[string]any
+		require.NoError(t, json.Unmarshal([]byte(body), &created))
+
+		_, status = sc.replaceUser(created["id"].(string), email, "Inactive Dup", "ext-dup-inactive", false)
+		require.Equal(t, http.StatusOK, status)
+
+		_, status = sc.createUser(email, "Inactive Dup", "ext-dup-inactive", true)
 		assert.Equal(t, http.StatusConflict, status)
 	})
 }
@@ -242,6 +287,42 @@ func TestSCIM_ExternalIDFallback(t *testing.T) {
 		_, status = sc.createUser(email, "User B", "ext-b-"+factory.SafeName(""), true)
 		assert.Equal(t, http.StatusConflict, status)
 	})
+
+	t.Run("replace transfers external ID from another profile", func(t *testing.T) {
+		t.Parallel()
+
+		googleID := "google-" + factory.SafeName("")
+		oldEmail := factory.SafeEmail()
+		newEmail := factory.SafeEmail()
+
+		body, status := sc.createUser(oldEmail, "Old Email User", googleID, true)
+		require.Equal(t, http.StatusCreated, status, body)
+
+		var oldUser map[string]any
+		require.NoError(t, json.Unmarshal([]byte(body), &oldUser))
+		oldID := oldUser["id"].(string)
+
+		body, status = sc.createUser(newEmail, "New Email User", "other-"+factory.SafeName(""), true)
+		require.Equal(t, http.StatusCreated, status, body)
+
+		var newUser map[string]any
+		require.NoError(t, json.Unmarshal([]byte(body), &newUser))
+		newID := newUser["id"].(string)
+
+		body, status = sc.replaceUser(newID, newEmail, "New Email User", googleID, true)
+		require.Equal(t, http.StatusOK, status, body)
+
+		var replaced map[string]any
+		require.NoError(t, json.Unmarshal([]byte(body), &replaced))
+		assert.Equal(t, googleID, replaced["externalId"])
+
+		body, status = sc.getUser(oldID)
+		require.Equal(t, http.StatusOK, status, body)
+
+		var oldFetched map[string]any
+		require.NoError(t, json.Unmarshal([]byte(body), &oldFetched))
+		assert.NotEqual(t, googleID, oldFetched["externalId"])
+	})
 }
 
 func TestSCIM_DeleteUser(t *testing.T) {
@@ -264,6 +345,79 @@ func TestSCIM_DeleteUser(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, status)
 }
 
+// TestSCIM_DeleteUser_ArchivesWhenProfileInUse verifies that deleting a SCIM
+// user whose profile is still referenced by a completed document version
+// signature archives the profile (state INACTIVE) instead of failing. The
+// signature's RESTRICT foreign key makes the hard delete fail; the service must
+// fall back to deactivation and return 204, not surface an opaque 500.
+// The profile stays SCIM-managed and readable by id, but leaves the user
+// list so the next sync does not delete it again.
+func TestSCIM_DeleteUser_ArchivesWhenProfileInUse(t *testing.T) {
+	t.Parallel()
+
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	signer := testutil.NewClientInOrg(t, testutil.RoleEmployee, owner)
+	sc := newSCIMClient(t, owner)
+
+	// The signer signs a published document version, creating a completed
+	// signature that references the signer's profile via a RESTRICT FK.
+	docID, _ := createTestDocument(t, owner)
+	approveTestDocument(t, owner, docID)
+	versionID := latestDocumentVersionID(t, owner, docID)
+
+	requestDocumentSignature(t, owner, versionID, signer.GetProfileID().String())
+
+	_, state, _ := signDocumentVersion(t, signer, versionID)
+	require.Equal(t, "SIGNED", state)
+
+	// Enroll the signer's existing profile into SCIM so it becomes SCIM-managed
+	// (same underlying profile ID, source flipped to SCIM).
+	body, status := sc.createUser(signer.GetEmail(), "Signer User", "ext-signed-1", true)
+	require.Equal(t, http.StatusCreated, status, body)
+
+	var enrolled map[string]any
+	require.NoError(t, json.Unmarshal([]byte(body), &enrolled))
+	scimUserID := enrolled["id"].(string)
+	require.Equal(t, signer.GetProfileID().String(), scimUserID)
+
+	// Deleting the in-use profile must archive it, not 500.
+	body, status = sc.deleteUser(scimUserID)
+	require.Equal(t, http.StatusNoContent, status, body)
+
+	// The profile is archived (deactivated), not hard-deleted: it is still
+	// present but inactive, and the completed signature is preserved.
+	body, status = sc.getUser(scimUserID)
+	require.Equal(t, http.StatusOK, status, body)
+
+	var fetched map[string]any
+	require.NoError(t, json.Unmarshal([]byte(body), &fetched))
+	assert.Equal(t, false, fetched["active"], "profile should be archived (inactive), not deleted")
+
+	body, status = sc.listUsers()
+	require.Equal(t, http.StatusOK, status, body)
+	assert.NotContains(t, body, scimUserID)
+
+	body, status = sc.deleteUser(scimUserID)
+	require.Equal(t, http.StatusNoContent, status, body)
+
+	body, status = sc.getUser(scimUserID)
+	require.Equal(t, http.StatusOK, status, body)
+	require.NoError(t, json.Unmarshal([]byte(body), &fetched))
+	assert.Equal(t, false, fetched["active"])
+
+	body, status = sc.createUser(signer.GetEmail(), "Signer User", "ext-signed-1", true)
+	require.Equal(t, http.StatusCreated, status, body)
+
+	var restored map[string]any
+	require.NoError(t, json.Unmarshal([]byte(body), &restored))
+	assert.Equal(t, scimUserID, restored["id"])
+	assert.Equal(t, true, restored["active"])
+
+	body, status = sc.listUsers()
+	require.Equal(t, http.StatusOK, status, body)
+	assert.Contains(t, body, scimUserID)
+}
+
 func TestSCIM_Unauthorized(t *testing.T) {
 	t.Parallel()
 
@@ -277,4 +431,106 @@ func TestSCIM_Unauthorized(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+// A SCIM configuration refuses a provider that cannot bridge, and the
+// refusal must not commit a bridgeless configuration: configurations are
+// unique per organization, so a leftover one would block every retry.
+// An access-review source on the same connector is not the reason.
+func TestSCIMConfiguration_RefusesUnsupportedProvider(t *testing.T) {
+	t.Parallel()
+
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	orgID := owner.GetOrganizationID().String()
+
+	var connectorResult struct {
+		CreateAPIKeyConnector struct {
+			Connector struct {
+				ID string `json:"id"`
+			} `json:"connector"`
+		} `json:"createAPIKeyConnector"`
+	}
+
+	err := owner.Execute(`
+		mutation($input: CreateAPIKeyConnectorInput!) {
+			createAPIKeyConnector(input: $input) {
+				connector { id }
+			}
+		}
+	`, map[string]any{
+		"input": map[string]any{
+			"organizationId": orgID,
+			"name":           "Test",
+			"provider":       "BREX",
+			"apiKey":         "bxt_test-key-brex-scim-refusal",
+		},
+	}, &connectorResult)
+	require.NoError(t, err)
+
+	connectorID := connectorResult.CreateAPIKeyConnector.Connector.ID
+
+	var sourceResult struct {
+		CreateAccessReviewSources struct {
+			Results []struct {
+				Created bool `json:"created"`
+			} `json:"results"`
+		} `json:"createAccessReviewSources"`
+	}
+
+	err = owner.Execute(`
+		mutation($input: CreateAccessReviewSourcesInput!) {
+			createAccessReviewSources(input: $input) {
+				results { created }
+			}
+		}
+	`, map[string]any{
+		"input": map[string]any{
+			"organizationId": orgID,
+			"sources": []any{
+				map[string]any{
+					"connectorId": connectorID,
+					"name":        "Brex held by a source",
+				},
+			},
+		},
+	}, &sourceResult)
+	require.NoError(t, err)
+	require.Len(t, sourceResult.CreateAccessReviewSources.Results, 1)
+	require.True(t, sourceResult.CreateAccessReviewSources.Results[0].Created)
+
+	const createConfigQuery = `
+		mutation($input: CreateSCIMConfigurationInput!) {
+			createSCIMConfiguration(input: $input) {
+				scimConfiguration { id }
+				token
+			}
+		}
+	`
+
+	var configResult struct {
+		CreateSCIMConfiguration struct {
+			ScimConfiguration struct {
+				ID string `json:"id"`
+			} `json:"scimConfiguration"`
+			Token string `json:"token"`
+		} `json:"createSCIMConfiguration"`
+	}
+
+	err = owner.ExecuteConnect(createConfigQuery, map[string]any{
+		"input": map[string]any{
+			"organizationId": orgID,
+			"connectorId":    connectorID,
+		},
+	}, &configResult)
+	require.ErrorContains(t, err, "not supported for SCIM bridge")
+
+	// The refused bind rolled the configuration back with it: the same
+	// mutation without a connector must succeed.
+	err = owner.ExecuteConnect(createConfigQuery, map[string]any{
+		"input": map[string]any{
+			"organizationId": orgID,
+		},
+	}, &configResult)
+	require.NoError(t, err)
+	require.NotEmpty(t, configResult.CreateSCIMConfiguration.Token)
 }

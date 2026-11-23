@@ -6,7 +6,7 @@ Community node package `@probo/n8n-nodes-probo` exposing the Probo API as n8n op
 
 ```
 packages/n8n-node/
-  credentials/ProboApi.credentials.ts   # API key credential (Bearer token)
+  credentials/ProboApi.credentials.ts   # OAuth access token credential
   nodes/Probo/
     Probo.node.ts                       # Node class — resource picker, dispatch
     Probo.node.json                     # n8n codex metadata
@@ -105,19 +105,10 @@ Each file exports `description` (field definitions) and `execute` (the handler):
 
 ```typescript
 export const description: INodeProperties[] = [
-    {
-        displayName: 'Organization ID',
-        name: 'organizationId',
-        type: 'string',
-        displayOptions: {
-            show: {
-                resource: ['myresource'],
-                operation: ['create'],
-            },
-        },
-        default: '',
-        required: true,
-    },
+    organizationLocator({
+        resource: ['myresource'],
+        operation: ['create'],
+    }),
     // ... more fields ...
     {
         displayName: 'Additional Fields',
@@ -141,7 +132,9 @@ export async function execute(
     this: IExecuteFunctions,
     itemIndex: number,
 ): Promise<INodeExecutionData> {
-    const organizationId = this.getNodeParameter('organizationId', itemIndex) as string;
+    const organizationId = this.getNodeParameter('organizationId', itemIndex, '', {
+        extractValue: true,
+    }) as string;
     const name = this.getNodeParameter('name', itemIndex) as string;
 
     const query = `
@@ -168,9 +161,13 @@ export async function execute(
 }
 ```
 
+List operations return one n8n item per record. Build that array with `executionItems(records, itemIndex)` from `GenericFunctions.ts`, and type `execute` as `Promise<INodeExecutionData[]>`. `Probo.node.ts` flattens the array into the node's output. An empty list produces no items.
+
+Organization, document, person, document version, and the other named records (framework, control, risk, internal control, asset, audit, task, third party, compliance portal, cookie banner, access review campaign) are resource locators in `locators.ts`. Read the ID with `getNodeParameter(name, itemIndex, '', { extractValue: true })`. Register the matching `search*` method on the node `listSearch` methods when a node shows that field. People and most records search inside the selected organization. Document versions search inside the selected document.
+
 ## GraphQL helpers
 
-All helpers live in `GenericFunctions.ts`.
+All helpers live in `GenericFunctions.ts`. Name every operation (`query GetWidgets`, `mutation CreateWidget`). The helper sends that name as `operationName`, which is what server logs record. The credential test request includes `operationName` itself.
 
 | Helper | API endpoint | Use case |
 |--------|-------------|----------|

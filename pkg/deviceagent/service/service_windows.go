@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package service
 
@@ -19,6 +25,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Install registers and starts the Windows service via sc.exe.
@@ -32,6 +39,22 @@ func Install(cfg Config) error {
 	}
 
 	name := DefaultWindowsName
+
+	// Remove any previous registration so install is idempotent
+	// (matches Darwin's bootout-before-bootstrap). sc delete is
+	// asynchronous; wait until the name is gone before create.
+	_ = Uninstall(cfg)
+	if err := waitUntilWindowsServiceGone(
+		func() (string, error) {
+			out, err := exec.Command("sc.exe", "query", name).CombinedOutput()
+
+			return string(out), err
+		},
+		15*time.Second,
+		time.Sleep,
+	); err != nil {
+		return err
+	}
 
 	bin := fmt.Sprintf(`"%s" run --dir "%s"`, cfg.ExePath, cfg.Dir)
 	if out, err := exec.Command(
@@ -48,7 +71,9 @@ func Install(cfg Config) error {
 		return fmt.Errorf("cannot run sc.exe create: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
-	// Restart on failure.
+	// Restart on failure, including SERVICE_STOPPED with a nonzero
+	// Win32 exit code. Without failureflag, SCM only recovers from
+	// crashes that never report stopped.
 	if out, err := exec.Command(
 		"sc.exe",
 		"failure",
@@ -61,11 +86,53 @@ func Install(cfg Config) error {
 		return fmt.Errorf("cannot run sc.exe failure: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
+	if out, err := exec.Command(
+		"sc.exe",
+		"failureflag",
+		name,
+		"1",
+	).CombinedOutput(); err != nil {
+		return fmt.Errorf("cannot run sc.exe failureflag: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
 	if out, err := exec.Command("sc.exe", "start", name).CombinedOutput(); err != nil {
 		return fmt.Errorf("cannot run sc.exe start: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
 	return nil
+}
+
+// Restart stops and starts the Windows service so it reloads enrollments.
+func Restart(cfg Config) error {
+	_ = cfg
+
+	name := DefaultWindowsName
+	_ = exec.Command("sc.exe", "stop", name).Run()
+
+	var lastErr error
+	for range 10 {
+		out, err := exec.Command("sc.exe", "start", name).CombinedOutput()
+		if err == nil {
+			return nil
+		}
+
+		msg := strings.TrimSpace(string(out))
+		lower := strings.ToLower(msg)
+		if strings.Contains(msg, "1056") ||
+			strings.Contains(lower, "already been started") ||
+			strings.Contains(lower, "already running") {
+			return nil
+		}
+
+		lastErr = fmt.Errorf("cannot run sc.exe start: %w: %s", err, msg)
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	if lastErr == nil {
+		return errors.New("cannot restart windows service")
+	}
+
+	return lastErr
 }
 
 func Uninstall(cfg Config) error {

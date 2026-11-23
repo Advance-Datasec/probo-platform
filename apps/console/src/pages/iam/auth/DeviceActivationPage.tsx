@@ -1,21 +1,29 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatError } from "@probo/helpers";
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
-import { Button, useToast } from "@probo/ui";
+import { Button } from "@probo/ui/src/v2/Button/Button";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
+import { Heading } from "@probo/ui/src/v2/typography/Heading";
+import { Text } from "@probo/ui/src/v2/typography/Text";
 import {
   type ClipboardEvent,
   type KeyboardEvent,
@@ -23,6 +31,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
 import { type PreloadedQuery, useMutation, usePreloadedQuery } from "react-relay";
 import { useNavigate, useSearchParams } from "react-router";
 import { graphql } from "relay-runtime";
@@ -50,13 +59,13 @@ const authorizeDeviceMutation = graphql`
 export default function DeviceActivationPage(props: {
   queryRef: PreloadedQuery<DeviceActivationPageQuery>;
 }) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
   usePreloadedQuery<DeviceActivationPageQuery>(deviceActivationPageQuery, props.queryRef);
-  usePageTitle(__("Device Activation"));
+  usePageTitle(t("deviceActivationPage.pageTitle"));
 
   const preset = (searchParams.get("user_code") ?? "").replace(/-/g, "");
   const [values, setValues] = useState<string[]>(() => {
@@ -125,13 +134,13 @@ export default function DeviceActivationPage(props: {
         variables: { input: { userCode } },
         onCompleted: (response, errors) => {
           if (errors) {
-            toast({
-              title: __("Authorization failed"),
+            toast.add({
+              title: t("deviceActivationPage.errors.authorizationFailed"),
               description: formatError(
-                __("The code is invalid or has expired."),
+                t("deviceActivationPage.errors.invalidCode"),
                 errors,
               ),
-              variant: "error",
+              type: "error",
             });
             return;
           }
@@ -146,45 +155,49 @@ export default function DeviceActivationPage(props: {
           }
         },
         onError: (err) => {
-          toast({
-            title: __("Error"),
-            description: err.message || __("Something went wrong. Please try again."),
-            variant: "error",
+          toast.add({
+            title: t("common.error"),
+            description: err.message || t("deviceActivationPage.errors.generic"),
+            type: "error",
           });
         },
       });
     },
-    [values, authorizeDevice, __, toast, navigate],
+    [values, authorizeDevice, t, toast, navigate],
   );
 
   const isFilled = values.every(v => v.length === 1);
 
   if (status === "success") {
     return (
-      <div className="w-full max-w-md mx-auto pt-8 space-y-6 text-center">
-        <h1 className="text-2xl font-bold">{__("Device Authorized")}</h1>
-        <p className="text-txt-tertiary">
-          {__("Your device has been successfully authorized. You can close this window and return to your device.")}
-        </p>
+      <div className="flex w-full flex-col gap-8">
+        <Heading level={1} size={4} weight="medium" align="center" highContrast>
+          {t("deviceActivationPage.authorized.title")}
+        </Heading>
+        <Text size={2} align="center" className="block">
+          {t("deviceActivationPage.authorized.description")}
+        </Text>
       </div>
     );
   }
 
   return (
-    <div className="w-full max-w-md mx-auto pt-8 space-y-6">
-      <div className="space-y-2 text-center">
-        <h1 className="text-2xl font-bold">{__("Device Activation")}</h1>
-        <p className="text-txt-tertiary">
-          {__("Enter the code displayed on your device")}
-        </p>
+    <div className="flex w-full flex-col gap-8">
+      <div className="flex flex-col gap-1">
+        <Heading level={1} size={4} weight="medium" align="center" highContrast>
+          {t("deviceActivationPage.title")}
+        </Heading>
+        <Text size={2} align="center" className="block">
+          {t("deviceActivationPage.description")}
+        </Text>
       </div>
 
-      <form onSubmit={e => void handleSubmit(e)} className="space-y-6">
+      <form onSubmit={e => void handleSubmit(e)} className="flex flex-col gap-5">
         <div className="flex items-center justify-center gap-2">
           {values.map((val, idx) => (
             <div key={idx} className="contents">
               {idx === 4 && (
-                <span className="text-xl text-txt-tertiary select-none px-0.5">&ndash;</span>
+                <span className="select-none px-0.5 text-4 text-sand-11">&ndash;</span>
               )}
               <input
                 ref={(el) => { inputRefs.current[idx] = el; }}
@@ -200,8 +213,8 @@ export default function DeviceActivationPage(props: {
                 autoCapitalize="characters"
                 spellCheck={false}
                 autoFocus={idx === 0}
-                aria-label={`${__("Code character")} ${idx + 1}`}
-                className="w-11 h-13 text-center text-lg font-mono font-medium uppercase rounded-lg border border-border-mid bg-level-1 text-txt-primary outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                aria-label={t("deviceActivationPage.codeCharacter", { count: idx + 1 })}
+                className="h-13 w-11 rounded-3 border border-sand-6 bg-sand-1 text-center font-mono text-3 font-medium uppercase text-sand-12 outline-none transition-colors focus:border-sand-8 focus:ring-2 focus:ring-sand-8/20"
               />
             </div>
           ))}
@@ -209,16 +222,21 @@ export default function DeviceActivationPage(props: {
 
         <Button
           type="submit"
-          className="w-full h-10"
-          disabled={!isFilled || isInFlight}
+          variant="solid"
+          color="neutral"
+          highContrast
+          size={3}
+          className="w-full"
+          loading={isInFlight}
+          disabled={!isFilled}
         >
-          {isInFlight ? __("Authorizing...") : __("Continue")}
+          {t("deviceActivationPage.actions.continue")}
         </Button>
       </form>
 
-      <p className="text-center text-sm text-txt-tertiary">
-        {__("Make sure this code matches the one on your device.")}
-      </p>
+      <Text align="center" size={2} className="block">
+        {t("deviceActivationPage.notice")}
+      </Text>
     </div>
   );
 }

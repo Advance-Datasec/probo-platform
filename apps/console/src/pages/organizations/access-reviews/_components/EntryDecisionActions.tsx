@@ -1,39 +1,49 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
-  Badge,
   Button,
   Dialog,
   DialogContent,
   DialogFooter,
   Field,
-  IconPencil,
   Option,
   Select,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { useState } from "react";
-import { useMutation } from "react-relay";
+import { useTranslation } from "react-i18next";
+import { useFragment, useMutation } from "react-relay";
 import { graphql } from "relay-runtime";
 
+import type { EntryDecisionActions_entry$key } from "#/__generated__/core/EntryDecisionActions_entry.graphql";
 import type { AccessReviewEntryDecision, EntryDecisionActionsMutation } from "#/__generated__/core/EntryDecisionActionsMutation.graphql";
 
-import { decisionBadgeVariant, decisionLabel } from "./accessReviewHelpers";
+const entryDecisionActionsFragment = graphql`
+  fragment EntryDecisionActions_entry on AccessReviewEntry {
+    id
+    decision
+  }
+`;
 
 const mutation = graphql`
   mutation EntryDecisionActionsMutation(
@@ -50,15 +60,15 @@ const mutation = graphql`
 `;
 
 type Props = {
-  entryId: string;
-  decision: string;
+  entryKey: EntryDecisionActions_entry$key;
+  onDecided: () => void;
 };
 
-export function EntryDecisionActions({ entryId, decision }: Props) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+export function EntryDecisionActions({ entryKey, onDecided }: Props) {
+  const { t } = useTranslation();
+  const toast = useToast();
   const ref = useDialogRef();
-  const [editing, setEditing] = useState(false);
+  const entry = useFragment(entryDecisionActionsFragment, entryKey);
   const [pendingDecision, setPendingDecision] = useState<AccessReviewEntryDecision | null>(null);
   const [note, setNote] = useState("");
   const [recordDecision, isRecording]
@@ -68,96 +78,86 @@ export function EntryDecisionActions({ entryId, decision }: Props) {
     recordDecision({
       variables: {
         input: {
-          accessReviewEntryId: entryId,
+          accessReviewEntryId: entry.id,
           decision: decisionValue,
           decisionNote: decisionNote || null,
         },
       },
       onCompleted(_, errors) {
         if (errors?.length) {
-          toast({
-            title: __("Error"),
+          toast.add({
+            title: t("entryDecisionActions.messages.error"),
             description: formatError(
-              __("Failed to record decision"),
+              t("entryDecisionActions.errors.record"),
               errors,
             ),
-            variant: "error",
+            type: "error",
           });
           return;
         }
+        onDecided();
         setPendingDecision(null);
         setNote("");
-        setEditing(false);
         ref.current?.close();
       },
       onError(error) {
-        toast({
-          title: __("Error"),
+        toast.add({
+          title: t("entryDecisionActions.messages.error"),
           description: formatError(
-            __("Failed to record decision"),
+            t("entryDecisionActions.errors.record"),
             error,
           ),
-          variant: "error",
+          type: "error",
         });
       },
     });
   };
 
-  const openNoteDialog = (decisionValue: AccessReviewEntryDecision) => {
-    setPendingDecision(decisionValue);
+  const handleDecision = (value: string) => {
+    const nextDecision = value as AccessReviewEntryDecision;
+    if (nextDecision === entry.decision) {
+      return;
+    }
+    if (nextDecision === "APPROVED") {
+      submitDecision(nextDecision);
+      return;
+    }
+    setPendingDecision(nextDecision);
     setNote("");
     ref.current?.open();
   };
-
-  const handleDecision = (value: string) => {
-    const decision = value as AccessReviewEntryDecision;
-    if (decision === "APPROVED") {
-      submitDecision(decision);
-    } else {
-      openNoteDialog(decision);
-    }
-  };
-
-  // Already decided -- show badge with edit button
-  if (decision !== "PENDING" && !editing) {
-    return (
-      <div className="flex items-center gap-1">
-        <Badge variant={decisionBadgeVariant(decision)}>
-          {decisionLabel(__, decision)}
-        </Badge>
-        <button
-          type="button"
-          className="text-txt-tertiary hover:text-txt-primary cursor-pointer"
-          onClick={() => setEditing(true)}
-          title={__("Change decision")}
-        >
-          <IconPencil size={14} />
-        </button>
-      </div>
-    );
-  }
 
   return (
     <>
       <Select
         variant="editor"
-        placeholder={__("Decide...")}
+        className="w-36 shrink-0"
+        value={entry.decision === "PENDING" ? undefined : entry.decision}
+        placeholder={t("entryDecisionActions.placeholder")}
         onValueChange={handleDecision}
         disabled={isRecording}
       >
-        <Option value="APPROVED">{__("Approve")}</Option>
-        <Option value="REVOKE">{__("Revoke")}</Option>
-        <Option value="DEFER">{__("Modify")}</Option>
-        <Option value="ESCALATE">{__("Escalate")}</Option>
+        <Option value="APPROVED">
+          {t("entryDecisionActions.actions.approve")}
+        </Option>
+        <Option value="REVOKE">
+          {t("entryDecisionActions.actions.revoke")}
+        </Option>
+        <Option value="DEFER">
+          {t("entryDecisionActions.actions.modify")}
+        </Option>
+        <Option value="ESCALATE">
+          {t("entryDecisionActions.actions.escalate")}
+        </Option>
       </Select>
 
-      <Dialog ref={ref} title={__("Decision note")}>
+      <Dialog ref={ref} title={t("entryDecisionActions.note.title")}>
         <DialogContent padded className="space-y-4">
           <p className="text-sm text-txt-secondary">
-            {__("Please provide a reason for this decision.")}
+            {t("entryDecisionActions.note.description")}
           </p>
           <Field
-            label={__("Note")}
+            label={t("entryDecisionActions.note.label")}
             type="textarea"
             value={note}
             onValueChange={setNote}
@@ -172,7 +172,7 @@ export function EntryDecisionActions({ entryId, decision }: Props) {
               }
             }}
           >
-            {__("Confirm")}
+            {t("entryDecisionActions.actions.confirm")}
           </Button>
         </DialogFooter>
       </Dialog>

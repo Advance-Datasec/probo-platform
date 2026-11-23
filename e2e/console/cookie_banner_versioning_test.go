@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_test
 
@@ -146,9 +152,11 @@ func upsertTranslation(t *testing.T, c *testutil.Client, bannerID, language, tra
 func TestCookieBannerVersioning_NoOpUpdates(t *testing.T) {
 	t.Parallel()
 
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+
 	t.Run("UpdateCookieBanner with all original values does not bump version", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := owner.ForTest(t)
 
 		bannerID := factory.CreateCookieBanner(owner, factory.Attrs{
 			"cookiePolicyUrl":   "https://example.com/cookies",
@@ -183,7 +191,7 @@ func TestCookieBannerVersioning_NoOpUpdates(t *testing.T) {
 
 	t.Run("UpdateCookieBanner with only name change does not bump version", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := owner.ForTest(t)
 
 		bannerID := factory.CreateCookieBanner(owner)
 		published := publishBanner(t, owner, bannerID)
@@ -219,7 +227,7 @@ func TestCookieBannerVersioning_NoOpUpdates(t *testing.T) {
 
 	t.Run("UpdateCookieCategory with all original values does not bump version", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := owner.ForTest(t)
 
 		bannerID := factory.CreateCookieBanner(owner)
 		categoryID := factory.CreateCookieCategory(owner, bannerID, factory.Attrs{
@@ -257,7 +265,7 @@ func TestCookieBannerVersioning_NoOpUpdates(t *testing.T) {
 
 	t.Run("ReorderCookieCategory with current rank does not bump version", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := owner.ForTest(t)
 
 		bannerID := factory.CreateCookieBanner(owner)
 		categoryID := factory.CreateCookieCategory(owner, bannerID, factory.Attrs{
@@ -293,7 +301,7 @@ func TestCookieBannerVersioning_NoOpUpdates(t *testing.T) {
 		// Rank is admin-only metadata; the snapshot is sorted by
 		// (Kind weight, ID), so a rank change is invisible to visitors.
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := owner.ForTest(t)
 
 		bannerID := factory.CreateCookieBanner(owner)
 		categoryID := factory.CreateCookieCategory(owner, bannerID, factory.Attrs{
@@ -327,12 +335,11 @@ func TestCookieBannerVersioning_NoOpUpdates(t *testing.T) {
 
 	t.Run("UpdateTrackerPattern on visible pattern with same value does not bump version", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := owner.ForTest(t)
 
 		bannerID := factory.CreateCookieBanner(owner)
 		categoryID := factory.CreateCookieCategory(owner, bannerID, factory.Attrs{"slug": "visible-noop"})
 		patternID := factory.CreateTrackerPattern(owner, categoryID, factory.Attrs{
-			"displayName": "GA Tracker",
 			"description": "Original description",
 		})
 
@@ -364,15 +371,15 @@ func TestCookieBannerVersioning_NoOpUpdates(t *testing.T) {
 func TestCookieBannerVersioning_ExcludedPattern(t *testing.T) {
 	t.Parallel()
 
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+
 	t.Run("Update on excluded pattern does not bump version", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := owner.ForTest(t)
 
 		bannerID := factory.CreateCookieBanner(owner)
 		categoryID := factory.CreateCookieCategory(owner, bannerID, factory.Attrs{"slug": "excl-update"})
-		patternID := factory.CreateTrackerPattern(owner, categoryID, factory.Attrs{
-			"displayName": "Original",
-		})
+		patternID := factory.CreateTrackerPattern(owner, categoryID)
 
 		setPatternExcluded(t, owner, patternID, true)
 		published := publishBanner(t, owner, bannerID)
@@ -410,7 +417,7 @@ func TestCookieBannerVersioning_ExcludedPattern(t *testing.T) {
 
 	t.Run("Delete of excluded pattern does not bump version", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := owner.ForTest(t)
 
 		bannerID := factory.CreateCookieBanner(owner)
 		categoryID := factory.CreateCookieCategory(owner, bannerID, factory.Attrs{"slug": "excl-delete"})
@@ -442,7 +449,7 @@ func TestCookieBannerVersioning_ExcludedPattern(t *testing.T) {
 
 	t.Run("Move of excluded pattern does not bump version", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := owner.ForTest(t)
 
 		bannerID := factory.CreateCookieBanner(owner)
 		categoryA := factory.CreateCookieCategory(owner, bannerID, factory.Attrs{"slug": "excl-move-a"})
@@ -480,9 +487,11 @@ func TestCookieBannerVersioning_ExcludedPattern(t *testing.T) {
 func TestCookieBannerVersioning_TranslationChangesNeverBump(t *testing.T) {
 	t.Parallel()
 
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+
 	t.Run("re-upserting identical JSON does not bump version", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := owner.ForTest(t)
 
 		bannerID := factory.CreateCookieBanner(owner)
 
@@ -500,7 +509,7 @@ func TestCookieBannerVersioning_TranslationChangesNeverBump(t *testing.T) {
 
 	t.Run("changing translation content does not bump version", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := owner.ForTest(t)
 
 		bannerID := factory.CreateCookieBanner(owner)
 
@@ -517,7 +526,7 @@ func TestCookieBannerVersioning_TranslationChangesNeverBump(t *testing.T) {
 
 	t.Run("adding a new language does not bump version", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := owner.ForTest(t)
 
 		bannerID := factory.CreateCookieBanner(owner)
 		published := publishBanner(t, owner, bannerID)
@@ -560,9 +569,11 @@ func reportDetectedCookies(t *testing.T, c *testutil.Client, bannerID string, na
 func TestCookieBannerVersioning_DetectedCookiesNeverBump(t *testing.T) {
 	t.Parallel()
 
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+
 	t.Run("reporting detected cookies does not bump version", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := owner.ForTest(t)
 
 		bannerID := factory.CreateCookieBanner(owner)
 		published := publishBanner(t, owner, bannerID)
@@ -579,9 +590,11 @@ func TestCookieBannerVersioning_DetectedCookiesNeverBump(t *testing.T) {
 func TestCookieBannerVersioning_RealChangesStillBumpVersion(t *testing.T) {
 	t.Parallel()
 
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+
 	t.Run("UpdateCookieBanner consent change creates a new draft", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := owner.ForTest(t)
 
 		bannerID := factory.CreateCookieBanner(owner, factory.Attrs{
 			"consentExpiryDays": 365,
@@ -612,12 +625,11 @@ func TestCookieBannerVersioning_RealChangesStillBumpVersion(t *testing.T) {
 
 	t.Run("UpdateTrackerPattern description change on visible pattern creates a new draft", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := owner.ForTest(t)
 
 		bannerID := factory.CreateCookieBanner(owner)
 		categoryID := factory.CreateCookieCategory(owner, bannerID, factory.Attrs{"slug": "real-change"})
 		patternID := factory.CreateTrackerPattern(owner, categoryID, factory.Attrs{
-			"displayName": "Original",
 			"description": "Original desc",
 		})
 
@@ -644,4 +656,79 @@ func TestCookieBannerVersioning_RealChangesStillBumpVersion(t *testing.T) {
 		assert.Greater(t, got.Version, baseline)
 		assert.Equal(t, "DRAFT", got.State)
 	})
+}
+
+func TestCookieBanner_ListVersions(t *testing.T) {
+	t.Parallel()
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+
+	bannerID := factory.CreateCookieBanner(owner, factory.Attrs{
+		"cookiePolicyUrl": "https://example.com/cookies",
+	})
+
+	first := publishBanner(t, owner, bannerID)
+	require.Equal(t, 1, first.Version)
+
+	const updateQuery = `
+		mutation UpdateCookieBanner($input: UpdateCookieBannerInput!) {
+			updateCookieBanner(input: $input) { cookieBanner { id } }
+		}
+	`
+
+	var updateResult struct{}
+
+	require.NoError(t, owner.Execute(updateQuery, map[string]any{
+		"input": map[string]any{
+			"cookieBannerId":  bannerID,
+			"cookiePolicyUrl": "https://example.com/cookies-v2",
+		},
+	}, &updateResult))
+
+	second := publishBanner(t, owner, bannerID)
+	require.Equal(t, 2, second.Version)
+
+	const query = `
+		query($id: ID!) {
+			node(id: $id) {
+				... on CookieBanner {
+					versions(first: 10, orderBy: { field: CREATED_AT, direction: DESC }) {
+						totalCount
+						edges {
+							node {
+								version
+								state
+							}
+						}
+						pageInfo {
+							hasNextPage
+						}
+					}
+				}
+			}
+		}
+	`
+
+	var result struct {
+		Node struct {
+			Versions struct {
+				TotalCount int `json:"totalCount"`
+				Edges      []struct {
+					Node struct {
+						Version int    `json:"version"`
+						State   string `json:"state"`
+					} `json:"node"`
+				} `json:"edges"`
+				PageInfo struct {
+					HasNextPage bool `json:"hasNextPage"`
+				} `json:"pageInfo"`
+			} `json:"versions"`
+		} `json:"node"`
+	}
+
+	require.NoError(t, owner.Execute(query, map[string]any{"id": bannerID}, &result))
+	require.Len(t, result.Node.Versions.Edges, 2)
+	assert.Equal(t, 2, result.Node.Versions.TotalCount)
+	assert.False(t, result.Node.Versions.PageInfo.HasNextPage)
+	assert.Equal(t, 2, result.Node.Versions.Edges[0].Node.Version)
+	assert.Equal(t, 1, result.Node.Versions.Edges[1].Node.Version)
 }

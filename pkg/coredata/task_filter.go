@@ -1,0 +1,167 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+package coredata
+
+import (
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"go.probo.inc/probo/pkg/gid"
+)
+
+type TaskFilter struct {
+	query              *string
+	state              *TaskState
+	assignedToID       *gid.GID
+	internalControlID  *gid.GID
+	deadlineOnOrBefore *time.Time
+	deadlineOnOrAfter  *time.Time
+	hasDeadline        *bool
+	hasAssignee        *bool
+}
+
+func NewTaskFilter(
+	query *string,
+	state *TaskState,
+	assignedToID *gid.GID,
+	internalControlID *gid.GID,
+	deadlineOnOrBefore *time.Time,
+	deadlineOnOrAfter *time.Time,
+	hasDeadline *bool,
+	hasAssignee *bool,
+) *TaskFilter {
+	return &TaskFilter{
+		query:              query,
+		state:              state,
+		assignedToID:       assignedToID,
+		internalControlID:  internalControlID,
+		deadlineOnOrBefore: deadlineOnOrBefore,
+		deadlineOnOrAfter:  deadlineOnOrAfter,
+		hasDeadline:        hasDeadline,
+		hasAssignee:        hasAssignee,
+	}
+}
+
+func (f *TaskFilter) SQLFragment() string {
+	return `
+(
+	CASE
+		WHEN @filter_query::text IS NOT NULL AND @filter_query::text <> '' THEN
+			name ILIKE '%' || @filter_query || '%' ESCAPE '\'
+		ELSE TRUE
+	END
+	AND CASE
+		WHEN @filter_state::text IS NOT NULL THEN
+			state = @filter_state::task_state
+		ELSE TRUE
+	END
+	AND CASE
+		WHEN @filter_assigned_to_id::text IS NOT NULL THEN
+			assigned_to_profile_id = @filter_assigned_to_id::text
+		ELSE TRUE
+	END
+	AND CASE
+		WHEN @filter_has_assignee::bool IS FALSE THEN
+			assigned_to_profile_id IS NULL
+		WHEN @filter_has_assignee::bool IS TRUE THEN
+			assigned_to_profile_id IS NOT NULL
+		ELSE TRUE
+	END
+	AND CASE
+		WHEN @filter_internal_control_id::text IS NOT NULL THEN
+			EXISTS (
+				SELECT 1
+				FROM internal_controls_tasks AS filter_ict
+				WHERE filter_ict.task_id = id
+					AND filter_ict.internal_control_id = @filter_internal_control_id
+					AND filter_ict.tenant_id = @tenant_id
+			)
+		ELSE TRUE
+	END
+	AND CASE
+		WHEN @filter_has_deadline::bool IS FALSE THEN
+			deadline IS NULL
+		WHEN @filter_deadline_on_or_before::timestamptz IS NOT NULL
+			OR @filter_deadline_on_or_after::timestamptz IS NOT NULL THEN
+			deadline IS NOT NULL
+				AND (
+					@filter_deadline_on_or_before::timestamptz IS NULL
+					OR (deadline AT TIME ZONE 'UTC')::date
+						<= (@filter_deadline_on_or_before AT TIME ZONE 'UTC')::date
+				)
+				AND (
+					@filter_deadline_on_or_after::timestamptz IS NULL
+					OR (deadline AT TIME ZONE 'UTC')::date
+						>= (@filter_deadline_on_or_after AT TIME ZONE 'UTC')::date
+				)
+		WHEN @filter_has_deadline::bool IS TRUE THEN
+			deadline IS NOT NULL
+		ELSE TRUE
+	END
+)`
+}
+
+func (f *TaskFilter) SQLArguments() pgx.StrictNamedArgs {
+	args := pgx.StrictNamedArgs{
+		"filter_query":                 nil,
+		"filter_state":                 nil,
+		"filter_assigned_to_id":        nil,
+		"filter_internal_control_id":   nil,
+		"filter_deadline_on_or_before": nil,
+		"filter_deadline_on_or_after":  nil,
+		"filter_has_deadline":          nil,
+		"filter_has_assignee":          nil,
+	}
+
+	if f.query != nil && *f.query != "" {
+		args["filter_query"] = escapeLikePattern(*f.query)
+	}
+
+	if f.state != nil {
+		args["filter_state"] = string(*f.state)
+	}
+
+	if f.assignedToID != nil {
+		args["filter_assigned_to_id"] = *f.assignedToID
+	}
+
+	if f.internalControlID != nil {
+		args["filter_internal_control_id"] = *f.internalControlID
+	}
+
+	if f.deadlineOnOrBefore != nil {
+		args["filter_deadline_on_or_before"] = *f.deadlineOnOrBefore
+	}
+
+	if f.deadlineOnOrAfter != nil {
+		args["filter_deadline_on_or_after"] = *f.deadlineOnOrAfter
+	}
+
+	if f.hasDeadline != nil {
+		args["filter_has_deadline"] = *f.hasDeadline
+	}
+
+	if f.hasAssignee != nil {
+		args["filter_has_assignee"] = *f.hasAssignee
+	}
+
+	return args
+}

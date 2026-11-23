@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package iam
 
@@ -18,24 +24,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
-	"codeberg.org/miekg/dns"
 	"go.gearno.de/kit/log"
 	"go.gearno.de/kit/pg"
 	"go.opentelemetry.io/otel/trace"
 	"go.probo.inc/probo/pkg/coredata"
+	"go.probo.inc/probo/pkg/dnsclient"
 	"go.probo.inc/probo/pkg/gid"
 )
 
 type (
 	SAMLDomainVerifier struct {
-		pg           *pg.Client
-		interval     time.Duration
-		resolverAddr string
-		logger       *log.Logger
-		tracer       trace.Tracer
+		pg        *pg.Client
+		interval  time.Duration
+		dnsClient *dnsclient.Client
+		logger    *log.Logger
+		tracer    trace.Tracer
 	}
 )
 
@@ -56,11 +61,11 @@ func NewSAMLDomainVerifier(
 	resolverAddr string,
 ) *SAMLDomainVerifier {
 	return &SAMLDomainVerifier{
-		pg:           pgClient,
-		interval:     interval,
-		resolverAddr: resolverAddr,
-		logger:       logger.Named("saml-domain-verifier"),
-		tracer:       tp.Tracer("go.probo.inc/probo/pkg/iam/saml_domain_verifier"),
+		pg:        pgClient,
+		interval:  interval,
+		dnsClient: dnsclient.NewClient(resolverAddr),
+		logger:    logger.Named("saml-domain-verifier"),
+		tracer:    tp.Tracer("go.probo.inc/probo/pkg/iam/saml_domain_verifier"),
 	}
 }
 
@@ -181,7 +186,6 @@ func (v *SAMLDomainVerifier) tryVerifyDomain(ctx context.Context, configID gid.G
 			now := time.Now()
 			config.DomainVerificationToken = nil
 			config.DomainVerifiedAt = &now
-			config.EnforcementPolicy = coredata.SAMLEnforcementPolicyOptional
 			config.UpdatedAt = now
 
 			scope := coredata.NewScopeFromObjectID(config.OrganizationID)
@@ -195,40 +199,18 @@ func (v *SAMLDomainVerifier) tryVerifyDomain(ctx context.Context, configID gid.G
 }
 
 func (v *SAMLDomainVerifier) checkDNSTXTRecord(ctx context.Context, emailDomain string, expectedValue string) error {
-	msg := dns.NewMsg(emailDomain, dns.TypeTXT)
-
-	client := dns.NewClient()
-
-	resp, _, err := client.Exchange(ctx, msg, "udp", v.resolverAddr)
-	if err != nil {
-		return fmt.Errorf("cannot query TXT record for %q: %w", emailDomain, err)
+	err := v.dnsClient.CheckTXT(ctx, emailDomain, expectedValue)
+	if err == nil {
+		return nil
 	}
 
-	if resp.Truncated {
-		resp, _, err = client.Exchange(ctx, msg, "tcp", v.resolverAddr)
-		if err != nil {
-			return fmt.Errorf("cannot query TXT record for %q over TCP: %w", emailDomain, err)
-		}
-	}
-
-	if resp.Rcode != dns.RcodeSuccess {
-		return fmt.Errorf("cannot query TXT record for %q: %s", emailDomain, dns.RcodeToString[resp.Rcode])
-	}
-
-	if len(resp.Answer) == 0 {
+	if errors.Is(err, dnsclient.ErrTXTNotFound) {
 		return fmt.Errorf("%w for %q", errDomainTXTRecordNotFound, emailDomain)
 	}
 
-	for _, answer := range resp.Answer {
-		txt, ok := answer.(*dns.TXT)
-		if !ok {
-			continue
-		}
-
-		if strings.Join(txt.Txt, "") == expectedValue {
-			return nil
-		}
+	if errors.Is(err, dnsclient.ErrTXTMismatch) {
+		return fmt.Errorf("%w for %q", errDomainTXTRecordMismatch, emailDomain)
 	}
 
-	return fmt.Errorf("%w for %q", errDomainTXTRecordMismatch, emailDomain)
+	return err
 }

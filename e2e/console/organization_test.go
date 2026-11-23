@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_test
 
@@ -21,6 +27,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.probo.inc/probo/e2e/internal/factory"
 	"go.probo.inc/probo/e2e/internal/testutil"
 )
 
@@ -28,7 +35,7 @@ func TestOrganization_Update(t *testing.T) {
 	t.Parallel()
 	owner := testutil.NewClient(t, testutil.RoleOwner)
 
-	t.Run("update name and description", func(t *testing.T) {
+	t.Run("update name", func(t *testing.T) {
 		newName := fmt.Sprintf("Updated Org %d", time.Now().UnixNano())
 
 		query := `
@@ -37,7 +44,6 @@ func TestOrganization_Update(t *testing.T) {
 					organization {
 						id
 						name
-						description
 					}
 				}
 			}
@@ -46,9 +52,8 @@ func TestOrganization_Update(t *testing.T) {
 		var result struct {
 			UpdateOrganization struct {
 				Organization struct {
-					ID          string `json:"id"`
-					Name        string `json:"name"`
-					Description string `json:"description"`
+					ID   string `json:"id"`
+					Name string `json:"name"`
 				} `json:"organization"`
 			} `json:"updateOrganization"`
 		}
@@ -57,82 +62,92 @@ func TestOrganization_Update(t *testing.T) {
 			"input": map[string]any{
 				"organizationId": owner.GetOrganizationID().String(),
 				"name":           newName,
-				"description":    "Updated organization description",
 			},
 		}, &result)
 		require.NoError(t, err)
 
 		assert.Equal(t, owner.GetOrganizationID().String(), result.UpdateOrganization.Organization.ID)
 		assert.Equal(t, newName, result.UpdateOrganization.Organization.Name)
-		assert.Equal(t, "Updated organization description", result.UpdateOrganization.Organization.Description)
 	})
 
-	t.Run("update website and email", func(t *testing.T) {
-		query := `
+	t.Run("update legal name", func(t *testing.T) {
+		const mutation = `
 			mutation UpdateOrganization($input: UpdateOrganizationInput!) {
 				updateOrganization(input: $input) {
 					organization {
 						id
-						websiteUrl
-						email
+						name
+						legalName
 					}
 				}
 			}
 		`
 
-		var result struct {
+		var updated struct {
 			UpdateOrganization struct {
 				Organization struct {
-					ID         string `json:"id"`
-					WebsiteUrl string `json:"websiteUrl"`
-					Email      string `json:"email"`
+					ID        string  `json:"id"`
+					Name      string  `json:"name"`
+					LegalName *string `json:"legalName"`
 				} `json:"organization"`
 			} `json:"updateOrganization"`
 		}
 
-		err := owner.ExecuteConnect(query, map[string]any{
+		legalName := fmt.Sprintf("Updated Org Legal %d Inc.", time.Now().UnixNano())
+		err := owner.ExecuteConnect(mutation, map[string]any{
 			"input": map[string]any{
 				"organizationId": owner.GetOrganizationID().String(),
-				"websiteUrl":     "https://example.com",
-				"email":          "contact@example.com",
+				"legalName":      legalName,
 			},
-		}, &result)
+		}, &updated)
 		require.NoError(t, err)
+		assert.Equal(t, owner.GetOrganizationID().String(), updated.UpdateOrganization.Organization.ID)
+		require.NotNil(t, updated.UpdateOrganization.Organization.LegalName)
+		assert.Equal(t, legalName, *updated.UpdateOrganization.Organization.LegalName)
+		operatingName := updated.UpdateOrganization.Organization.Name
 
-		assert.Equal(t, "https://example.com", result.UpdateOrganization.Organization.WebsiteUrl)
-		assert.Equal(t, "contact@example.com", result.UpdateOrganization.Organization.Email)
-	})
+		err = owner.ExecuteConnect(mutation, map[string]any{
+			"input": map[string]any{
+				"organizationId": owner.GetOrganizationID().String(),
+				"name":           operatingName + " Ops",
+			},
+		}, &updated)
+		require.NoError(t, err)
+		assert.Equal(t, operatingName+" Ops", updated.UpdateOrganization.Organization.Name)
+		require.NotNil(t, updated.UpdateOrganization.Organization.LegalName)
+		assert.Equal(t, legalName, *updated.UpdateOrganization.Organization.LegalName)
 
-	t.Run("update headquarter address", func(t *testing.T) {
-		query := `
-			mutation UpdateOrganization($input: UpdateOrganizationInput!) {
-				updateOrganization(input: $input) {
-					organization {
+		err = owner.ExecuteConnect(mutation, map[string]any{
+			"input": map[string]any{
+				"organizationId": owner.GetOrganizationID().String(),
+				"legalName":      nil,
+			},
+		}, &updated)
+		require.NoError(t, err)
+		assert.Nil(t, updated.UpdateOrganization.Organization.LegalName)
+
+		var fetched struct {
+			Node struct {
+				ID        string  `json:"id"`
+				LegalName *string `json:"legalName"`
+			} `json:"node"`
+		}
+
+		err = owner.Execute(`
+			query GetOrganization($id: ID!) {
+				node(id: $id) {
+					... on Organization {
 						id
-						headquarterAddress
+						legalName
 					}
 				}
 			}
-		`
-
-		var result struct {
-			UpdateOrganization struct {
-				Organization struct {
-					ID                 string `json:"id"`
-					HeadquarterAddress string `json:"headquarterAddress"`
-				} `json:"organization"`
-			} `json:"updateOrganization"`
-		}
-
-		err := owner.ExecuteConnect(query, map[string]any{
-			"input": map[string]any{
-				"organizationId":     owner.GetOrganizationID().String(),
-				"headquarterAddress": "123 Main St, Suite 100, San Francisco, CA 94102",
-			},
-		}, &result)
+		`, map[string]any{
+			"id": owner.GetOrganizationID().String(),
+		}, &fetched)
 		require.NoError(t, err)
-
-		assert.Equal(t, "123 Main St, Suite 100, San Francisco, CA 94102", result.UpdateOrganization.Organization.HeadquarterAddress)
+		assert.Equal(t, owner.GetOrganizationID().String(), fetched.Node.ID)
+		assert.Nil(t, fetched.Node.LegalName)
 	})
 }
 
@@ -194,10 +209,6 @@ func TestOrganization_Get(t *testing.T) {
 				... on Organization {
 					id
 					name
-					description
-					websiteUrl
-					email
-					headquarterAddress
 				}
 			}
 		}
@@ -205,12 +216,8 @@ func TestOrganization_Get(t *testing.T) {
 
 	var result struct {
 		Node struct {
-			ID                 string `json:"id"`
-			Name               string `json:"name"`
-			Description        string `json:"description"`
-			WebsiteUrl         string `json:"websiteUrl"`
-			Email              string `json:"email"`
-			HeadquarterAddress string `json:"headquarterAddress"`
+			ID   string `json:"id"`
+			Name string `json:"name"`
 		} `json:"node"`
 	}
 
@@ -221,4 +228,76 @@ func TestOrganization_Get(t *testing.T) {
 
 	assert.Equal(t, owner.GetOrganizationID().String(), result.Node.ID)
 	assert.NotEmpty(t, result.Node.Name)
+}
+
+func TestOrganization_Delete(t *testing.T) {
+	t.Parallel()
+
+	const deleteMutation = `
+		mutation DeleteOrganization($input: DeleteOrganizationInput!) {
+			deleteOrganization(input: $input) {
+				deletedOrganizationId
+			}
+		}
+	`
+
+	t.Run("owner can delete an organization with related records", func(t *testing.T) {
+		t.Parallel()
+		owner := testutil.NewClient(t, testutil.RoleOwner)
+		orgID := owner.GetOrganizationID().String()
+
+		graph := populateOrganizationRelationGraph(t, owner)
+
+		var result struct {
+			DeleteOrganization struct {
+				DeletedOrganizationID string `json:"deletedOrganizationId"`
+			} `json:"deleteOrganization"`
+		}
+
+		err := owner.ExecuteConnect(deleteMutation, map[string]any{
+			"input": map[string]any{
+				"organizationId": orgID,
+			},
+		}, &result)
+		require.NoError(t, err)
+		assert.Equal(t, orgID, result.DeleteOrganization.DeletedOrganizationID)
+		factory.RequireFileSoftDeleted(t, graph.logoFileID)
+
+		err = owner.ExecuteConnectShouldFail(`
+			query GetOrganization($id: ID!) {
+				node(id: $id) {
+					... on Organization {
+						id
+					}
+				}
+			}
+		`, map[string]any{"id": orgID})
+		require.Error(t, err)
+	})
+
+	t.Run("admin cannot delete", func(t *testing.T) {
+		t.Parallel()
+		owner := testutil.NewClient(t, testutil.RoleOwner)
+		admin := testutil.NewClientInOrg(t, testutil.RoleAdmin, owner)
+
+		err := admin.ExecuteConnectShouldFail(deleteMutation, map[string]any{
+			"input": map[string]any{
+				"organizationId": owner.GetOrganizationID().String(),
+			},
+		})
+		testutil.RequireForbiddenError(t, err)
+	})
+
+	t.Run("viewer cannot delete", func(t *testing.T) {
+		t.Parallel()
+		owner := testutil.NewClient(t, testutil.RoleOwner)
+		viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
+
+		err := viewer.ExecuteConnectShouldFail(deleteMutation, map[string]any{
+			"input": map[string]any{
+				"organizationId": owner.GetOrganizationID().String(),
+			},
+		})
+		testutil.RequireForbiddenError(t, err)
+	})
 }

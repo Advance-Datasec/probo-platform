@@ -1,8 +1,3218 @@
 # Changelog
 
-All notable changes to `probod` (the server, including the bundled `@probo/console`, `@probo/trust`, and `@probo/ui` frontends) will be documented in this file.
+All notable changes to `probod` (the server, including the bundled `@probo/console`, `@probo/compliance-portal`, `@probo/employee-portal`, and `@probo/ui` frontends) will be documented in this file.
 
 ## Unreleased
+
+### Added
+
+- MCP `addInternalControlLinkEvidence` uploads a `.uri` file
+  containing an HTTP or HTTPS URL on an internal control, the same
+  way as the console link form
+
+## [0.355.1] - 2026-11-20
+
+### Fixed
+
+- Servers on 0.354.0 or earlier no longer fail to write audit log
+  entries once the 0.355.0 migration has run, so rolling deploys and
+  rollbacks keep working
+
+## [0.355.0] - 2026-11-20
+
+### Added
+
+- The audit log records denied checks as well as allowed ones. Each
+  entry keeps its outcome, the denial reason, a snapshot of the actor's
+  email and name, the client IP, the user agent, and the request id
+  that also appears in the server logs
+- Audit log filters for action prefix, actor type, outcome, request id,
+  and a created-at range on the console and Connect GraphQL APIs and
+  the MCP `listAuditLogEntries` tool. Entries expose `outcome`,
+  `denialReason`, `actorEmail`, `actorName`, `originIp`, `userAgent`,
+  `requestId`, and `recordedAt`
+- The audit log CSV export includes the outcome, denial reason, actor
+  snapshot, client IP, user agent, and request id
+
+### Changed
+
+- The console audit log page is rebuilt on the v2 kit with cursor
+  pagination and filters kept in the URL. Dates are picked in a single
+  range control and read as local days, and actor, resource, and
+  request ids sit in a Filters popover. The detail dialog shows the
+  origin, request id, and denial reason
+
+### Fixed
+
+- A failed audit log insert was silently ignored. It now aborts the
+  authorization, and a refused batch still commits its denial rows
+
+## [0.354.0] - 2026-11-20
+
+This is a security release. Upgrade as soon as possible.
+
+### Added
+
+- The compliance portal visitor card offers the signed document beside
+  the certificate of completion, and the download menu opens either
+  file. The console GraphQL `ElectronicSignature` type adds `nda`, the
+  document the visitor signed
+
+### Security
+
+- Google and Microsoft sign-in binds the login state to the browser
+  that started it. Before, a state value was accepted from any browser,
+  so an attacker could finish their own login there and the victim's
+  session would belong to the attacker. The callback is now rejected
+  before the code exchange unless it matches a short-lived HttpOnly
+  cookie. Sign-ins started before the upgrade must be restarted
+- The MCP `listOrganizations` tool no longer returns organizations a
+  user was deactivated from. A former member could still read the
+  organization's id and name
+
+### Fixed
+
+- Linear sync no longer moves an issue back to In Progress when another
+  field changes. A status is sent to Linear only when it changed in
+  Probo, and a status changed in Linear and not in Probo is copied onto
+  the task
+- Pending ACME orders are polled again 30 seconds after a challenge
+  accept, a not-ready poll, or a finalize that leaves the order
+  processing, instead of after about four minutes, so custom domain
+  certificates are issued sooner
+- Global search no longer fails with a database error when audits match,
+  and search errors no longer expose SQL internals to clients
+
+## [0.353.0] - 2026-11-20
+
+### Added
+
+- Tags are a name unique in the organization, with an optional color.
+  A resource can carry several. Attaching a tag that is already
+  present keeps the existing assignment. The console GraphQL API adds
+  `createTag`, `updateTag`, `deleteTag`, `attachTag`, and `detachTag`,
+  plus `Organization.tags` and `tags` on taggable resources. MCP adds
+  `createTag`, `updateTag`, `deleteTag`, `attachTag`, `detachTag`,
+  `listTags`, and `listTagsForResource`
+- `search` finds resources the caller is allowed to list, on the
+  console GraphQL API and as the MCP `search` tool. Bare words match
+  titles as prefixes, and a resource id matches in full or by prefix.
+  Every `tag:name` must match. `type:name` is optional and repeatable.
+  The console Ctrl+K spotlight lists those hits beside pages, grouped
+  by type, and opens them. A query that uses `tag:` or `type:` lists
+  resources only. Controls open on their framework, and DPIAs and TIAs
+  open on their processing activity
+- Leaving a task page in the console or employee portal asks the user
+  to stay when the comment composer has text, an attachment, or an
+  upload still in progress. Closing the tab uses the browser prompt.
+  Changing search on the same task does not ask, because the draft
+  stays mounted
+
+### Changed
+
+- The console Ctrl+K spotlight uses a command-palette layout: a light
+  backdrop blur, a borderless search field, section labels and icons,
+  and Enter and Esc hints in the footer. Closing it clears the query,
+  and a slow response cannot overwrite a newer one
+
+### Fixed
+
+- Built with Go 1.27.4 (up from 1.27.3) to pick up the standard-library
+  security fix in `net/http` (CVE-2026-97054)
+- The internal control create button stays disabled while the form is
+  saving, so a double click no longer creates two controls
+- Opening a document in view mode, or with no mode, syncs without
+  persisting. Editing and suggesting still persist. A generated or
+  archived document stays read-only in every mode. View mode used to
+  receive update permission, so a generated document closed the socket
+  and the browser reconnected every few seconds
+- The console people menu keeps the caret in the search field after
+  the list replaces the loading state
+
+## [0.352.0] - 2026-11-19
+
+### Added
+
+- MCP `submit_feedback` posts a webhook-shaped body, including the
+  caller's name and email, to `PROBOD_FEEDBACK_URL`. There is no
+  signature. The tool is hidden when that URL is unset
+- The employee portal top bar and the console and employee portal
+  organization pickers show the signed-in user's photo and open the
+  profile photo dialog, so the avatar can be replaced or removed
+  there. The connect viewer query returns the avatar file on the
+  identity. The invalid file message now says "5 MB or smaller"
+
+### Changed
+
+- Unauthenticated `signUp`, `signIn`, `forgotPassword`, and
+  `resendVerificationEmail` are rate-limited per IP and per field on
+  this process: 10 per minute for `signUp`, 30 for `signIn`, and 5
+  for the two mail mutations. Over the limit the field returns
+  `RATE_LIMITED` and the resolver does not run. Authentication runs
+  first, so a rejected caller does not spend that budget
+
+## [0.351.1] - 2026-11-17
+
+### Fixed
+
+- Collaborative documents open quickly again with several tabs or
+  peers connected. Rooms now catch up on edits from other instances
+  once for all peers, reading only new changes and outside the
+  document lock, instead of each connection rebuilding the document
+  while holding it. Opening a document used to take 25 seconds or
+  never finish
+- Applying a remote edit made deep in a long document is no longer
+  quadratic. A 50k-character document that took 98 seconds to catch
+  up now takes under a second
+- The console editor no longer reports a `script-src` CSP violation on
+  every load
+
+## [0.351.0] - 2026-11-17
+
+This is a security release. Upgrade as soon as possible.
+
+### Security fixes
+
+- A private OAuth client can only be authorized, through the device
+  flow or consent approval, by active members of its organization
+- Manual access tokens last at most 180 days. The create form offers
+  30, 90, and 180 days
+- Recovering an account by email revokes its OAuth tokens, refresh
+  tokens, authorization codes, and device codes. Changing a password
+  while signed in is unchanged
+- The console checks the destination it returns to after sign-in, and
+  replaces one that does not stay on the same origin
+
+### Added
+
+- Cookie banners expose `dailyPageLoads` on the console GraphQL API and
+  `daily_page_loads` on MCP `getCookieBanner`. Tracker patterns expose
+  `dailyHits` and `daily_hits` on `getTrackerPattern`. Each is one
+  entry per UTC day, oldest first. The console shows both as a line
+  chart
+
+### Changed
+
+- Viewers can read tracker patterns and tracker resources, including
+  their hit counts
+- Cookie banners count page loads and tracker hits on every page view,
+  by UTC day, instead of in a start/stop sample window. The console
+  shows the last 7 days, and daily counts are kept for 90 days. Past
+  sample counts are not carried over
+- **Breaking**: the console GraphQL API returns `dailyPageLoads` on
+  cookie banners and `dailyHits` on tracker patterns. Both take
+  `days` (7 by default, at most 90) and replace `latestSample`,
+  `samples`, `sampleHits`, `allowedSampleHits`, and
+  `deniedSampleHits`. MCP `getCookieBanner` returns
+  `daily_page_loads` and `getTrackerPattern` returns `daily_hits`,
+  with the same `days` input, instead of `latest_sample`,
+  `sample_hits`, `allowed_sample_hits`, and `denied_sample_hits`
+- **Breaking**: the public banner config no longer sends
+  `sample_active`. Sites on `@probo/cookie-banner` 0.22.0 or older
+  report no page loads until they upgrade, so hit rates stay
+  incomplete
+- **Breaking**: dynamic client registration accepts only private
+  clients, and existing dynamically registered clients are updated to
+  match. CLI and CIMD clients are unchanged
+
+### Removed
+
+- **Breaking**: the `startCookieBannerSample` and
+  `stopCookieBannerSample` GraphQL mutations, and the
+  `listCookieBannerSamples`, `getCookieBannerSample`,
+  `startCookieBannerSample`, and `stopCookieBannerSample` MCP tools
+
+## [0.350.0] - 2026-11-17
+
+### Changed
+
+- Risk analysis exports name each score's severity, such as "1 — Low",
+  instead of only the numeric range
+- Opening documents with long edit histories uses less memory and loads
+  faster
+
+### Fixed
+
+- The console footer no longer pushes the welcome page link below the
+  fold on short windows, and employee portal pages no longer reserve
+  extra space at the bottom
+
+## [0.349.0] - 2026-11-17
+
+### Added
+
+- Risk analyses store their own score levels, each with a minimum
+  score, so a policy can define Medium or omit Critical. The matrix,
+  score colors, and published document follow those levels, and the
+  legend shows each level's range, such as Low (1-12). The console
+  edits the levels in a grid, and GraphQL, MCP, the CLI, and n8n
+  accept and return them. When no levels are given, the default
+  bands for the matrix size are used, and existing analyses are
+  filled with those bands
+
+## [0.348.0] - 2026-11-17
+
+### Changed
+
+- Members with read-only access to a document now open it live
+  and see other people's edits as they happen. Changes sent
+  from a read-only session are always rejected
+- Opening a live document no longer rebuilds its content on the
+  server; the text loads from the live connection, and only a
+  pinned version is fetched separately
+
+### Fixed
+
+- Assignment notifications are resolved when a task is finished,
+  canceled, marked duplicate, or deleted, so they no longer count
+  as unread. Existing notifications on closed tasks are resolved
+  by a migration. Mentions on a closed task stay pending
+
+## [0.347.2] - 2026-11-16
+
+### Fixed
+
+- The employee home no longer leaves a large gap under the
+  dashboard cards, so the Probo Console link stays on screen
+- File and image attachments in the employee portal use the
+  same layout as the console, including a readable file size,
+  and file names are not underlined as misspellings
+
+## [0.347.1] - 2026-11-16
+
+### Fixed
+
+- Concurrent cookie banner reports from the same site no longer
+  block each other while recording trackers
+- The Probo Console link at the bottom of the employee portal
+  loads its data from the right API
+
+## [0.347.0] - 2026-11-16
+
+### Added
+
+- Suggesting mode tracks table structure. Reviewers can suggest
+  inserting or deleting a row, a column, or a whole table, and the
+  margin card names the change. Row redlines are refused on tables
+  with merged cells, and any other structural edit made while
+  suggesting is dropped with a message instead of saved untracked
+- Suggesting mode tracks character styles the way Google Docs does:
+  bold, italic, underline, strikethrough, code, and links. Readers
+  see the previous formatting until the suggestion is accepted, and
+  rejecting it restores that formatting
+- Suggesting mode tracks block changes: headings, lists, quotes, code
+  blocks, dividers, images, files, mentions, and list nesting.
+  Accepting keeps the new block and rejecting restores the old one
+- Suggestion cards describe the change (`Add: "…"`, `Delete: "…"`,
+  `Format: bold`, `Add row: with text "…"`) instead of a character
+  diff
+- `startDocumentSuggestion` takes a quote, a replacement, a comment,
+  and a quote occurrence, and paints the redline the way the editor
+  does, marking only the changed text.
+  `addDocumentSuggestionChange`, `suggestDocumentTable`, and
+  `addDocumentSuggestionFormatChange` add more redlines to an open
+  suggestion. All are on GraphQL and MCP
+- Text, style, table, and block changes share one operation with an
+  `APPLY` or `SUGGEST` mode, on GraphQL and on MCP as
+  `changeDocumentText`, `changeDocumentFormat`, `changeDocumentTable`,
+  and `changeDocumentBlock`, so agents no longer send ProseMirror
+- Employees can attach files to tasks assigned to them and to
+  comments in the employee portal, with drag and drop and paste.
+  Assigned employees can edit the task description
+- A Probo Console link at the bottom of the employee portal takes
+  console users back to the console
+
+### Changed
+
+- Documents stay editable while a suggestion is open. An edit that
+  misses the suggestion is applied and one that lands on it is
+  refused. Publishing and restoring history still wait until every
+  suggestion is resolved
+
+### Fixed
+
+- MCP `updateDocument` no longer rewrites blocks that differ only by
+  null attributes, which marked untouched text as changed
+- Document history highlights land on the edited text after several
+  edits in a row
+
+## [0.346.0] - 2026-11-13
+
+### Added
+
+- A tracker source names the sibling banner that promoted it. The
+  banner is on GraphQL and MCP, and the console opens that banner's
+  tracker list from an icon beside the source badge
+- Connect Datadog with a service access token or a personal access
+  token and the site the organization is on. The site list adds UK1
+  and US2-FED. An application key is turned away, because it only
+  works beside an API key
+- A Medium band on risk scores, between Low and High, with its own
+  gold color. Score labels use the pale wash behind solid-colored
+  text. Bands are ratios of the matrix maximum, so 3×3, 4×4, and
+  5×5 matrices scale the same way, and exported risk analysis
+  documents use the same labels
+
+### Changed
+
+- The employee portal Tasks heading and breadcrumb say My tasks, so
+  the page is distinct from the compliance console's Tasks area
+- Cookie source promotion runs from the banner that wrote the cookie
+  and compares only the names updated since that write
+- The cookie policy vendor list keeps only vendors of
+  consent-category trackers that match the published snapshot,
+  including a tracker that later moved to uncategorised, and walks
+  every pattern page
+- Assigned and mentioned tasks in the console bell open the console
+  task. Signature and approval notifications still open the employee
+  portal
+
+### Fixed
+
+- A select shows its placeholder when the value render function
+  returns nothing, including the Segment region picker and the
+  Datadog site picker
+- Links in employee portal task descriptions and comments use the
+  info color and an underline. A click follows the link while
+  reading and opens the link editor while the field is focused
+
+## [0.345.0] - 2026-11-13
+
+### Added
+
+- Bidirectional Asana task sync beside the existing Linear sync. Name,
+  description, deadline, assignee, comments, files, and mentions sync
+  both ways. Without a mapped project, state follows completion only;
+  a saved project mapping also moves sections and writes a chosen
+  priority field. Publish and link tasks from the console, GraphQL,
+  and MCP
+- Cookie banners that share a registrable domain are grouped, so a
+  banner reuses a stronger cookie source seen by a sibling domain.
+  Existing banners are attached by the migration
+
+### Changed
+
+- GraphQL client errors log at info with their code instead of
+  UNKNOWN at error level. Store failures and recovered panics are
+  coded INTERNAL
+- Looking up the SSO URL for a domain with no enabled SAML
+  configuration returns null instead of an error
+- TLS handshakes that share no key exchange with the server are no
+  longer logged
+
+### Fixed
+
+- Cookie tracker pattern analysis no longer collapses distinct names
+  that share a short vendor stem, such as `tt_sessionId` and
+  `tt_appInfo`, into one prefix glob. A prefix or sandwich glob is
+  emitted only when the wildcard replaces a segment `looksVariable`
+  already accepts, so a short project id such as `_ga_ABC123` stays
+  exact
+- A replayed SAML assertion is reported as a replay instead of a
+  generic insert error
+- The HTTPS server logger is named `probod.http.server` instead of
+  `probod..http.server`
+
+## [0.344.0] - 2026-11-12
+
+### Added
+
+- Document review. Members comment on a quote in a document, with
+  rich text and member mentions, and reply to, resolve, or reopen
+  threads. Suggesting mode records inserts, deletions, and removed
+  line breaks as redlines that reviewers accept or reject in place.
+  Review cards sit in the margin beside the page and stay in sync
+  across open tabs. Comments and suggestions are also available on
+  the GraphQL and MCP APIs
+- Viewers and auditors can comment on a document without editing it
+- Separate permissions for commenting, updating and deleting
+  comments, resolving threads, suggesting, and accepting or rejecting
+  suggestions. The suggesting mode only shows for members who can
+  suggest
+- Publishing or restoring a document is blocked while a suggestion is
+  still open
+
+### Changed
+
+- Opening and saving a large collaborative document no longer holds
+  the document lock while its history is rebuilt, so saves stop timing
+  out and concurrent editors are not stalled. A failed save retries
+  with a backoff of up to five seconds
+- Every authorization check writes its own audit log entry, including
+  repeated reads of the same document or profile in one request
+
+### Removed
+
+- **Breaking**: the discard-draft action on documents, along with the
+  `deleteDocumentDraft` GraphQL mutation and MCP tool and the
+  `core:document:delete-draft` permission
+- **Breaking**: the MCP `updateDocument` tool no longer accepts
+  `content`. Use fragment edits to change document content
+- Lazy seeding of collaboration documents on first open, announced in
+  0.325.0, and the `migrate-collaboration-documents` command
+
+### Fixed
+
+- Shutting down the server while a collaboration socket is open no
+  longer panics
+- A session write that fails on a live request is reported instead of
+  being ignored when the request is canceled at the same time
+
+## [0.343.0] - 2026-11-12
+
+### Added
+
+- UniFi access review connector. A Site Manager API key reviews the
+  administrators of a console's Network application and the users of
+  its built-in RADIUS server
+
+### Fixed
+
+- Cookie banner scan tab badges show live counts while a scan runs and
+  the final count once it ends. Long identifiers and resource URLs
+  wrap, and the full initiator URL is readable
+- Listing controls or applicability statements ordered by section
+  title no longer skips rows after the first page
+- Compliance portal visitors can re-request access to a document,
+  report, or file they already requested
+- TLS handshakes for a custom domain whose certificate is pending,
+  failed, or expired abort without logging an error, and a still-valid
+  certificate is kept in the cache during renewal
+
+## [0.342.0] - 2026-11-12
+
+### Added
+
+- The console integrations page suggests third-party connectors that
+  match the organization's third parties, in the connectors list and
+  the marketplace
+- The cookie banner scanner detects banners installed through a script
+  tag or an npm package, and reports a dedicated failure reason when
+  the install cannot be read
+
+## [0.341.0] - 2026-11-11
+
+### Added
+
+- `addThirdParty` in MCP accepts `parent_third_party_id`, so an agent
+  can add a sub-processor to a third party's supply chain
+- Findings have a required title. Existing findings are backfilled
+  from the first 200 characters of the description, or from the
+  reference id when that is blank. The title is available on GraphQL,
+  MCP, the CLI, and the n8n node, and in the published findings
+  document
+- Tasks can be linked to a finding, matching the existing finding-audit
+  link. Link and unlink are available on GraphQL, MCP, and n8n
+- The console findings list, details, and create pages use the v2 UI.
+  The list filters by kind, status, priority, owner, and audit. Details
+  show an inline title, property chips, linked tasks, and linked
+  audits. Creation is a page at findings/new
+- A task's findings card can search for a finding and link or unlink
+  it, for viewers who can create or delete the task mapping
+- Linear description files are imported. Attachments stored in the
+  issue's ProseMirror description are downloaded on webhook updates
+  and when an issue is linked. Already linked tasks pick them up on
+  the next description update
+- One machine can be enrolled in more than one organization and report
+  posture to each. A second enrollment in the same organization still
+  conflicts on the hardware UUID, and the pending device is revoked
+
+### Changed
+
+- People who have not saved a notification preference now get reminder
+  emails for task mentions, the same as task assignments. A saved
+  preference still wins
+- The add-source page hides SCIM connectors and leaves their accounts
+  out of the vendor account count
+- GraphQL traces and logs use the name written on the operation when
+  the request omits operationName
+
+### Fixed
+
+- PDF previews in the compliance portal, the employee portal, and the
+  console work on older Safari, iOS, and Chromium browsers. The viewer
+  used pdf.js APIs those browsers do not provide
+- Outlook SafeLinks no longer shows up as an error when it opens a
+  portal link. The scanner rejects a promise; that is not a visitor
+  failure
+- Cancelling a signature request resolves the recipient's pending
+  signature notification in the same transaction. It stays pending
+  when they still have an open request on another version of the
+  document
+- Running processes load renewed TLS certificates during the 30-day
+  renewal window, instead of keeping the previously parsed certificate
+
+## [0.340.0] - 2026-11-04
+
+### Changed
+
+- People who have not saved a notification preference now get an email
+  for every task mention, and reminder emails when a task is assigned.
+  Other notification types stay on reminders. A saved preference still
+  wins
+
+## [0.339.0] - 2026-11-04
+
+### Added
+
+- Email notifications. Every notification lands in the in-app inbox,
+  and email is sent from pending inbox items. Each organization and
+  membership profile chooses per notification type: no email, a single
+  email, up to four follow-up reminders until the item is handled, or a
+  weekly digest. Settings live on the employee portal
+- Task assignment and mention emails, linking to the task in the
+  employee portal
+
+### Changed
+
+- Signature and approval requests use the notification email schedule
+  instead of their own reminder schedule.
+  `PROBOD_DOCUMENT_NOTIFICATION_INTERVAL`,
+  `PROBOD_DOCUMENT_NOTIFICATION_DEBOUNCE_DELAY`, and
+  `PROBOD_DOCUMENT_NOTIFICATION_REMINDER_INTERVAL` are renamed to
+  `PROBOD_NOTIFICATION_EMAIL_INTERVAL`,
+  `PROBOD_NOTIFICATION_EMAIL_DEBOUNCE_DELAY`, and
+  `PROBOD_NOTIFICATION_EMAIL_REMINDER_INTERVAL`.
+  `PROBOD_NOTIFICATION_WEEKLY_WEEKDAY` and
+  `PROBOD_NOTIFICATION_WEEKLY_HOUR` set when the weekly digest is sent
+  (default Monday, 16:00 UTC)
+- GraphQL client errors such as `NOT_FOUND` and `INVALID` are logged at
+  info instead of error
+
+### Fixed
+
+- Long finding descriptions no longer push the findings table headers
+  out of place
+
+## [0.338.0] - 2026-11-04
+
+### Added
+
+- Clicking an image in a read-only task comment opens it at viewport
+  size. Escape, the close control, or a click on the backdrop dismisses
+  it
+
+### Changed
+
+- The access review campaign page filters sources by provider instead of
+  by connector account. Sources without a connector (CSV imports) are
+  hidden while a provider filter is active
+- MCP clients are no longer told to listen for tool list changes, since
+  the tool list is fixed for the life of the server
+
+## [0.337.0] - 2026-11-03
+
+### Added
+
+- Cookie banner scans. Request a scan of a cookie banner's site, list
+  past scans, and see the resources and trackers each scan found
+- The tracker list has views for categorised, uncategorised, visitor,
+  scan, and all trackers, a Seen by column that filters by any
+  combination of observers, and cookie details on each detection
+- The Slack settings page shows the connected workspace name,
+  including for existing installs
+
+### Changed
+
+- The portal Slack setup page no longer asks reviewers to run
+  `/probot login`. It only asks to invite @Probo into a channel
+
+### Fixed
+
+- The Slack channel picker follows empty pages that still have a
+  cursor, so channels past them load and Show more stays available
+
+## [0.336.0] - 2026-11-03
+
+### Added
+
+- The measure category field is a combobox that lists existing
+  categories and creates a new one when no match exists. Category
+  matching ignores case and surrounding whitespace
+- The Linux OS version posture check reports the full kernel
+  version next to the distribution name, and the console shows the
+  kernel's major, minor, and patch numbers
+
+### Fixed
+
+- Large collaborative documents open from far-away regions. A
+  client far from the server no longer sees the document reported
+  as unavailable while a large snapshot loads, and the initial
+  sync of an 8 MiB document has enough time to finish on a
+  long-haul link
+- A collaboration connection rejects frames that name a document
+  other than the one its URL authorized
+
+## [0.335.1] - 2026-11-02
+
+### Fixed
+
+- PDFs no longer raise a Content Security Policy violation in the
+  compliance and employee portals: both now allow WebAssembly
+  compilation for pdf.js
+- A PDF that fails to load in the compliance or employee portal
+  shows an inline error with a reload button in the viewer,
+  instead of replacing the whole page with an error screen
+
+## [0.335.0] - 2026-11-02
+
+### Added
+
+- A campaign source whose fetch failed can be retried from the
+  campaign page, the API, and MCP. The campaign goes back to in
+  progress until the new fetch settles, and decisions cannot be
+  recorded while the retry runs
+
+### Changed
+
+- 1Password Users API connectors use the v1 API. The token
+  endpoint comes from the Region setting, and existing
+  connections move to it on their next fetch. The `tokenUrl`
+  input of the client-credentials connector mutation is
+  deprecated and ignored. The Enterprise region is supported
+- The 1Password account ID is checked when a connector is
+  created: it must be 26 letters and digits. The connect form
+  says where to find it, and that it is not the client ID
+- The 1Password connection check lists one user from the Users
+  API or the customer's SCIM bridge, so a token for another
+  account, or without the View users scope, is refused
+- A campaign cannot start while a source uses a connector that
+  needs an organization and has none selected. The error names
+  each source to fix
+- The compliance portal Slack channel picker lists the
+  channels the bot has joined, 50 at a time, with Show more
+  for the next page. It shows an error when the next page fails
+
+### Fixed
+
+- An access review campaign cannot be completed while a source fetch
+  has failed. Retry the fetch, or cancel the campaign
+- 1Password Users API sources list their users. They always
+  reported zero accounts
+- Vercel connectors saved without a team record it when they
+  are reconnected, so their source fetches work again
+- AWS Identity Center discovery skips a region that does not
+  answer within five seconds, so one unreachable region no
+  longer fails the whole fetch
+- Apollo.io source fetches decode the users response again
+- Grafana sources with 100 or more organization users fetch
+  them in one request instead of failing on the page limit
+- Cancelling a campaign stops its queued and running source
+  fetches. A cancelled campaign no longer receives entries
+- The Complete campaign button turns on after the last pending
+  decision, without a reload
+- Adding a source to a draft campaign no longer shows the
+  error screen
+- List searches accept punctuation such as `:` or `(`. A pasted
+  document title no longer fails the documents, controls,
+  risks, internal controls, or devices list
+- The compliance portal PDF viewer shows an error card with a
+  retry when a document fails to load, resets the page when the
+  file changes, and formats the zoom percent for the locale
+- The console Go to dialog keeps the first character typed
+- Employee portal shared documents use the wide top bar, like
+  signature and approval documents
+
+## [0.334.0] - 2026-10-30
+
+### Added
+
+- Published documents can be shared with the employee portal.
+  The console catalog is paged and searchable. Employees who
+  can open the portal see those documents and can export the
+  current published PDF. The built-in prb client gains the
+  employee portal scope
+- Elastic Cloud access reviews connect with an organization
+  API key. The roster is members and API keys, with each role
+  and whether it administers the organization. A key that
+  cannot read that roster is refused, and the error names the
+  Organization owner role it needs
+- Front access reviews list a company's teammates through an
+  OAuth app or a company API token
+- Daytona access reviews list an organization's members with
+  an API key. Owners are admins. Pending invitations are not
+  listed, and there is no member status, MFA, or last login
+- Task comments send with Command-Enter on macOS and
+  Control-Enter elsewhere. The composer shows a paperclip
+  that opens a picker for images and files
+- OpenAI and Anthropic can use a custom base URL
+  (`PROBOD_OPENAI_BASE_URL` and `PROBOD_ANTHROPIC_BASE_URL`),
+  for Azure OpenAI or a gateway. Unset keeps the default
+  endpoints
+
+### Changed
+
+- Federation tokens set `nbf` equal to `iat` again
+- The Azure token exchange uses azidentity again. The request includes
+  the scopes that library adds
+
+### Fixed
+
+- Microsoft 365 access reviews assign a directory role to the
+  users of a group that holds it. Those users were reported
+  as non-admins, including Global Administrator. A user whose
+  only roles sit outside the admin list is unknown rather
+  than a non-admin. A user with no role is still not an admin
+- Brex access reviews read `user_role`. `ACCOUNT_ADMIN` is an
+  admin, `EMPLOYEE` and `BOOKKEEPER` are not, and any other
+  role stays unclassified instead of looking like it has no
+  role
+- Probo member access reviews read state from the membership
+  profile. Campaign fetches of this source failed after that
+  column moved off the membership. Deactivated members,
+  pending invitees, and memberships without a profile are
+  inactive
+- A failed Linear sync deletes the files it stored. A failed
+  apply or a lost webhook lease left those files in storage
+
+## [0.333.0] - 2026-10-29
+
+### Added
+
+- Task mentions sync with Linear. A new mention in a task
+  description or comment is sent as a profile URL, and a profile
+  URL coming back from Linear becomes a mention chip. Re-syncing
+  the same document does not notify a profile it already contains.
+  A mention that cannot be resolved stays plain text
+
+### Changed
+
+- Listing, counting, and exporting audit logs uses an index on
+  organization, tenant, and time, so a page no longer walks every
+  tenant
+
+### Fixed
+
+- The employee portal greeting and account menu show the membership
+  profile name, the same name the console shows. The organization
+  picker and device enrollment still use the identity name
+
+## [0.332.0] - 2026-10-28
+
+### Added
+
+- The console, employee portal, and compliance portal can report
+  browser telemetry to a Grafana Faro collector. It is off unless
+  `faro.enabled` is set, with `faro.collector-url` and `faro.api-key`
+- Hovering a mention shows the member's avatar, name, and email, in
+  the console and the employee portal
+
+### Changed
+
+- Internal controls show one status. The list, the form, and linked
+  controls use implementation status, and the list can filter on it
+- The internal controls list shows each control's code, who owns it,
+  its status, and the next evidence or test that is due. Search matches
+  the name or the code. Filters, sort, the page, and a Needs attention
+  view stay in the URL. The list can filter on several statuses, an
+  owner, and controls that need attention, and it can sort by the next
+  due date. Owner and Needs attention filters are rejected on as-of
+  snapshots, which do not record owners or due dates
+
+### Fixed
+
+- Date pickers, dropdowns, and popovers opened from a dialog or drawer
+  show above it instead of behind it
+
+## [0.331.0] - 2026-10-28
+
+### Changed
+
+- Creating a task opens a full page instead of a dialog, with every
+  field the task page offers. The task is saved once it has a name
+- The integrations list and the access review source pages render
+  right away, and each connector card fills in its connection status
+  as the vendor responds. Filtering by status waits for the statuses
+  while search and filters stay usable
+
+### Fixed
+
+- Integrations lists no longer time out for organizations with many
+  connectors
+- Filtering integrations by status matches the status each card
+  shows. A connector that needs a reconnect is no longer listed under
+  Connected
+- GraphQL operation logs record only error counts and codes instead of
+  full error objects, which could include submitted values
+
+## [0.330.3] - 2026-10-28
+
+### Fixed
+
+- Compliance portal document previews load again. The PDF worker came
+  from a different pdfjs-dist than react-pdf uses, so previews failed
+  with an API and worker version mismatch
+- Employee portal task editor shows mentions and task checkboxes
+  styled like the console instead of plain text and stacked checkboxes
+
+## [0.330.2] - 2026-10-27
+
+### Fixed
+
+- The Users destination in the console spotlight opens the users
+  settings page instead of an error page
+
+## [0.330.1] - 2026-10-27
+
+### Fixed
+
+- Employee portal PDF previews load again. The worker was a newer
+  pdfjs-dist than react-pdf uses, so previews failed with an unknown
+  worker action
+- Task-list checkboxes no longer freeze the page. Updating focus was
+  rewriting the checkbox on every editor change, which looped
+
+## [0.330.0] - 2026-10-27
+
+### Added
+
+- Rich text can include a task list of checkboxes, from the block
+  menu or by pasting markdown checkbox syntax. A description synced
+  with Linear keeps those checkboxes when the issue comes back
+- Employees can mention members in a task description or comment on
+  the employee portal, with the same picker as the console
+
+### Fixed
+
+- Framework lists return a single page. The page-size arguments were
+  dropped, so every framework came back
+- Viewing a DPIA, a TIA, or a tracker resource by id checks the
+  matching permission and loads the record
+
+## [0.329.0] - 2026-10-27
+
+### Added
+
+- Cookie banners can force the opt-in banner for every visitor,
+  including in opt-out and notice jurisdictions. Tracker hits are
+  scored as opt-in, the detected regulation stays on the consent
+  record, and California keeps its privacy-choices link
+
+### Fixed
+
+- Opening a collaborative document no longer fails when a client
+  drops during the handshake, and a disconnected client stops
+  waiting for the document to open
+
+## [0.328.0] - 2026-10-27
+
+### Added
+
+- Mention organization members in task descriptions and comments.
+  Newly mentioned members get an in-app notification; the author and
+  members already mentioned are skipped
+
+### Fixed
+
+- The compliance portal PDF viewer loads documents again when another
+  dependency installs a different `pdfjs-dist` version
+
+## [0.327.0] - 2026-10-26
+
+### Changed
+
+- The compliance portal Requests item is now Privacy Requests in the
+  portal nav, page, and console settings. The dialog says the visitor
+  submits a request to access or delete personal data
+
+### Fixed
+
+- The document editor shows image and file blocks again. They
+  disappeared when documents moved to the collaborative editor
+- MCP webhook list, get, create, and update accept document events
+  such as `document:archived`. A subscription that included one no
+  longer fails output validation and hides its ID
+- Closing the document collaboration socket without a status code is
+  a clean disconnect
+
+### Removed
+
+- Personal API keys. OAuth2 access tokens authenticate API, MCP, file,
+  and n8n requests
+
+## [0.326.0] - 2026-10-23
+
+### Added
+
+- PlanetScale access review connector, with multi-organization
+  selection
+- Access review connect dialogs link to the vendor page where the API
+  key or client credential is created
+- Linear comments now appear on the task timeline, including comments
+  imported before this release
+
+### Changed
+
+- Task list aligns avatars and created dates, and empty filters use a
+  consistent placeholder color
+
+### Fixed
+
+- OAuth2 access review connections keep rotated refresh tokens even
+  when building the source fails, and providers can send scopes on
+  refresh
+- Canceled GraphQL requests no longer panic the server
+- Tracker policy rendering drops a stale render when the website label
+  or published snapshot changes while it is being built
+
+## [0.325.1] - 2026-10-23
+
+### Fixed
+
+- Bumped DOMPurify to 3.4.17 to pick up its sanitization security
+  fixes
+
+## [0.325.0] - 2026-10-23
+
+### Added
+
+- This version still seeds a document into its collaboration CRDT
+  the first time someone opens it for editing. The next version will
+  not. Run `go run ./cmd/migrate-collaboration-documents` before
+  upgrading, or a document that was never opened stays unconverted.
+  Run the command after the migration that copies the latest version
+  content onto documents. It skips archived, soft-deleted, and
+  already seeded documents. `-dry-run` lists what it would seed, and
+  `-continue-on-error` keeps going after a failure
+
+### Fixed
+
+- Seeding a large document into its collaboration CRDT finishes
+  instead of stalling on the text append and on documents with
+  thousands of marks
+- The Azure token request sends only the scope the caller asked for.
+  It no longer adds openid, offline_access, or profile
+- The compliance portal loads published documents again instead of
+  failing with an ambiguous `tenant_id` column error
+
+## [0.324.0] - 2026-10-22
+
+### Added
+
+- Documents support real-time collaborative editing. Other editors
+  appear in a facepile with a live caret for each open tab, and caret
+  names come from the signed-in user so they cannot be spoofed
+- The document editor has a history panel that groups edits into
+  sessions by author, highlights inserts and deletes, and restores a
+  session from the draft. GraphQL gains `Document.history`,
+  `Document.revision`, and `restoreDocumentHistory`, and MCP gains
+  `listDocumentCollaborationHistorySessions`,
+  `getDocumentCollaborationHistorySnapshot`, and
+  `restoreDocumentCollaborationHistory`
+- MCP document tools return the collaboration heads, and fragment
+  edits apply on those heads so agents can edit a document while
+  others are typing
+
+### Changed
+
+- The console edits the live document directly. A version is created
+  only when publishing or requesting approval, and a version URL shows
+  a frozen snapshot. Rejected and voided versions keep their number
+  for the next publish
+- GraphQL `Document` exposes `title`, `classification`,
+  `documentType`, `orientation`, and `content`. Version and history
+  `content` is a `DocumentContent` object with `prosemirror` and
+  `markdown` fields. The `DRAFT` version status is replaced by
+  `REJECTED` and `VOIDED`, and `createDocument` no longer returns
+  `documentVersionEdge`
+- Documents pending approval stay read-only, and an open approver
+  form closes when the document locks
+
+## [0.323.0] - 2026-10-22
+
+### Added
+
+- Employees can open their assigned tasks in the employee portal and
+  act on them as their permissions allow
+- The task details page has a Linear card under the properties that
+  links an existing issue or creates a new one, and lists the linked
+  internal controls with a search menu to add more
+- Task comments appear in the activity timeline, oldest first, and can
+  be edited or deleted from there. GraphQL task activities gain the
+  `COMMENTED` type and a `comment` field
+- `getCompliancePortal` in MCP returns the public URL, custom domain,
+  and Slack status. Creating a custom domain returns the DNS records
+  needed to point it at Probo
+- Cmd/Ctrl+F focuses the page search field, the sidebar shows the
+  Cmd/Ctrl+K Go to shortcut, and confirm dialogs accept Mod+Enter to
+  confirm and Mod+C to cancel
+
+### Changed
+
+- The task details page is restyled around soft cards, with attributes
+  edited through the same menus as the task list. Opening a task keeps
+  the list filters when navigating back
+- Task description edits no longer create activity entries. The
+  `DESCRIPTION` task activity field is removed from GraphQL and MCP
+
+### Fixed
+
+- Identity federation discovery is also served with the well-known
+  segment before the organization id. Entra fetches that URL and was
+  receiving 404, so it never loaded the key that verifies the assertion
+
+## [0.322.0] - 2026-10-22
+
+### Added
+
+- Cookie banners measure trackers in a start/stop sample window, with
+  one open sample per banner. Tracker cards rate each pattern over the
+  page loads where it may fire, split by whether consent allowed it.
+  The header shows page loads for the current window
+- The public banner HTTP API accepts `sample_active` and
+  `consent_action`. `discovery_hit` is still accepted
+- The console and the employee portal show notifications for signature
+  requests, approval requests, and task assignments made by someone
+  else
+- Webhook deliveries include an `actor` object identifying the member
+  who performed the action: profile id, full name, email address, and
+  role. `actor` is null when no member can be identified
+
+### Changed
+
+- Cookie banner discovery windows are samples in the console GraphQL
+  API and the MCP tools. Past discovery counts are not carried over;
+  start a new sample to measure again
+- Connector region settings declare their control. 1Password's
+  client-credentials region uses the same US, EU, or CA select as
+  OVHcloud, and any other value is rejected
+
+### Fixed
+
+- Linking a framework on the compliance portal reports it as public.
+  An empty visibility failed MCP output validation after the row was
+  written
+
+### Removed
+
+- OVHcloud Canada is removed. An account cannot be created in that
+  region yet, and the connector can be added again when one can
+
+## [0.321.1] - 2026-10-21
+
+### Fixed
+
+- Built with Go 1.27.3 (up from 1.27.2) to pick up the standard-library
+  security fix in `crypto/x509` (CVE-2026-111943)
+
+## [0.321.0] - 2026-10-21
+
+### Added
+
+- Cookie banner trackers can be created from a new page in the console;
+  exact or glob matching is derived from a `*` wildcard in the pattern
+
+### Changed
+
+- The cookie banner theme section moved from settings to the install
+  page, next to the embed code
+
+### Removed
+
+- Tracker patterns no longer have a display name; the pattern itself is
+  the name. `displayName` is removed from the console GraphQL API and
+  `display_name` from the MCP tracker pattern tools
+
+## [0.320.0] - 2026-10-20
+
+### Added
+
+- OVHcloud US and OVHcloud Canada are separate connectors, next to
+  OVHcloud EU. Each region has its own app, configured with
+  `PROBOD_CONNECTOR_OVHCLOUD_US_*` and `PROBOD_CONNECTOR_OVHCLOUD_CA_*`
+  beside the existing EU pair. The console labels each one OVHcloud
+  and shows the region as a flag. Connectors created before regions
+  existed stay on OVHcloud EU.
+- Connector API keys can be replaced without deleting the connector,
+  preserving its name and enabled accounts
+
+### Fixed
+
+- Images and files imported from Linear are stored as private Probo
+  files so they render in task descriptions and comments
+- Removed SCIM users whose profiles must be retained no longer reappear
+  in the user list or get deleted repeatedly during synchronization
+- Compliance portal managers and access managers can open the employee
+  portal and sign policies without authorization errors
+
+## [0.319.0] - 2026-10-20
+
+### Added
+
+- The integrations marketplace highlights third parties that have a
+  matching connector but are not connected yet, and can filter the
+  catalog to them
+
+### Changed
+
+- Signed-in users accept an invitation from the memberships page without
+  being logged out
+- Activating an invitation no longer lets the invitee set a password;
+  they are sent to sign in with a magic link or a password-reset email
+
+### Fixed
+
+- OAuth callback errors on the integrations and access review sources
+  pages no longer loop toasts until the page goes blank
+
+## [0.318.1] - 2026-10-20
+
+### Fixed
+
+- The task assignee picker and filter load assignee names within the
+  organization the console is viewing, and no longer reuse a cached
+  profile from another organization
+- Employee document approvals and signatures no longer send a completion
+  email to the signer; compliance-portal NDAs still do
+- The OAuth tokens list and new-token form are centered at the page max
+  width like other account screens
+
+## [0.318.0] - 2026-10-19
+
+### Changed
+
+- Risk treatment, scores, and owner are read-only on catalog risks; they
+  now live on treatment plans. Existing values stay visible on the risk
+  detail page and in read responses. GraphQL `createRisk`/`updateRisk`
+  and MCP risk create/update no longer accept `treatment`, likelihood,
+  impact, or owner, and the console risk list drops those columns and
+  both risk matrices
+
+### Fixed
+
+- The task assignee picker and filter show assignee names again
+
+## [0.317.0] - 2026-10-19
+
+### Added
+
+- The console device list filters by posture warnings, keeping devices
+  whose latest posture is failing or unknown. The warning badge opens
+  its list of failing checks in a popover that stays open until closed
+
+### Changed
+
+- Device list filters accept several values and keep devices that match
+  any of them. GraphQL `state`, `platform`, and `agentVersion` become
+  `states`, `platforms`, and `agentVersions`. MCP `state`, `platform`,
+  and `agent_version` become `states`, `platforms`, and
+  `agent_versions`
+- The device evidence PDF uses the same masthead, kickers, and table
+  style as the compliance documents
+- The Linear connector card is named Linear Task Sync and shows the
+  Linear logo
+
+### Fixed
+
+- Device posture badges match the stored agent verdicts. A screen-lock
+  delay and a recorded password length no longer show as failures, and
+  a check that does not apply is no longer shown as a warning
+- The device details back link only covers its label and icon
+- The compliance portal audit list shows the translated "To book" state
+  instead of a raw key
+- Accepting an invitation on a SAML or SCIM profile no longer fails as
+  an internal error. The page follows the continue URL, and SCIM
+  expires pending invitations when it leaves the profile active
+
+## [0.316.0] - 2026-10-16
+
+### Added
+
+- Employees can view and update their assigned tasks from the employee
+  portal
+- The employee portal home groups signatures and approvals under a
+  single Documents hub
+- Audits can cover several frameworks. GraphQL adds
+  `createAuditFrameworkMapping` / `deleteAuditFrameworkMapping`, and MCP
+  adds `linkAuditFramework` / `unlinkAuditFramework`
+- The console task list groups tasks into collapsible status cards.
+  Rows change state, priority, due date, estimate, and assignee in place,
+  link, unlink, or open a Linear issue, and reorder by drag within a
+  group. Canceled and duplicate groups start collapsed
+- Tasks can be filtered by due date (overdue, due within a horizon, or
+  no deadline) and by "Not assigned". Searching opens every group with
+  a match
+
+### Changed
+
+- `Audit.framework` is replaced by the `Audit.frameworks` connection,
+  and `createAudit` takes `frameworkIds`. MCP audits use
+  `framework_ids`. Creating an audit still requires at least one
+  framework
+- The console tasks toolbar no longer filters by internal control
+
+## [0.315.0] - 2026-10-16
+
+### Added
+
+- Task settings can disconnect Linear Sync and update Linear settings.
+  Settings hold the default team and whether new issues on that team
+  are imported. New tasks start on the default team, and the choice can
+  still be changed before the task is created. MCP
+  `updateLinearSettings` changes both fields together
+- Active Linear issue import creates a Probo task for each new issue
+  on the default Linear team and keeps that task in sync
+
+### Changed
+
+- Creating a task in GraphQL and MCP uses the organization's default
+  Linear team when `linearTeamId` / `linear_team_id` is omitted. Null
+  creates the task with no Linear team
+- `createTask` returns the created task and a GraphQL error when the
+  Linear publish attempt fails after the task is created
+
+### Fixed
+
+- A rich-text image that only declares a viewBox no longer collapses to
+  zero width
+
+## [0.314.0] - 2026-10-15
+
+### Added
+
+- Device postures can be downloaded as a PDF snapshot, one page per
+  device, from the console and MCP. Employees cannot download it
+- Device list filters (owner search, state, platform, agent version)
+  apply to the whole list, including the total and later pages
+- Several devices can be revoked or deleted in a single all-or-nothing
+  call (`revokeDevices`, `deleteDevices`)
+
+### Changed
+
+- Device pages use the v2 kit. Rows show the owner and a posture
+  summary, and the list loads 25 devices at a time with the total
+- MCP `Device` has a required `postures_included` field, so an empty
+  `latest_postures` is no longer read as "no checks"
+
+## [0.313.0] - 2026-10-15
+
+### Added
+
+- Access review sources show the connected account name and a provider
+  tag in the console, including when picking sources for a campaign
+- MCP transport requests are logged with structured fields
+
+### Changed
+
+- SCIM provider requests that fail with a 5xx response are retried with
+  bounded memory and wait time
+
+### Fixed
+
+- Audits accept the same start and end date
+- SVG attachments display in rich text
+
+## [0.312.0] - 2026-10-14
+
+### Added
+
+- Documents, tasks, comments, and risk descriptions can include images
+  and files. The file is private, and readers load it from
+  `/api/files/v1/{id}`
+- GraphQL and MCP `uploadFile` uploads a file for someone who can create
+  or edit a task, a document, or a risk
+- Task sync copies those files to Linear and maps the asset URL back to
+  the file id
+- Generated documents include those images
+
+## [0.311.1] - 2026-10-14
+
+### Fixed
+
+- Evidence uploads sent as `application/octet-stream` use the content type
+  implied by the filename instead of being rejected
+- Rejected evidence files return a validation error instead of an internal
+  server error: `OUT_OF_RANGE` when the file is too large, `INVALID_FORMAT`
+  when its type or extension is not allowed
+
+## [0.311.0] - 2026-10-14
+
+### Added
+
+- Every minted federation assertion logs its header and claims, and
+  whether this process's key set verifies the signature. The signature
+  is never logged
+
+### Changed
+
+- Cookie banner discovery hit counts are buffered in memory and flushed
+  in batches, and a hit no longer needs an existing stats row. Detected
+  trackers and patterns no longer show a last-seen timestamp
+
+### Fixed
+
+- GitHub access review marks an SSO credential authorization inactive
+  once its token has expired, instead of reporting every authorization
+  as active. Expired tokens stay in the list so a reviewer can still
+  see and revoke them
+
+## [0.310.0] - 2026-10-13
+
+### Added
+
+- Connector accounts store the instance name. Source cards and the accounts
+  drawer show it, a campaign snapshots it, and names already resolved on
+  access sources are copied over. A CSV source keeps its own name
+
+### Changed
+
+- MCP can create an API-key or client-credentials connector for a provider
+  that needs no extra setting. An access source takes a connector that
+  already exists, or CSV data, and no longer collects credentials
+- The console loads the employee portal list and leaves a forbidden result
+  on that field. The shell hides the employee-portal item in that case, and
+  any other list error still fails the shell. Switching organization no
+  longer reuses the previous portal query
+
+### Fixed
+
+- Reconnect is shown only when reconnecting fixes the connection
+- Connect stays on the right of a vendor form when the provider has no
+  documentation link
+- MCP evidence lists return the file download URL for file evidences
+- An access-source MCP error for a missing account, more than one account,
+  or a SCIM binding is returned to the client instead of as an internal
+  error
+- A blank OAuth client id or secret is rejected instead of being stored as
+  a disconnected connector
+- Viewers can list their own devices in the employee portal
+- Banners published before discovery stats were frozen get a frozen
+  timestamp, so the console no longer treats them as still discovering
+
+## [0.309.1] - 2026-10-09
+
+### Fixed
+
+- The console skips the employee portal list unless the viewer can list
+  portals, so auditor and compliance-portal roles keep the organization
+
+## [0.309.0] - 2026-10-09
+
+### Added
+
+- Employee portal settings page in the console, with branding (logo) and
+  capabilities sections and a dedicated navigation entry
+
+### Changed
+
+- The employee portal agent is hidden from the console navigation
+
+### Fixed
+
+- Bump `golang.org/x/net` to v0.60.0 to pick up the HTTP/2 HPACK encoder
+  race fix (CVE-2026-97032)
+
+## [0.308.0] - 2026-10-09
+
+### Added
+
+- Cookie banner discovery counts page loads and tracker hits by browser
+  family (Chrome, Edge, Firefox, Safari, Other) over one shared window that
+  is frozen on first publish. The console shows them as stat tiles with
+  browser logos and a callout until the banner is frozen, and they are
+  exposed on the GraphQL, MCP, CLI, and n8n APIs
+- Cookie detections record the cookie `Domain` and promote the tracker
+  source, so extension cookies are no longer reported as site trackers
+
+### Changed
+
+- The cookie banner **Configure** navigation entry is now **Settings** and
+  is the banner landing page. Delete moved to the page header
+- Tracker and pattern lists keep their page in the URL, so opening a pattern
+  and going back returns to the same page
+- Console success and error feedback uses the v2 toaster
+
+### Fixed
+
+- Host-only and Domain-scoped cookies with the same name are kept as
+  separate detections
+- A tracker report with an oversized cookie `Max-Age` no longer aborts the
+  whole batch
+- Android Edge is no longer counted as Chrome, and the SDK stops retrying
+  page views after a 404
+- Tracker pagination no longer reuses another banner's cursor
+
+
+## [0.307.0] - 2026-10-09
+
+### Added
+
+- Connectors have a required name that tells several connections to one
+  provider apart, such as Production or Access review only. Existing
+  connectors are numbered per organization and provider (AWS #1, AWS #2).
+  The name is collected on every connect form and can be changed from the
+  provider page
+- A task can be linked to several internal controls, and the task list
+  filters by internal control. Deleting an internal control unlinks its
+  tasks instead of deleting them
+- Vendors are connected from Marketplace pages, with a second step to pick
+  the credential type when a vendor offers more than one. A new Linear Sync
+  connector is stored as "tasks"
+- Adding access review sources has its own page. Connected accounts are
+  grouped by vendor and every selected account is added in one step. CSV
+  sources show a file icon
+
+### Changed
+
+- Access review sources, source cards, and the integrations screens use the
+  v2 kit. Deleting a source confirms in a dialog and success messages use
+  the v2 toast
+- The connector accounts drawer lists only the accounts already stored on the
+  connector
+- The old access review connection URLs no longer redirect to the sources
+  pages
+
+### Fixed
+
+- The initial account of a connector can no longer be disabled, since
+  connection checks and cloud sessions always use it
+- Built with Go 1.27.2 (up from 1.27.1) to pick up the standard-library
+  security fixes in `net/http`, `crypto/tls`, `html/template`,
+  `net/textproto`, and `os` (including CVE-2026-97032, CVE-2026-78659,
+  and CVE-2026-97031)
+
+## [0.306.0] - 2026-10-08
+
+### Added
+
+- Organizations own an employee portal with a display name, branding,
+  and a setting for whether the device agent is offered. It is managed
+  through GraphQL and MCP. Every organization has exactly one portal,
+  and existing organizations are backfilled with a default one
+- Cookie banner detections record the cookie Domain and keep a source
+  that is not demoted by later, weaker observations. Detections split
+  by Domain scope, so a host-only cookie and a Domain-scoped cookie
+  that share a name are tracked separately
+- Open tasks past their deadline show an Overdue badge
+
+### Changed
+
+- The employee app URL uses the employee portal id. Old
+  organization-id URLs redirect to the organization's portal
+- Linked safeguards are called internal controls instead of measures
+- Comments created in Linear are attributed to the Probo author
+  instead of only the Probo application
+
+### Fixed
+
+- A cookie report with an oversized Max-Age no longer aborts the whole
+  report batch. The value is omitted and the rest is saved
+- A Mac without a managed profile on macOS 27 is no longer reported as
+  unknown for the automatic software update check
+
+## [0.305.0] - 2026-10-07
+
+### Added
+
+- Consent records open as detail cards for the action, request, TCF
+  string, categories, and location, with a link back to the trail. The
+  location card draws the record on a map cropped to the country, with
+  state or province shapes for US and Canadian records
+- Cookie banners expose a GraphQL connection of their versions
+
+### Changed
+
+- Cookie banners move out of Privacy onto their own CMP navigation
+  group. Opening CMP lands on the latest banner, or on the create page
+  when none exist
+- The cookie banner consent trail is rebuilt in UI kit v2 with
+  previous/next pagination and a select of recent banner versions in
+  place of the free-text version filter
+- The new cookie banner page is rebuilt in UI kit v2, matching the
+  configure settings form
+
+## [0.304.0] - 2026-10-06
+
+### Added
+
+- Cookie banner trackers have On banner and All detected views. The
+  choice is stored in the URL and defaults to On banner
+- The trust center home page links to the documents catalog, including
+  when the portal has no framework badges
+
+### Changed
+
+- Measures are renamed to internal controls on GraphQL, MCP, the CLI,
+  the console, and in the database. The migration renames the measure
+  tables, columns, constraints, indexes, and enum values. Security and
+  supplementary measures are unchanged
+- Recurring tasks repeat when their deadline passes. The next deadline
+  is the previous deadline plus the interval, and the series stays on
+  the current task until that deadline. A worker creates the next
+  occurrence. `PROBOD_TASK_RECURRENCE_INTERVAL` sets how often it scans
+  and defaults to 5 minutes
+- Cookie banner configuration is split into Install, Configure, and
+  Translations pages. Display is rebuilt in UI kit v2: category edit
+  opens in a drawer, cookie rows stay on the Trackers page, and theme
+  controls only build a CSS snippet. Each configuration page shows
+  draft, deactivated, and live state on a status card
+
+## [0.303.0] - 2026-10-05
+
+### Added
+
+- Organizations have an optional registered legal name, separate from the
+  operating name. It is editable from the workspace general settings and
+  exposed on the GraphQL, MCP, CLI and n8n surfaces. Blank values are
+  rejected; only an explicit null clears it
+- Cookie banners can be made CORSless (ops-only) so one banner can be
+  shared by deployments whose origins are not known ahead of time. The
+  tracker policy names the banner instead of an origin
+- Every consent record stores and shows the request origin
+
+### Changed
+
+- The publisher country setting is hidden on cookie banners without TCF
+
+### Fixed
+
+- Listing risks ordered by `UPDATED_AT` no longer panics when building the
+  next-page cursor
+
+## [0.302.0] - 2026-10-05
+
+### Added
+
+- Measures are presented as internal controls. A control has a stable
+  code, a type, an implementation status, an owner and a reviewer. It
+  runs continuously, when an event happens, or on a positive interval,
+  and has its own evidence and testing cadences (ISO-8601 durations)
+  that set the next due dates. Only the manual nature is accepted for
+  now. The GraphQL and MCP APIs keep the Measure names
+- A shared, paginated user selector loads organization profiles 200 at a
+  time. The task list filter and the task assignee field use it
+
+### Changed
+
+- A control-scoped token can read the owner and reviewer profiles of a
+  control
+
+## [0.301.0] - 2026-10-02
+
+### Added
+
+- Settings > Integrations lists the vendors Probo holds a connector for
+  and the ones it can still connect to. A connector opens to the accounts
+  recorded against it and can be disconnected there; disconnect is
+  refused while an access review source or SCIM configuration still uses
+  the credential, and the message names which one
+
+### Changed
+
+- Trust center files no longer have a hidden (`NONE`) visibility; delete
+  the file instead. Unlinking a document or audit from a trust center now
+  clears its visitor access requests, and the console asks for
+  confirmation first
+
+### Fixed
+
+- Back links from tracker, visitor, and user detail pages keep the list's
+  filters instead of resetting them
+
+## [0.300.0] - 2026-10-02
+
+### Changed
+
+- Cookie banner Discovery is split into separate Trackers and Resources
+  pages in the nav, and Discovery and Trail no longer show the banner
+  header and publish actions, which stay on Configure
+- Trackers and Resources lists are rebuilt on the v2 kit, with filters,
+  pagination, and column sort kept in the URL so views are shareable
+- Tracker edits (description, category, max age, inclusion) move from
+  inline row forms to the tracker detail page, which also lists
+  detections in a table. Row actions follow update and delete
+  permissions
+
+## [0.299.1] - 2026-10-01
+
+### Fixed
+
+- Cookie pattern analysis collapses a hyphen-delimited UUID embedded in a
+  cookie name into a single token, so keys like
+  `community-form-<uuid>-creation` merge under one pattern instead of
+  shredding into several fixed anchors
+
+## [0.299.0] - 2026-09-30
+
+### Added
+
+- OVHcloud access review connector, on both the authorization-code and
+  client-credentials paths (EU regions). The roster merges local users,
+  the account owner, client-credentials service accounts, and the audit
+  log for last login, the MFA a session used, and federated identities.
+  Classic API credentials (consumer keys) are reported too, named by the
+  application they belong to, with support-created ones called out. An
+  identity whose group does not resolve to a role reports an unknown
+  admin state rather than "not an admin"
+- SAML SSO and SCIM are separate settings sections. SAML configurations
+  are created and edited on their own pages instead of dialogs, with
+  Optional or Required enforcement chosen up front, and cards show
+  verification status and the DNS TXT record directly. SCIM starts from
+  Google, Microsoft, or manual choice cards, and the configured page
+  shows one provider card with a paginated event history over Relay
+- Organization and measure tasks can be filtered by assignee in the
+  console, GraphQL, MCP, CLI, and n8n. Former members stay selectable so
+  tasks assigned to people whose contracts ended remain filterable
+- Third parties can be searched by name
+
+### Changed
+
+- The OpenAI gateway uses the Responses API so current models work for
+  both regular and streaming requests. Reasoning items replay on the
+  next turn, tagged by provider. Frequency and presence penalties,
+  caller-provided stop sequences, and invalid schemas are now rejected
+  explicitly rather than silently ignored
+- Third-party register documents export only the latest active risk
+  assessment instead of every past one. Ties on created time break by
+  the greater ID so the choice is stable
+- SCIM provider overlays, manual SCIM credentials, and their export
+  dialogs use the v2 UI kit. Export range and excluded emails are
+  validated in the form instead of at the API
+- The tasks page create action is a solid "Add Task" button and task
+  list state headers sit on a darker background
+
+### Fixed
+
+- Connecting Supabase or Better Stack now checks the connector's
+  settings before saving. A Better Stack global token whose team name
+  matches none of its teams, or a Supabase token that cannot reach the
+  organization, was saved, shown as connected, and then failed every
+  campaign fetch with a generic message. The refusal is now reported
+  under the setting's own field
+- Slack MFA is read with an admin user token, since Slack returns
+  `has_2fa` only to a workspace admin or owner. Members listed through a
+  bot token were all reported MFA Disabled; unknown is now reported
+  instead, and bot-token connections are flagged for reconnect. A
+  revoked token, which Slack answers with HTTP 200 and `ok=false`, is
+  reported as disconnected rather than connected
+- The compliance portal `/llms.txt` crashed after the framework list and
+  appended "internal server error" to a partial page
+- Applying a mark across a hard break, or pasting styled HTML with an
+  image inside a link, put marks on nodes that cannot carry them. The
+  server rejected the document and every later edit failed until the
+  page was reloaded, losing unsaved work
+- `reset-trackers` no longer fails on banners with more than 10,000
+  uncategorised globs, and no longer deadlocks against live detection
+  reporting. Globs are walked page by page, claimed with
+  `SKIP LOCKED`, committed one at a time, and deadlock retries are
+  capped
+- The brand form's dark-mode logo preview stayed white, hiding a light
+  logo
+
+## [0.298.0] - 2026-09-25
+
+### Added
+
+- Task comments stay in sync with a linked Linear issue. Publishing or
+  linking copies existing comments, and later edits and deletes follow
+  on both sides. A Linear comment whose author is not a Probo member
+  is stored without an owner
+- Organization and measure tasks can be filtered by name and state
+  (`TaskFilter`) in the console, GraphQL, and MCP (`listTasks`,
+  `listMeasureTasks`). Search matches `%` and `_` literally
+
+### Changed
+
+- Organization and measure task lists use the v2 UI kit. Each row shows
+  a status select, the linked Linear issue, the assignee, and time
+  estimate, deadline, and recurrence when set. Deleting a task is on
+  the detail page; drag-and-drop reordering stays. Search and status
+  live in the `q` and `status` URL params
+
+### Fixed
+
+- Cookie-banner tracker patterns treat slash-delimited keys as paths, so
+  a trailing id collapses to one token (`clientSourceId/*`) instead of
+  a separate glob per identifier. Short segments such as `2024` and
+  `v1` stay in the pattern
+
+## [0.297.0] - 2026-09-25
+
+### Added
+
+- Tasks can link to an existing Linear issue. Console, GraphQL, and MCP
+  can search Linear issues in a team and link a task to one. The
+  new-task dialog offers the same choice when Linear Sync is connected
+- SigNoz access reviews list service accounts and their API keys,
+  including admin accounts. Deleted accounts stay in the listing as
+  inactive, and last login is the latest real use of an account's
+  current keys
+
+### Changed
+
+- Linear teams are a paginated, searchable connection (`linearTeams` /
+  `listLinearTeams`). The unpaginated team list is gone
+
+### Fixed
+
+- Status and priority menus in the task dialog open in the dialog
+  overlay, so they no longer break the layout
+
+## [0.296.0] - 2026-09-24
+
+### Added
+
+- Connector installs can hold several accounts under one credential.
+  Creating a connector records the initial account from its settings;
+  discover and enable add the rest for AWS, GCP, and Azure. Available
+  in console, GraphQL, MCP, the CLI, and the n8n node
+- Task and task comment webhook events (created, updated, deleted) let
+  automations follow task work, including task updates synced in from
+  linked Linear issues
+- Cmd+K (Ctrl+K) opens a page search listing the pages the viewer can
+  open, without hunting the side nav
+- Settings people page is rebuilt as a v2 Users page (`/settings/users`):
+  a grid list with deactivated users sorted last, inline create and
+  detail edit, contract dates through a new typed date field, and
+  self-service avatar upload
+- Findings can be filtered by audit: `FindingFilter.auditId` in the
+  console GraphQL API, `filter.audit_id` on the `list_findings` MCP
+  tool, and an audit select on the console findings page
+
+### Fixed
+
+- Access review reports Linear workspace owners as owners (not members)
+  and uses Qovery's actual member role instead of the API token
+  holder's role
+- Rich text links (tasks, risks) open on a plain click instead of
+  requiring Cmd/Ctrl+click
+- Required now renders `required`/`aria-required` on Select and other
+  non-native form controls, not just text inputs
+
+## [0.295.0] - 2026-09-23
+
+### Added
+
+- Tasks can stay linked to Linear. Console, GraphQL, CLI, and MCP can
+  list Linear teams, publish a task as a Linear issue, and unlink it.
+  Linked tasks stay aligned through a job queue; publish returns the
+  issue identifier immediately
+- Webhook subscriptions have a detail page with the endpoint, event
+  types, signing secret, and delivery history. Deliveries can be
+  filtered by status, and each one shows the outbound payload. The
+  response can be copied, and list cards show the last delivery. The
+  status filter and payload are also on GraphQL, MCP, and the CLI
+- A stuck SCIM bridge can be reactivated from settings, the CLI, and
+  MCP. That schedules the next sync for now, clears consecutive
+  errors, and sets a failed or disabled bridge back to active
+
+### Changed
+
+- Webhook settings are a list of cards. Creating a subscription is its
+  own page instead of a dialog, and opening a card goes to the detail
+  page. Delivery history is labeled separately from subscribed events
+- AWS, Azure, and GCP access-review connect forms show the workload
+  identity example as field help, so it stays visible while typing
+
+### Fixed
+
+- SigNoz access-review rosters and the credential probe read users from
+  the v2 API. A current SigNoz instance no longer marks a valid key as
+  disconnected after GET /api/v1/user was removed. A key without the
+  signoz-admin role is reported as refused
+
+## [0.294.0] - 2026-09-22
+
+### Changed
+
+- Cookie banner TCF CMP ID comes from probod config
+  (`cookie-banner.tcf-cmp-id` / `PROBOD_COOKIE_BANNER_TCF_CMP_ID`,
+  default 4095) so self-hosted instances can use their own IAB ID
+- TCF GET config includes the GVL catalog only when the request is GDPR
+  or UK GDPR
+- Public cookie-banner consent POST rejects a `tc` that is not a TCF 2.3
+  string from this CMP, and requires `tc` on TCF banners when the
+  request is GDPR or UK GDPR
+- Cookie banner settings show the IAB `__tcfapi` stub and the TCF IIFE
+  when the hidden TCF capability is on; non-TCF banners keep the default
+  snippet
+
+### Added
+
+- Cookie banners store an IAB TCF publisher country of establishment
+  (`publisherCountryCode`, default `AA`) and emit it on GET config
+- Cookie categories store optional `tcfPurposeIds` so TCF purpose bits
+  can be projected onto category slugs for activation and GCM. New
+  banners map the default categories onto those purposes
+- Cookie consent records persist an optional IAB TCF string (`tc`) from
+  the public cookie-banner API, return it on GET visitor consent, and
+  expose it on GraphQL, MCP, CLI, n8n, and the console record detail page
+- TCF banners ship default first-layer and preference-panel copy
+  (purposes, partners, storage, and legitimate-interest objection) in
+  the supported banner languages
+- Publish a risk analysis as a versioned generated document from the
+  console, GraphQL, and MCP (`publishRiskAnalysis`)
+
+## [0.293.0] - 2026-09-22
+
+### Added
+
+- Risks expose `riskAnalysisHistoryCount`, how many analyses still include
+  the risk. The console delete confirm uses it to warn that deleting the
+  risk also removes that history
+
+### Changed
+
+- Deleting a risk also removes it from risk-analysis history. Treatment-plan
+  events no longer block the delete
+
+### Fixed
+
+- The device enrollment card hides "Open Probo Agent to finish registering
+  this device." once the agent has checked in
+
+## [0.292.0] - 2026-09-21
+
+### Added
+
+- Access reviews can pull the MongoDB Atlas roster. The customer creates a
+  service account in their own Atlas organization and supplies its client
+  id and secret; Probo registers nothing. The roster covers every
+  organization-level principal: active members, open invitations, service
+  accounts, and programmatic API keys
+- General settings is rebuilt as Workspace, with an Identity section and a
+  Danger Zone. Logos upload through an image dropzone and are capped at
+  5 MB, matching avatars
+
+### Fixed
+
+- Client-credentials connections mint a token instead of sending an empty
+  bearer, so every request no longer came back 401. A refused exchange
+  (an expired client secret, most often) is now reported as a provider
+  failure rather than a Probo error
+- The client-credentials token endpoint comes from the provider
+  registration when it declares one, so the connect dialog no longer asks
+  the customer to hand-type a URL the server already knows
+- SCIM PUT no longer returns 500 when the incoming `externalId` already
+  belongs to another profile in the organization (for example after a
+  Google Workspace email change). The id is transferred, matching create
+- Deleting a workspace clears it from the memberships list, and workspace
+  settings no longer carry form state across organizations
+- Risk analysis treatment plan rows show the `RSK-` reference ID, which
+  previously appeared only on unplanned rows
+
+## [0.291.0] - 2026-09-18
+
+### Added
+
+- The compliance-portal Slack page explains that reviewers must run
+  `/probot login` before they can act on access requests from Slack
+- Risk analysis descriptions use the same Tiptap rich text editor as
+  tasks, stored as JSONB so the console, MCP, CLI, and n8n stay in sync
+- Evidence preview renders CSV, text, and Markdown files in the console
+
+### Fixed
+
+- Unbound Slack clickers see an ephemeral `/probot login` error again.
+  Block actions ignore the HTTP body, so the handler acknowledges Slack
+  and posts the prompt to `response_url` without waiting on delivery
+
+## [0.290.0] - 2026-09-16
+
+### Added
+
+- Operators can choose which IAB Global Vendor List vendors a TCF-capable
+  cookie banner discloses. The catalog is paginated and searchable, the
+  selected set is stored per banner, and it is exposed on the console,
+  GraphQL, MCP, CLI, and n8n
+- The TCF page shows draft versus published vendor counts and can list only
+  the vendors already on the banner, via a membership filter
+- Risks get an immutable org-scoped `RSK-001` reference ID, matching
+  findings, so they can be identified in lists and APIs without the GID
+
+### Changed
+
+- Compliance-portal visitors are identity-only: invite and self-provision
+  create an identity and portal access rather than a People profile, so
+  visitors no longer mix into org members
+- The compliance-portal visitors list loads with the page query instead of a
+  nested lazy query, so the request starts in the loader
+- Magic links are verified with a same-origin fetch that returns JSON and
+  navigates in the page, instead of a native form POST blocked by
+  `form-action 'self'`
+- Federation tokens set `nbf` a minute behind `iat`, so a verifier whose
+  clock lags the issuer cannot reject a just-minted assertion
+- Tracker patterns no longer link to an org third party; catalog
+  identification is the sole vendor path
+
+### Removed
+
+- Common-catalog origin badges on the tracker list and detail views
+
+### Fixed
+
+- The Visitors page no longer fails for NDA-only users: the access list is
+  resolved only once list permission is known
+- The TCF draft badge compares vendor ID sets rather than counts, so
+  removals and one-for-one swaps are reported correctly instead of reading
+  as pending additions or as synced
+- GVL vendors can be removed from a banner with TCF turned off, which
+  previously stranded linked rows that no API could delete
+- A lone `cookieBannerId` in the GVL filter is rejected instead of being
+  silently dropped and returning the unfiltered global catalog
+- Failed GVL vendor add/remove mutations no longer raise an unhandled
+  rejection alongside the error toast
+- Tracker policy vendor URL collapse sorts by ID, so the kept
+  privacy-policy link is stable across regenerates when two catalog records
+  share a name
+
+## [0.289.0] - 2026-09-15
+
+### Added
+
+- Azure access-review connector: reviews RBAC assignments for one
+  subscription via workload identity, enriches last login and MFA from
+  Entra ID (Premium P1/P2), and is exposed on every surface (console,
+  GraphQL, MCP, CLI) alongside a Terraform `azurerm` audit-role module
+  for a portable install
+- Tasks accept a recurrence interval (an ISO-8601 duration); completing
+  a recurring task clones the next occurrence and carries the interval
+  forward
+- Operators can add compliance-portal visitors by member or email, and
+  deactivate/reactivate them without revoking grants
+
+### Changed
+
+- Compliance-portal access is gated on the visitor's own access state
+  instead of org-membership state, so deactivating an employee no
+  longer locks them out of visitor grants
+- Adding or reactivating a visitor sends a grant email (the same
+  portal-URL mail used for Slack grants) exactly once, only while the
+  visitor is active and newly granted
+- Console wording changed from Invite to Add throughout (console, CLI,
+  n8n, MCP); visitors who have not signed in show as "not visited"
+- The add-visitor flow is a popover instead of a dialog, with stable
+  typeahead results while typing and no empty state when adding by
+  email
+
+## [0.288.0] - 2026-09-14
+
+### Added
+
+- Access review connectors for Attio, ElevenLabs, New Relic, Retool and
+  Twingate: each is connected with an API key bound to a single
+  workspace, organization or network, so none of them asks for a
+  tenant picker
+- Crisp is now connected by installing the Probo app from Crisp rather
+  than pasting a code: Probo redirects to Crisp, the customer picks a
+  website, and Probo verifies the returned subscription token
+  server-side against its own plugin credential. The connector stays
+  hidden until an operator sets `PROBOD_CONNECTOR_CRISP_PLUGIN_TOKEN`
+  and `PROBOD_CONNECTOR_CRISP_PLUGIN_ID`
+- Task details gain an activity tab listing field-level changes
+  newest-first, with the same list exposed on GraphQL, MCP, the CLI
+  and n8n
+- Google and Microsoft sign-in accept personal accounts when the
+  continue URL is a compliance-portal authorize request; console SSO
+  stays enterprise-only
+
+### Changed
+
+- Sign-in hides Create account and password login for compliance-portal
+  visitors, who sign in with a magic link, and hides register links on
+  instances where signup is disabled
+- Brand lime is a theme-aware token, so washes no longer stay neon in
+  dark mode
+
+### Fixed
+
+- Crisp access reviews no longer list the Marketplace sandbox member as
+  a second account for the workspace owner, and report each operator's
+  two-factor state instead of leaving it unknown
+- A connector sync no longer fails when a GraphQL provider answers a
+  recoverable error: the retried request body is rewound instead of
+  being resent empty
+
+## [0.287.0] - 2026-09-11
+
+### Added
+
+- Findings can now be linked to specific audits: audit-specific finding
+  references are exposed via GraphQL, with a two-step linking flow in
+  finding details that displays linked audits with their report
+  references and supports unlinking them in place
+- Spanish employee portal translations
+
+### Fixed
+
+- OAuth2 protected-resource matching accepts a resource that differs from
+  an advertised one only by the root trailing slash, scoped to http(s)
+  resources as RFC 3986 section 6.2.3 defines
+- Task comments are now deleted before the organization cascade, fixing
+  organization deletion failing because task comments blocked deleting
+  the underlying membership profiles
+
+## [0.286.0] - 2026-09-10
+
+### Added
+
+- Device postures are stamped with a schema version and the observing agent's version, exposed via GraphQL, MCP, and the CLI; older agents fall back to their last heartbeat version so a rolling deploy keeps reporting
+
+## [0.285.0] - 2026-09-10
+
+### Added
+
+- Fifteen more connector providers declare a pasted-key prefix
+  (Anthropic, Brevo, Brex, Cal.com, ClickHouse Cloud, Dotfile,
+  Metabase, OpenAI, Qovery, Resend, SendGrid, Supabase, Tailscale,
+  Tally, UpCloud), so a truncated, wrong-kind, or otherwise malformed
+  key is rejected in the connect dialog instead of reaching the
+  provider
+
+### Changed
+
+- Task duration fields keep calendar months: GraphQL and MCP expose
+  `TimeSpan` instead of `Duration`, so `P1M` round-trips instead of
+  flattening to about 30 days
+
+### Fixed
+
+- Employee portal assume still runs when `ssoLoginURL` errors; that
+  field error no longer aborts the query before
+  `assumeOrganizationSession`
+
+## [0.284.0] - 2026-09-09
+
+### Added
+
+- Audit list shows the audit and validity periods as two compact date ranges instead of four separate columns, with guarded parsing so malformed or out-of-order dates render safely instead of crashing
+
+## [0.283.1] - 2026-09-09
+
+### Fixed
+
+- Windows time sync and auto-update postures reported by probo-agent 0.6.4 and
+  later no longer display as Unknown. The agent renamed the evidence it sends
+  for those checks when it moved from transient service state to service
+  configuration, and the reader still expected the old keys
+
+## [0.283.0] - 2026-09-09
+
+### Added
+
+- Search the document list by title, debounced and persisted in the URL
+
+### Fixed
+
+- OAuth dynamic client registration now accepts the standard `scope` field (a space-delimited string) in addition to `scopes`, so clients following RFC 7591 register successfully
+
+## [0.282.0] - 2026-09-08
+
+### Added
+
+- Identity avatars: upload a photo shown on people lists and owner cells without a profile page, stored as a public file with EXIF stripped; falls back to initials when none is uploaded
+
+### Changed
+
+- Remove the risk analysis last-updated timestamp from the frontend: it only reflected edits to the parent record, not to diagrams, scenarios, treatment-plan results, or measure status, so it was misleading
+
+### Fixed
+
+- MCP `ListCookieCategoriesTool` now honours the `exclude_kind` filter argument instead of ignoring it, so callers can enumerate all categories including `UNCATEGORISED`
+
+## [0.281.0] - 2026-09-07
+
+### Added
+
+- GCP access-review connector setup: `gcpConnectorSetup` query, create fields, and a dedicated console connect page for workload-identity federation
+- Task descriptions and comments use the same Tiptap rich text editor as documents, stored as JSONB content; comments speak markdown over MCP the same way document content does
+
+### Changed
+
+- GCP access-review activity driver reads only the `_Required` log bucket's `_AllLogs` view (`roles/logging.viewAccessor`) instead of project-wide `roles/logging.viewer`, so the impersonated token can no longer read application logs in `_Default`
+- GCP connectors recognize Sovereign Cloud de Confiance (S3NS) service accounts and dial `*.s3nsapis.fr` instead of public GCP
+
+## [0.280.0] - 2026-09-07
+
+### Added
+
+- GCP project IAM access-review driver: lists project IAM principals and service accounts, degrading gracefully when service-account listing is denied, with best-effort last activity (Admin Activity for users, Policy Analyzer with a Cloud Audit Logs fallback for service accounts) and MFA (Directory 2-Step Verification enrollment for users)
+- A connector provider may declare the shape of a pasted API key; the connect dialog checks it as the field loses focus and the create resolver checks and trims it again, catching a truncated or malformed paste before it is stored (Langfuse is the first provider to declare one)
+
+### Changed
+
+- GCP access-review MFA now uses the same WIF-impersonated service-account
+  token with `admin.directory.user.readonly` in addition to
+  `cloud-platform`. A Workspace Users-read admin role on that service
+  account is still required; a Directory 403 keeps identities and last
+  login and leaves MFA unknown.
+
+### Fixed
+
+- A connector probe now tells a refused request (403) from a refused credential (401): the source row reports the operation as not authorized, pointing at the plan and permissions with a link to the provider's setup guide, instead of claiming the credentials are invalid
+- Employee portal PDF viewer: a `pdfjs-dist@6` pin bundled a worker that did not match `react-pdf`'s 5.4 API, breaking signature and approval document previews
+
+## [0.279.0] - 2026-09-04
+
+### Added
+
+- Audits gain `TO_BOOK` and `AUDIT_BOOKED` states ahead of `NOT_STARTED`, plus an optional audit firm on create and update, across GraphQL, MCP, CLI, n8n, and the console (clearing the firm removes an obsolete assignment)
+
+### Changed
+
+- Signing up no longer opens a session: the account is confirmed first, and the session is created when email verification flips the address to verified. Verification requires an explicit click, so email scanners that prefetch links cannot sign themselves in
+- Magic-link and confirmation tokens are consumed only on an explicit POST, and an already-verified email is treated as success so confirmation stays idempotent
+- The console `/auth` zone moved to the v2 kit: the login hub leads with email (SAML when the domain is unique, otherwise a magic link), Google and Microsoft sit below, password is a quiet link, forgot-password sits under the password field, and the assume page renders inside the auth layout
+- The console organization picker now matches the employee portal
+- Empty-token errors explain that the token must be typed or the link opened from email, instead of repeating the field label
+
+### Fixed
+
+- SSO login URLs are no longer offered for SAML configs that are turned off, which previously sent people into a login that rejected them
+- Deleting an organization failed when control, risk, or measure mappings still referenced its documents and risks; those rows are now removed first
+- Generated documents are sanitized before insert, so malformed content is rejected instead of rendering as escaped raw JSON in exported PDFs
+- `listTrackerPatterns` no longer errors on a whole page when it contains a pattern whose source is `HTTP`
+- Wide document tables wrap their cells instead of only being readable by scrolling sideways
+
+## [0.278.0] - 2026-09-03
+
+### Added
+
+- GCP Workload Identity Federation connector: registers GCP alongside AWS for the access-review source, with a Terraform module reference and console provider entry (access-review driver still pending)
+
+### Fixed
+
+- Access review campaigns no longer diff against the previous campaign's incremental tags; each campaign is now an independent snapshot (previously this could resurrect accounts the source no longer returned, and the console never showed the tag)
+- Linear access-review source now includes disabled/suspended users, which were previously omitted unless `includeDisabled` was requested
+
+## [0.277.2] - 2026-09-03
+
+### Fixed
+
+- Bumped golang.org/x/crypto to 0.56.0, addressing denial-of-service on
+  deadlocked SSH channels (CVE-2026-78662, CVE-2026-56855)
+
+## [0.277.1] - 2026-09-03
+
+### Fixed
+
+- Bumped fast-uri to 3.1.6 and qs to 6.16.0, addressing a decoded-scheme
+  rejection bypass (CVE-2026-76172) and array-limit / isBuffer denial-of-service
+  issues (GHSA-x5fp-wj9c-mxmx, GHSA-4mjr-xmp4-gh2g)
+
+## [0.277.0] - 2026-09-03
+
+### Changed
+
+- Document download dialog starts with signatures unchecked so users
+  must explicitly request signature pages
+- AWS Identity Center access-review Auth now maps EXTERNAL_IDP to SSO,
+  local factors (password, email OTP, passkey, TOTP) to PASSWORD, and
+  no observed CredentialType to UNKNOWN instead of labeling every user
+  SSO
+
+### Removed
+
+- Personal API key creation UI and its GraphQL creation mutation; use
+  scoped OAuth access tokens instead
+
+### Fixed
+
+- Organization deletion no longer fails when related rows still
+  reference it; missing organization_id foreign keys cascade, and the
+  IAM service deletes rows that restrict on membership-profile owners
+  or scenario-linked risks
+- Access-review source name-sync no longer retries a failing provider
+  without bound, which could flood logs and block later sources; five
+  attempts over fifteen minutes then keep the generic name until
+  reconnect
+- Connector probe now rejects a 2xx response whose body opens with '<'
+  so a customer-supplied URL that hits an SPA or SSO portal is not
+  reported healthy
+
+## [0.276.0] - 2026-09-02
+
+### Added
+
+- Task details page comments: description-only notes owned by a membership profile (the author by default), ordered oldest first, and available on GraphQL so discussion lives on the work itself
+- AWS Identity Center access-review entries now include MFA status and last login from CloudTrail Event History (90 days) and registered MFA devices or a TOTP/WebAuthn sign-in; enrichment failures keep the listed users and leave those signals unknown
+- AWS access review now includes Identity Center users with no permission-set assignment on the connected account (empty roles). MFA device lookup is skipped for those users so a large unused directory stays inside the fetch budget. Still no Organizations walk and no cross-account assignment listing
+- AWS root account identities now show the Organizations account email when the audit role can call DescribeAccount, so reviewers can match `<root_account>` to a person; standalone accounts and denied Organizations calls leave email empty
+- Provider catalog and AWS connector create flow link to the AWS access-review setup guide at `/aws`
+
+### Changed
+
+- Business-function MTD, RTO, and RPO columns show hours and remaining minutes instead of a raw minute count
+- Access-review source names separate the provider label from the account with a slash (`Amazon Web Services / acme-prod`) instead of a space
+
+## [0.275.0] - 2026-09-02
+
+### Changed
+
+- AWS connector now labels access-review sources with the full "Amazon Web Services" name instead of the "AWS" abbreviation
+- SCIM event timestamps in the console now show the full date and time down to the second, instead of a relative or short date
+
+### Fixed
+
+- AWS Identity Center discovery now walks Identity Center regions until `ListInstances` returns an instance, instead of only the session region (`us-east-1` on commercial AWS). IAM-only degrade remains when no instance exists, `ListInstances` is AccessDenied, or the role cannot finish the SSO Admin walk.
+
+## [0.274.2] - 2026-09-02
+
+### Fixed
+
+- Bumped gRPC-Go to 1.83.1, addressing an HTTP/2 receive-buffer memory exhaustion issue (CVE-2026-84304)
+
+## [0.274.1] - 2026-09-02
+
+### Fixed
+
+- Employee-portal document queue no longer dead-ends at the last document when items are skipped or the queue is entered mid-list; Next and Finish now wrap back to the documents left over, including ones signed while the next page was still loading
+- Start-to-sign and start-to-approve from the employee-portal home now open the first document of the queue instead of dropping into the middle of the list
+
+## [0.274.0] - 2026-09-01
+
+### Added
+
+- AWS access review now lists Identity Center users assigned to the connected account (directly or through a group) when an instance is visible in the session region; the walk degrades to IAM-only when the account has no instance, the role cannot read SSO Admin (including after ListInstances succeeds), or the instance lives in another region. There is still no Organizations walk and no cross-account assignment listing
+- AWS access-review sources are named with the connected account name (`AWS acme-prod`) when Account Management returns one, then the sign-in alias, then the account ID, so two accounts in one organization stay distinguishable; the source-name worker assumes the audit role to resolve those. The console still shows the account ID until the worker runs
+
+### Changed
+
+- Document list rows are fully clickable: the whole row navigates to the viewer instead of only the title or action button, rendered as a single data cell instead of a spanning row header
+- Queue navigation swipes to the next document immediately instead of waiting for the query and showing a skeleton first
+- Document tabs show the open document's title instead of the static "Probo Console" title, so multiple open documents are distinguishable in the browser tab strip
+
+### Removed
+
+- Leftover console employee-portal pages (signatures, approvals, devices, enroll, Slack bind), now fully owned by the dedicated employee-portal app; the old pages never rendered in production
+
+### Fixed
+
+- Long document lists no longer show empty space below the table from an unwanted vertical scrollbar
+- Document loading skeleton matches the live request panel layout instead of missing the back-link row
+- TableLink focus ring no longer shows an opaque wash covering row text
+- A refused quorum's reviewed document is no longer lost when a later quorum is accepted; the PDF is now generated in a dedicated worker and kept with the quorum
+
+## [0.273.0] - 2026-09-01
+
+### Added
+
+- AWS access-review connector setup, create, and verify: a console dialog and `awsConnectorSetup` query return the issuer, audience, subject, suggested role name, and matching Terraform/CloudFormation snippet so operators can create a workload-identity AWS connector without inventing values
+- Task details page holding name, description, and properties, so the tasks list can stay to the title instead of showing the full description on every row
+
+## [0.272.0] - 2026-09-01
+
+### Added
+
+- Risk analysis treatment plans can be reconstructed as of a past date: the heatmap, plan table, and measures show the state they had at that instant, with each event storing the full plan so an as-of read returns the latest row; today keeps reading live data
+- AWS access review driver listing the IAM users of the connected account, with groups, attached and inline policies as grants and activity read from the credential report; the connector names one account, so there is no Organizations walk and no Identity Center listing
+- `BACKLOG`, `CANCELED`, and `DUPLICATE` task states, selectable when creating or updating a task
+- A back link on employee portal document, approval, and signature viewers, so leaving a viewer no longer depends on a decision being made first
+
+### Changed
+
+- Device enrollment moved to the employee portal at `/employee-portal/enroll`, adding an organization picker first step since `/enroll` carried no organization in the URL; the legacy path 302s so agents and bookmarks keep working
+- Slack bind and bindings pages moved to the employee portal, with a Slack card on the portal home rendered only when the organization has Slack installed; the old console URLs 302s so links in existing Slack DMs keep working
+- The document viewer top bar stretches to the full-bleed viewer width instead of staying inset at 1024px
+- Risk analysis list rows wrap long names and periods instead of pushing the description column out, and clamp very long descriptions to two lines
+
+### Fixed
+
+- `.log` evidence uploads on measures are accepted; browsers report them as `text/plain` while only `text/x-log` was allowed
+- SOC 2 framework wording
+
+## [0.271.1] - 2026-08-31
+
+### Fixed
+
+- Presigned S3 download URLs (documents, framework exports, third-party agreements) no longer fail with a signature mismatch, caused by a checksum-validation header the SDK signed into the URL but that downloading clients never send back
+
+## [0.271.0] - 2026-08-28
+
+### Added
+
+- Employee portal, a dedicated app at `/employee-portal` replacing the console's employee pages: organization list, home dashboard with a Get Started panel while the viewer still has first pending work, and typed 404, 403, and 500 recovery states
+- Signature and approval queues in the employee portal, each splitting pending work from history with independent pagination, table layouts that keep columns aligned across locales, and a frozen queue so the counter does not shrink while signing
+- Document viewers in the employee portal for signing and approving, with version history that swaps the displayed PDF for inspection while sign and approve still target the latest version
+- Employee device pages in the employee portal: a device list with empty state, a three-step registration wizard covering agent download and enrollment, and manual enrollment issuing a one-time token with CLI instructions
+- French and Dutch employee portal catalogs; both locales were listed as supported but every string fell back to English
+- AWS audit role CloudFormation template and Terraform module creating the OIDC provider and a ProboAudit role, with organization-wide coverage as a service-managed StackSet; the trust policy is read back before a connector relies on it and refused when its `sub` condition is absent, wildcarded, `StringLike`, or pinned to another organization
+- Documentation links on the authentik, Brex, Cal.com, Calendly, and GitHub access-review connectors, so the connect dialog and connections list can reach each setup guide
+
+### Changed
+
+- An organization can hold several connectors of one provider — two GitHub organizations, two Slack workspaces — each backing its own access review source, and the console keeps every provider available for another connection
+- Reconnecting a connector is now explicit: a bare initiate always creates a new connector, and reconnect happens only through an explicit connector id
+- Each connector credential is owned by exactly one feature, an access review source or a SCIM provisioning bridge, enforced by schema; deleting a connector still held by a live bridge is refused instead of silently disabling sync
+- Source creation is idempotent per connector, so replaying an OAuth callback in two tabs cannot double-create, and relinking a source to a new connector deletes the abandoned one instead of stranding it
+- SCIM configuration and its bridge are created in one transaction, so a bridge refusal can no longer leave a bridgeless configuration blocking every retry of the connect flow
+- Old console employee URLs now redirect to the employee portal, so existing inbox links keep working; emails, the organization switcher, and the employee landing point there directly
+- Connector probe failures are logged with a classification code, provider, source id, and connector id, so a permanently broken source is attributable to a tenant instead of leaving no diagnostics
+
+### Fixed
+
+- Employee document filters matched any historical signature or past approval decision, so a newer pending major version appeared as both pending and completed; both filters are now restricted to the latest version
+- Probe verdicts treated cancelled requests, timeouts, and URL parse failures as the provider rejecting a credential, and the Railway probe reported a 5xx or rate limit as a dead credential
+- The signing queue started mid-queue when launched from page 2 or later, and overlapping pager clicks could land on the wrong page
+- Copying an enrollment token threw in insecure contexts before the failure toast could show, and enrollment errors stacked a global toast on top of the inline failed state
+- Dropped the unused `reports` table and leftover `report_id` foreign keys, superseded by audit PDFs stored in `files`
+
+## [0.270.0] - 2026-08-27
+
+### Added
+
+- AWS connector on the WORKLOAD_IDENTITY protocol: one connector covers a whole AWS organization, the customer grants access in their own account so there is no credential to paste or configure, and the accounts beneath it are tracked as cloud accounts
+- Search on the compliance portal visitors list, matching membership name and identity email so people who have not recorded a name still show up
+- Fork a risk analysis, copying diagrams, treatment plans, and their relations into a new analysis so a later period reuses the graph; matrix size stays on the source and the period starts empty
+- Versioned IAB GVL catalog tables storing immutable vendor-list snapshots, so TCF resolves IAB vendor IDs without folding them into the common third-party register
+
+### Changed
+
+- Visitors sort by pending request count by default instead of newest join, with the list toolbar switching to join date and announcing the active sort to screen readers
+- Visitor documents are ordered and filtered by access status on the server through a unified resources connection, with the filter kept in the URL
+- Visitors and document access lists paginate with Show more, fetching 50 rows at a time instead of a fixed first page
+- Validity, audit, and contract ranges use the GraphQL `Period` type, sharing one shape across console, connect, MCP, CLI, n8n, and the UI
+
+### Fixed
+
+- Deactivated portal visitors were dimmed and their grant actions disabled, though membership deactivation blocks console sessions rather than portal sign-in
+
+## [0.269.0] - 2026-08-26
+
+### Added
+
+- Visitors get a dedicated page in the compliance portal permissions zone, replacing the Edit Access dialog: document grants have their own table and URL, changes save immediately, and multi-select with a bulk bar grants or rejects several documents at once
+- NDA card accepts a PDF drop directly, with download and delete controls in its header and the signature audit trail behind an activity popover
+
+### Changed
+
+- Migrated the compliance portal permissions zone to UI v2, including a new native Table in `@probo/ui`, visitors restyled as a list showing NDA status and join date, and pending requests surfaced as a button
+- Renamed the portal permissions route to `visitors`, so the URL, navigation, and Slack action links match the page name
+- PDF watermarks now show the document's own classification instead of a hardcoded "Confidential"
+- Each compliance portal page owns its H1, description, and document title instead of repeating the portal name
+
+### Fixed
+
+- Compliance portal document access reused source GIDs for rows that did not exist yet, so Relay saw conflicting typenames on the access list; grant and reject now upsert a real row and leave sibling documents untouched
+- Visitor list row edges were not clickable because list padding sat outside the link
+
+## [0.268.0] - 2026-08-26
+
+### Added
+
+- Treatment plans on risk analyses: scores, treatment, and owner live on a plan unique to one risk and one analysis (the risk must already sit on a scenario), so the same catalog risk can evolve across periods; linked measures drive progress from inherent to residual except Accepted which stays inherent
+- Risk analysis pages split heatmap and plan table from diagrams
+- WORKLOAD_IDENTITY connector protocol: Probo mints a short-lived OIDC assertion and the customer's STS exchanges it for temporary credentials against a role they own, so the connection stores no credential
+
+### Changed
+
+- Matrix size is chosen when creating a risk analysis and cannot be changed later
+- Access-review connect actions use a split button when a source supports more than one method (GitHub App, OAuth, API key)
+
+### Fixed
+
+- Slack access-request cards still linked to pre-`/governance` document and audit paths, so reviewers hit 404s
+- PDF exports of documents with omitted ProseMirror node attributes (for example a table cell without colspan) showed raw JSON instead of the rendered document
+
+## [0.267.0] - 2026-08-25
+
+### Added
+
+- Catalog attribution (vendor name, first-party, or still-identifying) now shows on tracker pages in console, GraphQL, and MCP, for patterns whose catalog entry has no vendor name of its own
+
+### Changed
+
+- Migrated the compliance portal integrations page to UI v2, including a reworked Slack channel picker (correct icon, wider card, refreshes on open, fixed pagination)
+
+## [0.266.0] - 2026-08-25
+
+### Added
+
+- ChatGPT and Codex MCP OAuth compatibility through CIMD auth-method negotiation, RFC 9207 issuer identification, and resource-bound access and refresh tokens
+
+### Migration
+
+Before starting this release, apply `20260824T102541Z.sql`, replace the URL
+below with the exact `PROBOD_BASE_URL`, and run:
+
+```sql
+BEGIN;
+
+UPDATE iam_oauth2_authorization_codes
+SET resources = ARRAY['https://your-probo.example.com']
+WHERE resources IS NULL;
+
+UPDATE iam_oauth2_consents
+SET resources = ARRAY['https://your-probo.example.com']
+WHERE resources IS NULL;
+
+UPDATE iam_oauth2_access_tokens
+SET resources = ARRAY['https://your-probo.example.com']
+WHERE resources IS NULL
+  AND client_id IS NOT NULL;
+
+UPDATE iam_oauth2_refresh_tokens
+SET resources = ARRAY['https://your-probo.example.com']
+WHERE resources IS NULL;
+
+COMMIT;
+```
+
+Manual access tokens remain unbound because they have no `client_id`.
+
+## [0.265.1] - 2026-08-24
+
+### Fixed
+
+- The GitHub App connector's authorization URL didn't pin a redirect_uri, so GitHub could send installs to the wrong callback URL on deployments with more than one registered
+
+## [0.265.0] - 2026-08-24
+
+### Added
+
+- GitHub App as an access-review connector alongside OAuth and personal access tokens: users authorize an app installation, short-lived installation tokens are minted automatically, and connector health checks are protocol-aware
+- OAuth2 and SSH auth methods for access-review entries, so GitHub App tokens and deploy keys are recognized instead of being reported as API keys or service accounts
+- Resend as an access-review connector via CIMD authentication
+- Human review tracking for third-party catalog entries: a reviewer can mark a catalog row validated or rejected, and the tracker mapping pipeline now honors a rejected verdict instead of re-attributing it to a vendor
+
+### Changed
+
+- Compliance portal hosting page redesigned onto the v2 UI kit: domain cards restyled around SSL status, an inline form replaces the domain dialog, and visibility is split into switch cards
+- Access-review table columns widened to fit longer connector labels; GitHub App and OAuth2 connector callbacks now route through separate endpoints instead of sharing one
+
+### Fixed
+
+- A concurrent review update could be silently overwritten mid-mapping-run because the read wasn't locked
+- The organization picker for API keys, which had regressed
+- Mermaid diagrams duplicating nodes
+- The Microsoft catalog entry's category and a duplicate Tawk.to catalog entry
+- Upserting a common third party that already existed was reported as created instead of updated
+
+## [0.264.1] - 2026-08-21
+
+### Fixed
+
+- The Cal.com and Calendly connectors were missing their client secret from required-configuration validation and `.env.example`, so a misconfigured deployment would silently fail instead of being caught at startup
+
+## [0.264.0] - 2026-08-21
+
+### Added
+
+- A per-organization cloud identity issuer: probod can now act as an outbound OIDC provider, minting short-lived tokens scoped to one organization so audits inside customer AWS accounts no longer require long-lived shared credentials
+- Calendly and Cal.com as access review connectors, both via OAuth (Cal.com also supports team accounts), with provider icons in the connector list
+
+### Changed
+
+- Webhook deliveries now run as durable jobs with processing leases, retry scheduling, stale-delivery recovery, and a terminal dead-letter state, with idempotency headers and bounded concurrent delivery
+- OAuth2, SAML, ACME, and identity-federation private keys are now decoded when configuration loads instead of at server start, surfacing a malformed key immediately rather than at the next restart
+
+### Fixed
+
+- Fixed contract start/end dates not being updatable
+
+## [0.263.0] - 2026-08-19
+
+### Added
+
+- Tracker attribution now judges third parties by data egress rather than code origin, catching vendor SDKs bundled into first-party code; artifacts belonging to a browser extension or other visitor-installed software are now marked `NOT_ATTRIBUTABLE` instead of first-party or a wrongly attributed vendor
+
+### Changed
+
+- Connecting Tally as an access review source now validates the API key at connect time and derives the organization id automatically; the connection probe and name resolver moved to the one Tally endpoint that accepts API-key auth, fixing every Tally connection reporting "credentials are invalid"
+- The mapping worker no longer re-evaluates tracker writes already confirmed to come from a browser extension, since that evidence settles attribution on its own
+- The `third_parties.common_third_party_id` index can now be built `CONCURRENTLY` ahead of a deploy; the migration is a no-op if the index already exists
+
+### Fixed
+
+- "Open in Probo" links from an access request and from Probot Slack notifications now land on the compliance portal's permissions page instead of a removed console route
+- A tracker artifact could gain a vendor attribution after another worker had already settled it terminal (first-party / not-attributable); the terminal verdict now always wins
+- The enrichment worker could re-process and re-attribute a tracker row that had already received a terminal verdict
+
+## [0.262.0] - 2026-08-18
+
+### Added
+
+- authentik as an access review source, connected with an API-intent token and the instance URL. MFA status is derived from the instance's authenticator devices, and stays unknown rather than disabled when a device kind is unreadable
+- Probot: a Slack bot that lets employees link their Slack identity to their Probo account (`/probot login`) and manage the link from their profile. Bound users get compliance review and approval notifications in Slack with per-item actions, and can drive Probo actions conversationally from a bound channel. Organizations manage the Slack install, channel, and identity bindings from Settings
+
+### Changed
+
+- **Operators running their own Asana OAuth app must switch it to "Full permissions" in the Asana developer console before upgrading.** Asana publishes no granular scope covering workspace memberships and rejects an authorize request that mixes `default` with granular scopes, so an app left on granular scopes refuses both new connections and reconnects. Existing Asana connectors keep their old grant and must be reconnected once
+- Reorganized the console navigation into a two-level product rail and panel, replacing the flat sidebar. Settings now groups Organization, IAM (Users, Auth & Provisioning, Audit Log), Registries, and Webhooks; Access Reviews, Privacy (Processing Activities), Third-Party Risk Management, compliance portals, and cookie banners each get their own switcher or panel. Dark mode, which regressed during the rework, is restored
+- Third-party and compliance-portal profile pages (Profile, Assurance, Stakeholders, branding) now save each field as it's edited (on blur) instead of via a page-level Save button
+- Compliance portal review and tool actions now validate that the resource being acted on belongs to the access request, without blocking valid partial (per-item) approvals
+
+### Fixed
+
+- Asana access reviews failed to fetch any account. The workspace memberships endpoint the driver reads is reachable only with Asana's full `default` scope, so a connector granted `users:read` and `workspaces:read` connected successfully and then got 403 on every sync. Asana admin, guest and view-only flags now stay unknown when the API withholds them instead of being reported as false
+- Fixed a crash when adding a new Statement of Applicability entry (the create mutation omitted maturity level)
+- Long labels in risk analysis diagrams no longer get clipped: Mermaid flowchart and threat-hexagon labels wrap again after the Mermaid 11.13 upgrade dropped automatic wrapping
+- Windows device posture (BitLocker protection, password policy, time-sync status) now reports correctly on non-English systems instead of showing Unknown
+
+## [0.261.1] - 2026-08-17
+
+### Fixed
+
+- Updated Go dependencies to address a reported security vulnerability
+
+## [0.261.0] - 2026-08-17
+
+### Added
+
+- Compliance portals can now run behind an externally terminated TLS load balancer, keeping strict domain routing and HTTP redirects while skipping ACME setup and avoiding dead HTTPS ports in that mode
+
+### Fixed
+
+- CIMD clients skipping consent now require both a verified custom domain host and identity-only scopes (`openid`/`profile`/`email`), closing a gap that could grant broader API access without a consent screen
+- Agent netcheck now blocks NAT64, 6to4, Teredo, and CGNAT address ranges, closing an IPv6 SSRF gap in the agent tool guard
+
+## [0.260.0] - 2026-08-14
+
+### Added
+
+- MCP `listRiskMeasures` tool to list measures linked to a risk (reverse of `listMeasureRisks`), so callers can discover links to unlink before `deleteRisk`.
+- Explicit likelihood/impact matrix size (3×3, 4×4, or 5×5) on risk analyses, across GraphQL, MCP, and the console
+- Device enrollment now has a dedicated "Download the Probo agent" step linking to pro.bo/install before organization selection, skippable when the agent is already installed
+
+### Changed
+
+- OAuth consent and token screens now translate scope labels instead of showing raw English strings
+- Devices list shows the last reported agent version, and the Windows OS version column now shows the short numeric version instead of the full localized banner
+
+### Fixed
+
+- Deleting a risk that still has linked measures, documents, or other references now returns a clear "resource is in use" error instead of an opaque internal error.
+- Linking a measure to an existing task is no longer silently dropped on update
+
+## [0.259.0] - 2026-08-13
+
+### Added
+
+- `COMPLIANCE_PORTAL_MANAGER` and `COMPLIANCE_PORTAL_ACCESS_MANAGER` membership roles, for delegating full compliance portal management or just visitor access approval without broader admin access
+- AI Systems register: track an organization's AI system inventory with a dedicated backend, console UI, and publish flow, alongside CLI, MCP, and n8n surfaces
+- Optional period start/end fields on risk analyses
+- Cookie banner resource reporting switch, so operators can disable resource detection per banner while cookies and storage keep reporting normally
+
+### Changed
+
+- Compliance portal tabs a role cannot access now show a no-access state inline instead of being hidden, so the header and other tabs stay usable
+- Cookie banner resource reporting and compliance portal rights requests are exposed through a nested `capabilities` object on GraphQL and MCP instead of separate flat boolean fields; the CLI, n8n node, console, and visitor portal follow. The browser-facing banner config keeps its flat `resource_reporting_enabled` key so already-released cookie banner SDKs keep working
+- The person profile "Type" field is free text instead of a fixed set of options
+- Document content JSON now allows up to 1 MiB, up from 500,000 bytes
+
+### Fixed
+
+- Evidence names are shown again as a separate column in measures, so linked and uploaded evidence stays identifiable when no generated description is available
+- The vetting agent no longer overwrites a third party's countries
+
+### Removed
+
+- Dropped the unused `generateDocumentChangelog` mutation; the console publish flow already collects a changelog by hand
+
+## [0.258.0] - 2026-08-11
+
+### Added
+
+- Nuki access review integration: connect a Nuki account to review who can open which smart locks, with door grants, roles, last activity, and active state per person, and unlinked keypad codes and fobs surfaced as service accounts.
+
+### Fixed
+
+- Certificates of Completion now print `signed_at` at the same microsecond precision used to compute the seal, so the certificate's own Seal Verification procedure reproduces the digest instead of appearing to fail. Certificates generated before this change remain unverifiable by the printed procedure.
+- Electronic signatures are rejected when the signer has no name, and compliance portal visitors without a full name are redirected to set one before they can sign the NDA instead of accepting it with a blank signature.
+- Identity and membership profile names are trimmed when set, so whitespace-only names can no longer be stored.
+- The console's Content-Security-Policy now allows Google favicons served from `*.gstatic.com`, and console schema validation no longer needs `eval`, so both work under the policy.
+- Access review CSV sources accept multiple roles in the `role` column, separated by semicolons.
+
+### Changed
+
+- Access review admin status, MFA, and other provider signals distinguish unknown from false: values the source does not report, or reports in an unfamiliar form, now display as unknown instead of being shown as negative. Campaign entry rows and the additional-roles popover were reworked to present this consistently.
+- Document content now allows up to 200,000 characters of text, up from 50,000.
+
+## [0.257.0] - 2026-08-11
+
+### Added
+
+- Console and compliance portal now send a Content-Security-Policy header, with a matching policy applied to their local Vite dev servers, restricting scripts, styles, and connections to known origins (including object storage, Google Fonts, Google favicons, and Markdown image sources), and hardened against configuration and origin injection.
+
+### Fixed
+
+- Clearing a person's contract end date now updates the people list immediately instead of only on the server, and the people list's actions column no longer starves date columns of space.
+
+### Changed
+
+- Cookie banner presentation now matches each jurisdiction's actual disclosure duties: Japan and jurisdictions with no cookie-consent law move to the opt-out layout instead of interrupting every visitor on load, Brazil (LGPD) requires prior opt-in, and a US visitor whose state cannot be resolved falls back to CCPA rather than no regulation. Only Mexico keeps the notice-on-load presentation.
+- Opt-out button copy is split into a generic label and a California-specific statutory label, so the "Do Not Sell or Share" phrasing no longer appears outside US state privacy laws.
+
+## [0.256.0] - 2026-08-10
+
+### Added
+
+- People list now shows each person's contract end date, making it easier to see why someone with an ended contract is excluded from document signatures despite still appearing active.
+
+### Fixed
+
+- Blank SCIM position/kind values are now treated as unset instead of failing person-form validation, and the people table's empty-state row spans the correct number of columns.
+- Cookie banner tracker detection no longer aborts the whole batch when an SDK-reported cookie or storage key exceeds PostgreSQL's index size limit; oversized identifiers are capped at 255 bytes and dropped instead.
+- The third-party compliance document agent now downloads PDFs directly instead of navigating to them, so PDF documents are read and verified correctly.
+
+### Changed
+
+- SCIM audit event writes no longer block the provisioning request, and are now bounded to a fixed duration.
+
+## [0.255.0] - 2026-08-10
+
+### Added
+
+- SCIM audit events now store the request and response bodies exchanged with the provisioning client, with password fields and credential attributes redacted regardless of the schema URN used to reference them.
+
+### Fixed
+
+- The compliance portal's unsigned-NDA banner no longer appears before a visitor has requested access to a private document, and an admin-granted access no longer triggers it as if the visitor had requested access themselves.
+- Locked document viewer CTA now names the NDA instead of reusing the banner's generic "Review and sign" label.
+- Compliance portal mailing list update detail pages no longer 404.
+
+## [0.254.0] - 2026-08-10
+
+### Changed
+
+- Organization creation is now restricted to owners when signup is disabled.
+- Console access is now restricted when the user has no organization membership.
+- Risk analysis scopes are now referred to as diagrams across the API and console UI.
+
+### Fixed
+
+- Resolved npm audit vulnerabilities in `dompurify`, `js-yaml`, and `mermaid` dependencies.
+
+## [0.253.0] - 2026-08-07
+
+### Fixed
+
+- Evidence uploads now display in the PDF viewer instead of a degraded fallback when the display mode was changed or the browser navigated away and back
+
+## [0.252.0] - 2026-08-07
+
+### Changed
+
+- Organization risk assessments are now named risk analyses across the database, console API, MCP API, CLI, and console UI. Third-party assessments and Statement of Applicability control flags keep their existing naming.
+- Compliance portal document, audit, and subprocessor selection is reversed: the console now lists the organization's own documents, audits, and subprocessors with checkboxes for inline portal membership, replacing the portal-only rows plus separate add dialogs.
+- Compliance portal catalog document, audit, and third-party rows are now exposed as Relay Nodes in the console API.
+
+### Fixed
+
+- Unchecking a compliance portal document no longer reports a remove error after the deletion actually succeeded.
+- `probod` now persists its local ACME account key across restarts, so pending certificate orders no longer fail with 401 after a restart; unauthorized order polls now clear resumable state and retry provisioning instead of stalling.
+- Compliance portal document table now spaces the alias and visibility controls instead of rendering them flush against each other.
+
+## [0.251.0] - 2026-08-06
+
+### Added
+
+- Compliance portal Requests surface (rights requests) can now be enabled or disabled per organization from the console overview; when disabled, the portal hides the nav item and treats `/requests` as not found.
+- Document export watermarks now accept custom text instead of only an email address, with a 64-byte size limit and validation; existing `watermarkEmail` usage keeps working.
+- Access review campaign entries can now be filtered by account status (Active, Disabled, Unknown), mirroring the existing MFA filter.
+
+### Changed
+
+- Portal "Get Access" CTA is now labeled "Request Access" throughout the TopBar and document flows.
+- Access review campaign entries now show admin status as Yes/No text instead of a check/X icon, so admins stand out instead of non-admins looking flagged.
+
+### Fixed
+
+- Locked document viewer now shows the correct CTA — Sign NDA takes priority over Request Access when the portal NDA is incomplete — instead of always showing Get Access regardless of a pending request.
+- Compliance portal asset URLs on nested routes (e.g. `/en/documents/...`) no longer resolve under the route path and serve HTML instead of the expected chunk.
+
+## [0.250.0] - 2026-08-06
+
+### Added
+
+- HubSpot access-review connector now derives last login from successful events on the Account Activity login API (past 90 days). Existing HubSpot connectors must reconnect (or private apps must grant `account-info.security.read`) before last-login population works; missing scope leaves last login unset rather than failing the fetch.
+- Access review campaign entries now show each account's authentication method (e.g. SSO or password), with a matching filter in the campaign toolbar.
+- Obligations linked to a control now expose a total count in the console API.
+- Mailing list subscribers and updates are now resolvable as GraphQL nodes in the console API.
+
+### Fixed
+
+- HubSpot access-review connector now marks deactivated/archived users as inactive by consulting the Owners API (`archived=true`) instead of treating every Settings Users row as active. Existing HubSpot connectors must reconnect (or private apps must grant `crm.objects.owners.read`) before inactive detection works.
+- Closed an open-redirect bypass where a control byte (tab, newline, etc.) before a path segment could collapse to an off-origin protocol-relative URL, evading the fix for CVE-2026-49820.
+- Access review campaign entries no longer silently truncate for sources with more than 500 entries; entries are now paginated instead of clamped to the API's page limit.
+- Third-party business associate agreement, compliance report, and data privacy agreement resolvers now return the correct linked third party instead of erroring or resolving the wrong one.
+- Creating a compliance portal reference without a logo file no longer fails; a default placeholder logo is used instead.
+- The MCP `SendMailingListUpdateTool` now checks the send permission instead of the update permission.
+- Evidence uploads now reject empty files, and evidence without an associated task no longer returns an internal server error.
+- MCP-created tracker patterns now default to the script source instead of leaving it unset.
+
+## [0.249.1] - 2026-08-06
+
+### Fixed
+
+- Compliance portal PDF preview no longer fails to load when export/download still worked: the viewer worker is now bundled from the same pdf.js version as react-pdf
+
+## [0.249.0] - 2026-08-05
+
+### Added
+
+- Subdivision-aware geolocation: IP lookups now resolve an ISO 3166-2 subdivision alongside the country, and the resolved jurisdiction is persisted on consent records. Bundled country blocks are replaced by provider-neutral ranges so licensed importers can supply subdivision data
+- US visitors are mapped to their own state privacy law (VCDPA, TDPSA, CPA, and so on) instead of being labeled CCPA. California keeps the statutory Privacy Choices experience; other mapped states use a generic opt-out banner with US-specific copy
+- Canadian visitors are mapped per province: Quebec to Law 25, Alberta to PIPA_AB, and British Columbia to PIPA_BC, with PIPEDA retained elsewhere. Canadian opt-out banner copy applies to PIPEDA and provincial PIPA; `PIPA_CA` remains valid for legacy records
+- `subdivisionCode` on the consent record list and detail pages, so operators can verify the detected jurisdiction
+
+### Changed
+
+- Vetting agent notes in the third-party register are parsed into structured document blocks instead of being embedded as raw Markdown, so headings, tables, and bold markers render correctly in generated documents and PDFs
+
+### Fixed
+
+- MS365 OAuth reconnects no longer appear incomplete: a refresh token is treated as `offline_access` even though Microsoft's v2 token response omits that scope
+- A Markdown conversion failure in a single risk-assessment note no longer aborts the whole third-party register publish; the note falls back to a plain-text paragraph
+
+## [0.248.0] - 2026-08-05
+
+### Changed
+
+- Restructured the access review console list UI: dedicated list item components for campaigns, sources, and entry sections; replaced the add-source dialog with the provider list flow; consolidated fetch-status UI, shared the campaign deletable-status helper, and now load remaining sources while searching so matches beyond the first page aren't missed
+
+### Fixed
+
+- Presigned S3 requests (`PresignGetObject`) no longer fail with a misleading "not found" error
+- A failed page load during source search no longer hides "Load more", so later pages stay reachable
+
+## [0.247.0] - 2026-08-05
+
+### Added
+
+- Organizations can now track DORA Critical ICT Functions via a new Business Functions register — link assets, third parties, and people to a business function, with matching CLI, MCP, and n8n operations
+- Dutch (nl-NL) language support extended to the compliance portal's documents, NDA, requests, subprocessors, and updates pages
+
+### Changed
+
+- Revamped the access review campaign bulk-decision UI: selection now survives partial and stale failures (retaining failed entries so bulk actions can be resubmitted), and accessibility and narrow-layout behavior were hardened
+
+### Fixed
+
+- Cloudflare access reviews are now scoped to a single account instead of merging members across every account reachable by the API token, which produced duplicate emails
+- Asana access review roles and admin status are now populated from membership data instead of always showing empty
+- Fixed the OpenAI connector probe endpoint
+- Uploads to Google Cloud Storage's S3-interoperability endpoint no longer fail with `SignatureDoesNotMatch`; the SDK no longer signs the `Accept-Encoding` header, which GCS rewrites in transit
+- Device codes are now kept for 15 minutes past expiry before garbage collection, so a client polling right at expiry gets `expired_token` instead of `invalid_grant`
+
+## [0.246.0] - 2026-08-04
+
+### Added
+
+- Cookie banners can now present a dedicated CCPA "Your Privacy Choices" panel (right to opt out of sale/sharing, right to limit sensitive personal information) and a first-class notice-only presentation for jurisdictions with no cookie-consent law, driven by an additive `layout` field in the banner config
+- Consent records can now capture a distinct `ACKNOWLEDGE` action for notice-only banners instead of always recording an accept-all; exposed through GraphQL, MCP, the console consent-records view, and n8n
+- MCP access review entries now include the campaign source name and connector ID, so agents no longer have to infer the source tool from account metadata
+
+### Changed
+
+- Generated tracker policy documents no longer show a "Last updated" timestamp in the body, since it churned on every automatic regeneration
+
+### Fixed
+
+- Dutch (nl-NL) cookie banner translations were missing the Privacy Choices panel copy and the notice dismiss label added after the nl-NL backfill; both are now included
+
+## [0.245.0] - 2026-08-04
+
+### Added
+
+- Dutch (nl-NL) language support across the console, compliance portal, and cookie banner
+- MCP `tools/list` responses now include a cache TTL hint so well-behaved clients can skip refetching the static tool set every session
+
+### Fixed
+
+- The compliance portal subprocessor picker no longer lists non-top-level third parties; only level-one third parties can be selected as subprocessors
+- Uploads to S3-compatible endpoints that don't support AWS's checksum extensions (e.g. Google Cloud Storage's S3-interop endpoint) no longer fail with a misleading `SignatureDoesNotMatch: Access denied` error when checksum calculation is explicitly configured
+
+## [0.244.0] - 2026-08-03
+
+### Added
+
+- Organizations can now operate multiple compliance portals: portal-scoped catalogs, access, visitor experience, and console management (including portal selection and catalog publication controls) replace the single organization-wide portal, with matching CLI, MCP, and n8n operations for managing portals and their audit, document, third-party, file, and reference catalogs. The legacy "trust center" terminology and database tables are renamed to "compliance portal" throughout.
+- Deployments can now override compiled-in connector endpoints (e.g. to point a connector at a vendor's sandbox), validated at boot with SSRF-hardened checks — atomic per-provider overrides, host/scheme/credential validation, and pagination guarded against off-host or path-traversal redirection so a spoofed next-page link cannot exfiltrate a connection's bearer token
+- Expose mailing lists, detected trackers, compliance portal frameworks, and document/control/framework mutations via MCP that were previously console-only
+
+### Changed
+
+- Third-party business and security owners are now migrated into a single shared administrators list across GraphQL, MCP, CLI, n8n, and the console
+- Access review source rows now explain why a provider returned no organizations (app not approved, personal account, or provider without a picker) instead of always falling back to a free-text slug input
+- Providers whose organization is captured during the OAuth callback (PagerDuty, Vercel, Datadog, Zendesk) now show it read-only instead of an editable slug input that always failed to save
+
+### Fixed
+
+- Access review connector rows now show which OAuth scopes are missing after a reconnect, instead of leaving "Reconnect required" unexplained
+- Microsoft 365 access review no longer fails an entire source fetch when `AuditLog.Read.All` is unavailable on the tenant; affected accounts import with MFA left unknown instead
+- Linear connector errors no longer echo the provider's raw error message, which could leak tenant identifiers or query fragments
+- A source with a missing or deleted connector is no longer reported the same way as a provider that legitimately returned no organizations
+- Long process names on risk assessment Mermaid flowchart edges no longer get clipped to a single line
+- Compliance portal document filtering is now consistent across the catalog, access, and visitor services
+
+## [0.243.0] - 2026-07-31
+
+### Added
+
+- ITAM devices are now exposed via MCP and n8n (in addition to GraphQL): list, get, create, revoke, delete, and set-owner, with latest postures nested on list/get responses
+
+### Changed
+
+- Compliance portal locale-mismatch banner now falls back to a supported browser-language match for visitors without a saved locale, and stays silent for unsupported languages instead of assuming English is preferred
+
+### Fixed
+
+- Manual agent install instructions now point to `probo-agent/v*` releases instead of the repo-wide `/releases/latest`, which pointed at the wrong assets when other tracks published more recently
+- SCIM event CSV exports no longer fail with a "cannot parse address" error caused by a missing email address in the underlying membership profile query
+
+## [0.242.0] - 2026-07-30
+
+### Added
+
+- Organization owners and admins can now delete the organization's horizontal logo; the underlying file is soft-deleted so existing download URLs stop serving the image, and the operation is exposed in the n8n organization node
+- Compliance portal shows an unsigned-NDA banner directly in the portal shell, with a "Sign" CTA and a Documents back link on the NDA page, instead of only surfacing the requirement when a document export fails
+- Access-review connector rows show a "reconnect" prompt when the connector needs additional OAuth scopes
+- Devices can now be soft-deleted after being revoked; ITAM garbage collection also hard-deletes orphaned pending/revoked devices with no API key, postures, or valid enrollment token
+
+### Changed
+
+- NDA signature is now required only for exporting a private (protected) document, report, or file — requesting access and exporting public files no longer require signing first
+- Locale-mismatch and unsigned-NDA banners in the compliance portal are now visually distinguished (info vs warning) so they don't read as a single band when both are shown
+- MCP third-party list now defaults to level 1 (direct third parties only) when no level filter is given
+- Document signing/approval reminders due on a weekend now defer to Monday instead of sending over the weekend or spending an escalation step unused
+
+### Fixed
+
+- Microsoft 365 access review lists home-tenant organization members only, using the same Graph `/users?$filter=userType eq 'Member'` call as the SCIM bridge
+- Microsoft 365 access review now resolves actual MFA status for users instead of always reporting it as unknown
+- Portal mutations now consistently enforce sign-in, full-name, and NDA gates instead of relying on each call site to reimplement the redirect logic
+- Guests who sign in from a shared-locale portal link no longer land back on it showing a stale locale-mismatch banner; the redirect now adopts the identity's saved locale
+- ITAM GraphQL actions are now registered under the `v1:itam`/`v1:itam:read` OAuth2 scopes, fixing bearer-token callers that were failing closed despite having role-level permission
+- Device enrollment token deletes are now scoped to the owning tenant
+- SCIM audit-log CSV exports collected by ID no longer fail to load activation/deactivation timestamps
+
+## [0.241.0] - 2026-07-30
+
+### Added
+
+- MCP tools now carry titles and complete annotation hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so clients like Claude present reads, writes, and deletes accurately
+
+### Changed
+
+- Member profiles now have a `PENDING` state distinct from `ACTIVE`/`DEACTIVATED`, so invited-but-not-yet-activated members remain assignable to assets, data, and risks; owner pickers and state filters across the console, CLI, MCP, and n8n now accept multiple states
+- "Archive" user action renamed to "Deactivate" across the API, CLI, MCP, n8n, and console
+- People list status filter is now a multi-select dropdown instead of cramped checkboxes, and reflects `PENDING` immediately after an activation email is sent
+- Audit log and SCIM export CSV files now escape leading `=`, `+`, `-`, `@`, tab, and carriage-return characters to prevent spreadsheet formula injection
+
+### Fixed
+
+- Asset table's inline owner picker no longer offers deactivated profiles as owners
+- People list search no longer briefly reverts to stale results when a debounced search resolves after a filter change
+- Disabled dropdown checkbox items are now fully non-interactive (opacity, cursor, hover) instead of only dimming the checkbox glyph
+
+## [0.240.0] - 2026-07-29
+
+### Added
+
+- Log export for audit logs and SCIM events: request a CSV export job from the console, Connect, MCP, or CLI, streamed and uploaded to S3 by a concurrent export worker
+- Auth cookie `SameSite` attribute is now configurable (`PROBOD_AUTH_COOKIE_SAMESITE`, defaults to `Lax`), rejecting `None` unless `Secure` is enabled
+- In-tab light/dark display mode toggle for signed-in compliance portal guests, independent of the OS color scheme
+- Subprocessor cards truncate long country/region lists behind a "+N" popover
+
+### Changed
+
+- Access review campaigns can now be deleted in any status, except while a campaign is still fetching sources
+- Document share action relabeled "Copy link" and exposed on each row of the documents list, not just the viewer
+- Locked document viewer keeps showing the document title and an access-request CTA instead of withholding the whole page
+- Guest language selector shows the locale code instead of the full language name to save space next to "Get access"
+- Compliance portal TopBar stacks the brand name over the tagline and shortens nav labels on narrower viewports
+- html2pdf-rendered PDFs (e.g. signature certificates) now request a tagged structure tree and document outline from Chrome for accessibility
+- `safeRedirect` now accepts configured CORS origins as valid continue-URL hosts, alongside verified custom domains
+
+### Fixed
+
+- Document soft-delete now clears associated control/risk/measure mappings, fixing risk deletion when the linked document was already removed
+- Console document `lang` attribute now follows the active i18next locale instead of always reporting English
+- "Trusted by" logo tiles now stretch to match row height when a caption wraps to two lines
+- Compliance portal drawer's dropdown/select menus are clickable again when the swipe drawer's transform was blocking pointer events underneath it
+- Ukrainian "+N more regions" label now uses the correct one/few/many plural forms
+
+## [0.239.0] - 2026-07-29
+
+### Added
+
+- Device page shows a formatted value per posture check alongside current postures; the Postures tab is replaced with paginated report history grouped by agent push time
+
+## [0.238.0] - 2026-07-28
+
+### Added
+
+- Optional `auditStartDate`/`auditEndDate` on audits, exposed through GraphQL, MCP, CLI, n8n, and console, with new sortable order fields `AUDIT_START_DATE`/`AUDIT_END_DATE`
+
+### Fixed
+
+- Unverified password identities could open a session after signing out; password sign-in is now rejected with `EMAIL_NOT_VERIFIED` until the address is confirmed, with a resend-confirmation email flow
+- Completing a magic link for an existing identity now marks the address verified, matching OIDC behavior
+- Mermaid diagrams that fail to render now show a toast with a safe inline fallback instead of leaking raw Mermaid error markup into documents
+
+## [0.237.0] - 2026-07-27
+
+### Added
+
+- Compliance portal documents page supports bulk requesting access: select several locked documents, reports, or files and request access to all of them in one call
+- `updateAccessReviewCampaign` now accepts `accessReviewSourceIds` to sync a campaign's scope sources alongside other updates in the same call
+- People list gained search and status/role/type filters across GraphQL, MCP, and CLI, with the default page size raised to 100
+- Third-party selector fields on measures and other forms now show only first-level third parties
+
+### Fixed
+
+- Fixed a crash on the third-party detail page when a third party's country was set to the global pseudo-region
+- Empty toast viewport no longer blocks pointer events (hover/click) over content underneath it, such as bottom action bar buttons
+
+### Security
+
+- Bumped `postcss` to 8.5.23 and `react-router` to 8.3.0 to remediate high-severity npm audit findings
+
+## [0.236.0] - 2026-07-27
+
+### Added
+
+- Five new access-review connectors: Google Analytics (GA4), Dotfile, Segment, Square, and UpCloud, with account listing, role/status resolution, and connector logos
+- French translation for the console and compliance portal, backed by a new `react-i18next` setup
+- Documentation links for the Dotfile, Segment, and 19 other API-key access-review connectors' setup dialogs
+- Restored the "Risk Accepted" status on finding create/update forms, with a searchable paginated risk picker to supply the required linked risk
+
+### Fixed
+
+- Preserve the post-login destination through OIDC, magic-link, and SAML auth-error redirects instead of dropping it on `/auth/error`
+- Custom-domain CNAME verification no longer fails on multi-hop DNS alias chains
+- 1Password and Langfuse access-review connectors could not be connected: required extra settings (SCIM bridge URL, base URL) were silently dropped by the console
+
+## [0.235.0] - 2026-07-25
+
+### Added
+
+- Device management: enroll employee devices via the new `probo-agent`, view posture and admin the device fleet with owner assignment from the console, and let employees confirm enrollment and check their own device status without an assumed session
+- "Documentation" links for connector setup: the API-key connect dialog and access-review Add Source dialog now link to a connector's docs page when available
+
+### Changed
+
+- Renamed the "My Signatures" console menu item to "Employee Portal"
+- Auth failures (SAML, OIDC, magic-link) now redirect to a shared `/auth/error` page with a stable error code and a clear explanation instead of raw JSON or one-off pages; SAML failures always show a generic reason to avoid leaking account or org state
+
+### Fixed
+
+- Hardened custom-domain verification: CNAME/TXT checks now require the record owner to match the verified hostname, and CAA checks climb to the registrable domain and validate RFC 8659 syntax, closing a bypass where an apex record could satisfy verification for a subdomain
+- Third-party category is no longer reset to "Other" when omitted from a partial update via MCP, GraphQL, or CLI
+
+## [0.234.0] - 2026-07-24
+
+### Changed
+
+- Render longer vetting notes as markdown, keeping more of the orchestrator assessment text and skipping profile fields already on the third party
+
+### Fixed
+
+- Reject empty SAML NameIDs during assertion validation, preventing duplicate-key failures on later logins, and return a clear error when a NameID is already linked to another account
+- Require portal redirect hosts to have a verified certificate (Active/Renewing) before allowing OIDC, magic-link, and compliance-portal OAuth `continue` redirects, closing an open redirect on newly claimed custom domains
+- Fixed PostHog access-review sources being marked disconnected for EU cloud OAuth tokens by delegating region discovery to the shared resolver used by the access-review driver
+
+## [0.233.0] - 2026-07-22
+
+### Added
+
+- Added pointer parallax to logo backdrops (`MediaTile`/`BackdropCard`), with eased entry and a frozen pose when the pointer leaves
+
+### Fixed
+
+- Split certificate provisioning into separate begin-challenge and poll-order workers so the global ACME rate-limit cooldown no longer blocks polling of in-flight orders
+- Fixed several access-review connector defects that silently synced zero users or hammered vendor APIs (Sentry trailing-slash routing, Vercel OAuth team parameter, Brex company-read scope, Cloudflare `per_page` floor, picker providers now auto-select their first workspace, org defaulting now also applied via MCP, and the source-name worker no longer re-claims permanently-failed sources or loses a resolved name after reconnect)
+
+### Removed
+
+- Disabled the Clerk access-review connector: its Backend API only exposes application end-users, not workspace admins, so reviews targeted the wrong population
+
+## [0.232.0] - 2026-07-22
+
+### Added
+
+- Exposed a gauge for the ACME rate-limit cooldown end time (`certmanager_certificate_acme_cooldown_until_timestamp_seconds`) and expanded provisioning failure logs with the full ACME error detail (status code, instance, link, subproblems, retry-after), making cooldowns and CA errors diagnosable
+
+## [0.231.0] - 2026-07-22
+
+### Added
+
+- Compliance portal URLs are now locale-prefixed (e.g. `/fr/documents`), with self-canonical and hreflang SEO tags and a persisted identity locale that reconciles the browser locale against a saved preference via a mismatch banner
+
+### Changed
+
+- Compliance portal home page now shows a short entity name instead of the full portal title as its heading (API field renamed `title` -> `entityName`), restoring the localized hero composition and using the entity name as the OAuth client name
+
+### Fixed
+
+- Hardened automatic TLS certificate provisioning: fixed several race conditions and correctness gaps in the ACME worker (challenge acceptance ordering, write-back locking, Retry-After parsing, stale-order reset scoping, poll lease sizing, CAA error classification, and duplicate metrics registration) that could leave certificates stuck, unissued, or crash the provisioning worker
+
+## [0.230.0] - 2026-07-21
+
+### Added
+
+- Webhook events now include `RIGHT_REQUEST_CREATED`, `RIGHT_REQUEST_UPDATED`, and `RIGHT_REQUEST_DELETED` for rights requests created via console or compliance portal
+- Compliance portal visitors can now sign in via OAuth/OIDC, with sign-in and consent screens showing the requesting client's branding (logo and name)
+- Compliance portal home page now displays the full custom portal title as its heading, instead of composing it from the organization name
+- Added a configurable trust center base domain (default `probopage.com`) so a managed default domain and certificate are provisioned for every compliance portal at organization creation
+
+### Changed
+
+- Renamed "Trust Center" to "Compliance Portal" across the GraphQL API and MCP tools — notably `ComplianceExternalURL` is now `ComplianceCustomLink` and the visibility field is `compliancePortalVisibility`
+- Moved public-facing profile fields (title, description, website, email, headquarters address) off the organization and onto the compliance portal
+- Custom domains and their certificates now belong to the compliance portal rather than the whole organization, with issuance and renewal handled by a dedicated poll-based worker
+- Console: restructured the brand page into profile, domains, visual identity, and custom link sections, and moved frameworks and the NDA card onto the overview page
+
+### Removed
+
+- Removed the one-time session-transfer authentication flow for custom-domain SSO cookies, now that portal visitors authenticate via OAuth
+
+## [0.229.1] - 2026-07-21
+
+### Fixed
+
+- Mapped commitment and commitment group actions to the `v1:compliance-page` OAuth2 scope so tokens with that scope can create and manage commitments via MCP/API
+
+## [0.229.0] - 2026-07-20
+
+### Added
+
+- MCP commitment and commitment group tools (create, list, update, delete) so automation can manage compliance portal commitments end to end
+
+### Changed
+
+- Redirect the legacy compliance portal `/overview` URL to home
+- Introduced a v2 z-index scale so portaled menus and popups sit above in-page media
+
+### Fixed
+
+- Aligned the compliance portal PDF preview and desktop gutter with the page header, and matched list skeletons to the card surface
+
+## [0.228.0] - 2026-07-20
+
+### Added
+
+- The compliance portal is now served in production for the `/trust` path and custom-domain sites, replacing the previous trust center frontend
+- Added Data Requests pages to the compliance portal: data subjects can submit and track GDPR/CCPA rights requests (including rectification, objection, and complaint types) after magic-link sign-in, scoped to their verified email
+- Added subscribe-to-updates in the compliance portal, with an Updates CTA and a sign-out action in the user menu
+- Added eleven new compliance-portal locales: German, Spanish, Indonesian, Italian, Japanese, Korean, Polish, Portuguese, Turkish, Ukrainian, and Simplified Chinese
+
+### Changed
+
+- Renamed the document approval button to "Approve" and updated the consent text to match, since the action only approves
+- Made the compliance portal layout responsive
+- Standardized copy to say "compliance portal" instead of "trust center" throughout
+
+### Fixed
+
+- Fixed document row accessibility for mobile screen readers and corrected PDF page sync after fit-to-width reflow
+- Preserved `Field` `aria-describedby` when showing form errors
+
+## [0.227.0] - 2026-07-20
+
+### Added
+
+- Added a Trust Center documents page with category grouping, a Public/Private visibility filter, and a full document viewer for PDFs, images, and other file downloads
+- Added configurable, reorderable commitment cards to the compliance portal home page, replacing the hardcoded placeholder content
+- Added a sign-in dialog (magic link + OIDC) that gates trust-center access requests
+
+### Changed
+
+- Renamed risk overview labels for consistency: "Severity" to "Score" and "Inherent" to "Initial"
+- Archiving a document now voids pending approval quorums and cancels requested signatures instead of leaving them dangling
+
+### Fixed
+
+- Fixed an ambiguous tenant filter that caused signature load queries to fail
+
+## [0.226.1] - 2026-07-15
+
+### Fixed
+
+- Updated `golang.org/x/text` to v0.39.0 to remediate CVE-2026-56852
+
+## [0.226.0] - 2026-07-15
+
+### Added
+
+- Added a v2 `ErrorBoundary` component (with companion `ErrorState` and `InlineError` primitives) to `@probo/ui` for graceful React error handling
+- Webhook deliveries for `*:updated` events now include a top-level `updatedFrom` field alongside `data`, carrying a full snapshot of the entity as it was before the update (e.g. the prior membership role on `user:updated`). The field is omitted for non-update events
+
+### Fixed
+
+- SCIM user provisioning: deleting a user whose profile is still referenced (e.g. by signed document versions) now archives the user instead of returning a 500 and disabling the connector
+
+## [0.225.0] - 2026-07-13
+
+### Added
+
+- Added managed access-review connectors for Scaleway, Yousign, Railway, and Crisp, including provider logos and website/ownership verification before a connection is established; managed connectors stay hidden until they are fully configured
+- Added server-side filtering for trust center subprocessors, exposing facet-driven filters through the trust API
+- Added trust center Updates list and detail pages with pagination and a mailing-list subscribe action
+- Added a Risk Assessments tab to the risks list page in the console
+
+### Changed
+
+- The OAuth2 consent page now shows a submit loader and a redirect screen after the user grants consent
+
+### Fixed
+
+- Microsoft OIDC sign-in now requires verified domain ownership before linking an account
+
+## [0.224.1] - 2026-07-09
+
+### Fixed
+
+- Built with Go 1.26.5 (up from 1.26.4) to pick up the standard-library security fixes for CVE-2026-42505 (ECH handshake de-anonymization) and CVE-2026-39822 (`os.Root` symlink following on Unix)
+
+## [0.224.0] - 2026-07-09
+
+### Added
+
+- Added FERPA and PCI DSS framework datasets (controls and logos), selectable in the framework import selector alongside the existing frameworks
+
+### Changed
+
+- Consolidated ownership-grant authorization into policy: granting OWNER (via `createUser` or `updateMembership`) is now restricted to organization owners through role-scoped allow policies conditioned on the assigned role, replacing the per-resolver custom checks and the now-removed `iam:membership-role:set-owner` action. The `permission` field gained an optional generic `attributes` key/value argument so the console can refine dry-run checks (e.g. by target role) without loosening the base grants
+- Renamed the `DocumentVersionSignatureFilter` `state` field to `profileState` (GraphQL) / `profile_state` (MCP) to disambiguate it from the signature `states` field, since it filters on the signatory's profile state
+
+### Fixed
+
+- Enforced owner-only member removal: `removeUser` (API resolver and MCP `RemoveUserTool`) now requires the owner-only `iam:membership:delete` gate instead of the weaker `iam:membership-profile:delete`, so an organization ADMIN can no longer remove members (including OWNERs)
+- Fixed a hole (GHSA-22xj-f767-ppw6) where a self-provisioned trust center visitor could accept or inject audit-trail events into another visitor's NDA signature by supplying its ID; esign now verifies signature ownership against the verified session identity in the accept and record-event flows
+- Confined all public trust API reads and electronic-signature operations to the requesting compliance page's tenant, closing a cross-tenant access gap where a visitor could resolve nodes, export audit-report PDFs, and read or mutate signatures belonging to another organization
+- Guarded the third-party vetting agent's HTTP tools against SSRF: outbound requests now route through an SSRF-protected client that rejects loopback, private, CGNAT, link-local, and reserved addresses on every redirect hop
+- Excluded documents with no published version from the trust center "Grant All" available-access list so it matches the request-all filter and Slack notification
+- Hid draft and hidden documents from the trust center access-request Slack notification so it only lists documents a requester could actually be granted
+- Fixed Anthropic thinking budgets so `budget_tokens` stays below `max_tokens`; thinking is now omitted when the configured budget is too small to meet Anthropic's minimum
+
+## [0.223.3] - 2026-07-06
+
+### Fixed
+
+- Fixed IP address recording for NDA acceptance, document signing/approval events, and session creation behind a layer-7 proxy; affected endpoints now read the real client IP from `Forwarded` / `X-Forwarded-For` headers
+
+## [0.223.2] - 2026-07-03
+
+### Fixed
+
+- Fixed a privilege-escalation gap where an organization ADMIN could mint an OWNER membership through `createUser`, bypassing the owner-only authorization enforced elsewhere; `createUser` (both the API resolver and the MCP `CreateUserTool`) now requires set-owner authorization when the requested role is OWNER
+
+## [0.223.1] - 2026-07-03
+
+### Fixed
+
+- Fixed a cross-tenant IDOR where a Finding's linked Risk or a Processing Activity's Data Protection Officer could disclose another organization's data (GHSA-c74x-79w6-63jh): affected resolvers now authorize the referenced object itself instead of its parent, and the write paths validate the reference against the caller's organization
+
+## [0.223.0] - 2026-07-02
+
+### Added
+
+- Served files now support HTTP range requests, enabling seeking and resumable downloads
+- Document lifecycle webhook events (`document.*`, including the `version`, `signature`, and `approval` sub-events) can now be subscribed to
+
+### Changed
+
+- Public files are served from a stable URL so CDN infrastructure can cache them properly
+- Compliance report upload limit raised to 30MB
+- OAuth token and consent UIs now display friendly names for the `v1:resource-alias` scopes instead of the raw scope string
+
+### Fixed
+
+- Compliance page no longer treats every Slack connector as connected
+- Long Mermaid flowchart labels now wrap instead of being clipped in risk assessment diagrams
+- Dialogs no longer close when dismissing a nested dropdown or select whose pointer lands inside the dialog, preserving form state
 
 ## [0.222.2] - 2026-07-01
 

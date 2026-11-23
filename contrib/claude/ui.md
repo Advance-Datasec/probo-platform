@@ -9,7 +9,7 @@ These rules are the **source of truth**. The legacy tree (`Atoms/`, `Molecules/`
 | Topic | Guide |
 |-------|--------|
 | Component shape, props, naming/suffixes | [`contrib/claude/react-components.md`](react-components.md) |
-| v2 design tokens (color, type, radius, shadow, spacing) | [`contrib/claude/v2-tokens.md`](v2-tokens.md) |
+| v2 design tokens (color, type, radius, shadow, z-index, spacing) | [`contrib/claude/v2-tokens.md`](v2-tokens.md) |
 | App folder layout and special folders | [`contrib/claude/app-arborescence.md`](app-arborescence.md) |
 | Error boundaries and error/fallback props | [`contrib/claude/error-handling.md`](error-handling.md) |
 | Relay data loading | [`contrib/claude/relay.md`](relay.md) |
@@ -20,7 +20,7 @@ These rules are the **source of truth**. The legacy tree (`Atoms/`, `Molecules/`
 |------|------------|
 | Package | **`@probo/ui`** — v2 components under `src/v2`. Apps opt into v2 by importing the v2 theme (see [`v2-tokens.md`](v2-tokens.md)). |
 | Styling | **Tailwind v4** with the Radix-scale tokens (`bg-sand-3`, `text-sand-12`, `rounded-3`, `text-4`, …). |
-| Variants API | **`tailwind-variants/lite`** only — `import { tv } from "tailwind-variants/lite"`. The `/lite` entrypoint ships **without `tailwind-merge`**, which is required: the numbered scales (`text-1…9`, `rounded-1…6`, `shadow-1…6`) collide with the color/utility namespaces and tailwind-merge would silently drop the scale class (e.g. `text-3` next to `text-sand-11`). The legacy v1 kit stays on `tailwind-variants` (with merge). |
+| Variants API | **`tailwind-variants/lite`** only — `import { tv } from "tailwind-variants/lite"`. The `/lite` entrypoint ships **without `tailwind-merge`**, which is required: the numbered scales (`text-1…9`, `rounded-1…6`, `shadow-1…6`, `z-1…6`) collide with the color/utility namespaces and tailwind-merge would silently drop the scale class (e.g. `text-3` next to `text-sand-11`). The legacy v1 kit stays on `tailwind-variants` (with merge). |
 | Class composition | **Do not use `clsx` or `tailwind-merge`.** All conditional styling goes through `tv` variants and slots. |
 | Headless primitives | **Base UI** (`@base-ui/react`). We **style** these primitives; we do not re-implement their behavior. |
 
@@ -151,7 +151,20 @@ export function Row({ bordered, children }: { bordered?: boolean; children: Reac
 
 Variants tune **look** (size, tone, density) — they must not change a component's **structure, semantics, or prop contract**. When a "variant" would render a different element, accept different props, or fork the behavior, build a **separate component** instead. This keeps each component's typing simple and its rendered element predictable.
 
-The clearest case is the button family: a clickable action, a styled `<a>`, and a router link are three components, not one `Button` with an `as`/`href`/`to` union.
+The clearest case is navigation vs action: a clickable action, button-looking navigation, and underlined text links are separate components — not one `Button` with an `as`/`href`/`to` union, and not `Link`/`Anchor` that secretly look like buttons.
+
+| Component | Element | Look |
+|---|---|---|
+| `Button` | `<button>` | button |
+| `ButtonLink` | react-router | button |
+| `ButtonAnchor` | `<a>` | button |
+| `Link` | react-router | underlined text |
+| `Anchor` | `<a>` | underlined text |
+| `TableLink` | react-router | unstyled; `::after` stretches across an interactive `TableRow` |
+| `CardLink` | react-router | unstyled; `::after` stretches across an interactive `Card` |
+| `CardButton` | `<button>` | unstyled; `::after` stretches across an interactive `Card` |
+
+A detail page’s “back to the list” control uses `Link` (`size={2}`, `color="neutral"`, `underline={false}`, `CaretLeftIcon`) — never `Button` or `ButtonLink`. See [`routing.md`](routing.md#back-to-the-list).
 
 ### Do / don't: separate components over polymorphic props
 
@@ -170,27 +183,93 @@ export function Button(props: ButtonProps) {
 ```
 
 ```tsx
-// Good — three flat components sharing the same tv styles
-// variants.ts
+// Good — flat components; button look and text-link look stay separate
+// Button/variants.ts
 export const button = tv({ base: "inline-flex items-center …", variants: { /* size, tone */ } });
 
-// Button.tsx — renders <button>
+// Button.tsx — action
 export function Button(props: ComponentProps<"button">) {
   return <button className={button()} {...props} />;
 }
 
-// Anchor.tsx — renders <a>
-export function Anchor(props: ComponentProps<"a">) {
+// ButtonAnchor.tsx / ButtonLink.tsx — navigation that looks like a button
+export function ButtonAnchor(props: ComponentProps<"a">) {
   return <a className={button()} {...props} />;
 }
-
-// Link.tsx — renders a router link
-export function Link(props: ComponentProps<typeof RouterLink>) {
+export function ButtonLink(props: ComponentProps<typeof RouterLink>) {
   return <RouterLink className={button()} {...props} />;
+}
+
+// Link/variants.ts — underlined text
+export const link = tv({ base: "underline …", variants: { /* size, color */ } });
+
+// Link.tsx / Anchor.tsx — navigation that looks like a link
+export function Link(props: ComponentProps<typeof RouterLink>) {
+  return <RouterLink className={link()} {...props} />;
+}
+export function Anchor(props: ComponentProps<"a">) {
+  return <a className={link()} {...props} />;
 }
 ```
 
 Size/tone differences (`size="sm"`, `tone="danger"`) are legitimate `tv` variants — they don't change the element or props.
+
+## Clickable table rows
+
+A whole row that navigates keeps a **real multi-column table** (column headers, `TableRowHeaderCell` for the title only) and one real `<a>`. Do **not** put `to` on `TableRow` — the row stays a `<tr>`. Do **not** wrap the row in a single spanning cell, `navigate()` click routers, or a link in every cell.
+
+Use the look variants and `TableLink`:
+
+- `TableRow interactive` — containing block + cursor; sibling cells are `pointer-events-none` so they do not steal hits from the overlay.
+- `TableLink` inside the title `TableRowHeaderCell` — unstyled react-router link whose `::after` covers the row (padding and meta columns). Cmd/ctrl/middle-click stay native. One tab stop.
+- `TableButton` inside the title `TableRowHeaderCell` — the same stretch on a `<button>`, when the row opens something in place rather than navigating. Do not hand-roll the `::after` overlay.
+- `TableCell interactive` (or `TableRowHeaderCell interactive`) — `relative z-1` and `pointer-events-auto!` so a trailing `Button` / `ButtonLink` sits above the overlay and can hover. The `!` is required: the row’s `[&_td]:pointer-events-none` is a descendant selector and otherwise wins, so the overlay steals `:hover`.
+
+```tsx
+// Good — one TableLink; the row is still a table
+<TableRow align="center" interactive>
+  <TableRowHeaderCell>
+    <TableLink to={to}>{title}</TableLink>
+  </TableRowHeaderCell>
+  <TableCell>{updatedAt}</TableCell>
+  <TableCell interactive>
+    <ButtonLink to={to}>Sign</ButtonLink>
+  </TableCell>
+</TableRow>
+```
+
+```tsx
+// Bad — TableRow is not a navigator
+<TableRow to={to}>…</TableRow>
+
+// Bad — one spanning cell drops column alignment and header mapping
+<TableCell colSpan={5}><Link to={to}>{/* title + meta */}</Link></TableCell>
+
+// Bad — JS click on the row is not a link (no status bar, no “Open in new tab”)
+<TableRow onClick={() => navigate(to)}>…</TableRow>
+```
+
+Put `interactive` only on body rows that contain a `TableLink` or `TableButton`. Header rows stay inert. Do not set `position: relative` on `TableLink` or `TableButton` — the overlay must use the row as its containing block.
+
+## Clickable cards
+
+A whole card that navigates or acts stays a `Card`. Do **not** put `to` on `Card`, and do **not** cover it with an empty `absolute inset-0` link or button.
+
+- `Card interactive` — containing block (`relative`) and cursor. Do not add `isolate`; a stacking context traps menus that escape the card.
+- `CardLink` — unstyled react-router link whose `::after` covers the card. Cmd/ctrl/middle-click stay native. One tab stop.
+- `CardButton` — the same stretch on a `<button>`, for a card that opens something in place rather than navigating.
+- Nested controls — `relative z-1` and `pointer-events-auto` so they sit above the overlay and can hover.
+
+```tsx
+<Card variant="soft" interactive>
+  <CardLink to={to}>{title}</CardLink>
+  <div className="relative z-1">
+    <Button type="button">Edit</Button>
+  </div>
+</Card>
+```
+
+Do not set `position: relative` on `CardLink` or `CardButton`. The overlay must use the card as its containing block.
 
 ## Props typing
 
@@ -457,7 +536,7 @@ const imageCard = tv({ slots: { shell: "...", image: "...", text: "..." } });
 
 ## User feedback (toasts)
 
-Transient feedback for an action's outcome uses **Base UI's Toast** (`@base-ui/react/toast`) — never `alert`, a hand-rolled banner, or a `console.log`. As with every other primitive, we **style** Base UI's toast; we do not build our own toast system. The legacy kit `useToast` / `Toaster` is non-compliant and is being removed — do not use it in v2.
+Transient feedback for an action's outcome uses **Base UI's Toast** (`@base-ui/react/toast`) — never `alert`, a hand-rolled banner, or a `console.log`. As with every other primitive, we **style** Base UI's toast; we do not build our own toast system.
 
 The kit exposes a styled **`Toaster`** (a `Toast.Portal` + `Toast.Viewport` rendering styled `Toast.Root`s, keyed off each toast's `type`). Mount Base UI's `Toast.Provider` and the `Toaster` **once** at the app root; everything else queues toasts through Base UI's manager.
 
@@ -472,13 +551,13 @@ import { Toaster } from "@probo/ui";
 </Toast.Provider>
 ```
 
-Queue a toast with `Toast.useToastManager().add(...)` — the same API Base UI exposes. Use `type` to drive the styled variant.
+Queue a toast with `useToast().add(...)`. The module's default export is `Toast.useToastManager`. Base UI's package entry exports that hook as a type only, so import it from the kit. Use `type` to drive the styled variant.
 
 ```tsx
-import { Toast } from "@base-ui/react/toast";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 
 function CreateMeasureButton() {
-  const toast = Toast.useToastManager();
+  const toast = useToast();
   const { t } = useTranslation();
   const [createMeasure] = useMutation<CreateMeasureMutation>(createMeasureMutation);
 
@@ -542,4 +621,4 @@ Base UI primitives ship correct roles, focus management, and keyboard interactio
 - Keep accessible labels: every control has a visible label or an `aria-label`; icon-only buttons (`Button icon={…}`) require an `aria-label`.
 - Don't strip `aria-*` / `role` that primitives set, and don't trap or override focus the primitive manages.
 - Convey state with more than color (e.g. an icon + text alongside a `red-*` tone), so meaning survives for color-blind users — the [token contrast guarantees](v2-tokens.md#contrast-guarantees) cover text legibility, not state encoding.
-- Use semantic elements (`<button>`, `<a>`, `<nav>`, headings) — see the [Button vs Anchor vs Link](#no-structure-changing-variants) split.
+- Use semantic elements (`<button>`, `<a>`, `<nav>`, headings) — see the [Button / ButtonLink / ButtonAnchor / Link / Anchor / TableLink / CardLink / CardButton](#no-structure-changing-variants) split. Whole-row table navigation uses `TableRow interactive` + `TableLink` — see [Clickable table rows](#clickable-table-rows). Whole-card navigation uses `Card interactive` + `CardLink` — see [Clickable cards](#clickable-cards).

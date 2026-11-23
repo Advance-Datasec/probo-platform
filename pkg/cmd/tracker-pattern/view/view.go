@@ -1,22 +1,29 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package view
 
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
@@ -25,7 +32,7 @@ import (
 )
 
 const viewQuery = `
-query($id: ID!) {
+query TrackerPatternView($id: ID!, $days: Int) {
   node(id: $id) {
     __typename
     ... on TrackerPattern {
@@ -33,13 +40,23 @@ query($id: ID!) {
       pattern
       matchType
       trackerType
-      displayName
       maxAgeSeconds
       description
       source
+      sourceCookieBanner {
+        id
+        origin
+      }
       excluded
-      lastMatchedAt
       commonTrackerPatternId
+      attribution
+      dailyHits(days: $days) {
+        day
+        hits {
+          family
+          count
+        }
+      }
       createdAt
       updatedAt
     }
@@ -49,25 +66,38 @@ query($id: ID!) {
 
 type viewResponse struct {
 	Node *struct {
-		Typename               string  `json:"__typename"`
-		ID                     string  `json:"id"`
-		Pattern                string  `json:"pattern"`
-		MatchType              string  `json:"matchType"`
-		TrackerType            string  `json:"trackerType"`
-		DisplayName            string  `json:"displayName"`
-		MaxAgeSeconds          *int    `json:"maxAgeSeconds"`
-		Description            *string `json:"description"`
-		Source                 string  `json:"source"`
+		Typename           string  `json:"__typename"`
+		ID                 string  `json:"id"`
+		Pattern            string  `json:"pattern"`
+		MatchType          string  `json:"matchType"`
+		TrackerType        string  `json:"trackerType"`
+		MaxAgeSeconds      *int    `json:"maxAgeSeconds"`
+		Description        *string `json:"description"`
+		Source             *string `json:"source"`
+		SourceCookieBanner *struct {
+			ID     string `json:"id"`
+			Origin string `json:"origin"`
+		} `json:"sourceCookieBanner"`
 		Excluded               bool    `json:"excluded"`
-		LastMatchedAt          *string `json:"lastMatchedAt"`
 		CommonTrackerPatternID *string `json:"commonTrackerPatternId"`
-		CreatedAt              string  `json:"createdAt"`
-		UpdatedAt              string  `json:"updatedAt"`
+		Attribution            *string `json:"attribution"`
+		DailyHits              []struct {
+			Day  string `json:"day"`
+			Hits []struct {
+				Family string `json:"family"`
+				Count  int    `json:"count"`
+			} `json:"hits"`
+		} `json:"dailyHits"`
+		CreatedAt string `json:"createdAt"`
+		UpdatedAt string `json:"updatedAt"`
 	} `json:"node"`
 }
 
 func NewCmdView(f *cmdutil.Factory) *cobra.Command {
-	var flagOutput *string
+	var (
+		flagDays   int
+		flagOutput *string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "view <id>",
@@ -76,6 +106,10 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := cmdutil.ValidateOutputFlag(flagOutput); err != nil {
 				return err
+			}
+
+			if flagDays < 1 || flagDays > 90 {
+				return fmt.Errorf("--days must be between 1 and 90")
 			}
 
 			cfg, err := f.Config()
@@ -96,7 +130,13 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 				cmdutil.TokenRefreshOption(cfg, host, hc),
 			)
 
-			data, err := client.Do(viewQuery, map[string]any{"id": args[0]})
+			data, err := client.Do(
+				viewQuery,
+				map[string]any{
+					"id":   args[0],
+					"days": flagDays,
+				},
+			)
 			if err != nil {
 				return err
 			}
@@ -120,12 +160,19 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 			bold := lipgloss.NewStyle().Bold(true)
 			label := lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Width(22)
 
-			_, _ = fmt.Fprintf(out, "%s\n\n", bold.Render(v.DisplayName))
+			_, _ = fmt.Fprintf(out, "%s\n\n", bold.Render(v.Pattern))
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("ID:"), v.ID)
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Pattern:"), v.Pattern)
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Match Type:"), v.MatchType)
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Tracker Type:"), v.TrackerType)
-			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Source:"), v.Source)
+
+			if v.Source != nil && *v.Source != "" {
+				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Source:"), *v.Source)
+			}
+
+			if v.SourceCookieBanner != nil && v.SourceCookieBanner.Origin != "" {
+				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Source Banner:"), v.SourceCookieBanner.Origin)
+			}
 
 			_, _ = fmt.Fprintf(out, "%s%v\n", label.Render("Excluded:"), v.Excluded)
 			if v.MaxAgeSeconds != nil {
@@ -136,14 +183,33 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Description:"), *v.Description)
 			}
 
-			if v.LastMatchedAt != nil {
-				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Last Matched:"), cmdutil.FormatTime(*v.LastMatchedAt))
-			}
-
 			if v.CommonTrackerPatternID != nil && *v.CommonTrackerPatternID != "" {
 				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Common Pattern:"), *v.CommonTrackerPatternID)
 			} else {
 				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Origin:"), "Manual (no catalog link)")
+			}
+
+			if v.Attribution != nil && *v.Attribution != "" {
+				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Attribution:"), *v.Attribution)
+			}
+
+			_, _ = fmt.Fprintf(out, "%s\n", label.Render(fmt.Sprintf("Daily (%d days):", flagDays)))
+
+			for _, day := range v.DailyHits {
+				total := 0
+
+				parts := make([]string, 0, len(day.Hits))
+				for _, hit := range day.Hits {
+					total += hit.Count
+					parts = append(parts, fmt.Sprintf("%s %d", hit.Family, hit.Count))
+				}
+
+				detail := "none"
+				if total > 0 {
+					detail = fmt.Sprintf("%d  %s", total, strings.Join(parts, ", "))
+				}
+
+				_, _ = fmt.Fprintf(out, "%s%s  %s\n", label.Render(""), cmdutil.FormatUTCDay(day.Day), detail)
 			}
 
 			_, _ = fmt.Fprintln(out)
@@ -154,6 +220,7 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 		},
 	}
 
+	cmd.Flags().IntVar(&flagDays, "days", 7, "Number of UTC days of hits, today included (at most 90)")
 	flagOutput = cmdutil.AddOutputFlag(cmd)
 
 	return cmd

@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package view
 
@@ -25,17 +31,24 @@ import (
 )
 
 const viewQuery = `
-query($id: ID!) {
+query AuditlogView($id: ID!) {
   node(id: $id) {
     __typename
     ... on AuditLogEntry {
       id
       actorId
       actorType
+      actorEmail
+      actorName
       action
       resourceType
       resourceId
+      outcome
+      denialReason
+      originIp
+      requestId
       createdAt
+      recordedAt
     }
   }
 }
@@ -43,14 +56,21 @@ query($id: ID!) {
 
 type viewResponse struct {
 	Node *struct {
-		Typename     string `json:"__typename"`
-		ID           string `json:"id"`
-		ActorID      string `json:"actorId"`
-		ActorType    string `json:"actorType"`
-		Action       string `json:"action"`
-		ResourceType string `json:"resourceType"`
-		ResourceID   string `json:"resourceId"`
-		CreatedAt    string `json:"createdAt"`
+		Typename     string  `json:"__typename"`
+		ID           string  `json:"id"`
+		ActorID      string  `json:"actorId"`
+		ActorType    string  `json:"actorType"`
+		ActorEmail   *string `json:"actorEmail"`
+		ActorName    *string `json:"actorName"`
+		Action       string  `json:"action"`
+		ResourceType string  `json:"resourceType"`
+		ResourceID   string  `json:"resourceId"`
+		Outcome      string  `json:"outcome"`
+		DenialReason *string `json:"denialReason"`
+		OriginIP     *string `json:"originIp"`
+		RequestID    *string `json:"requestId"`
+		CreatedAt    string  `json:"createdAt"`
+		RecordedAt   string  `json:"recordedAt"`
 	} `json:"node"`
 }
 
@@ -118,15 +138,37 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 
 			_, _ = fmt.Fprintf(out, "%s\n\n", bold.Render("Audit Log Entry"))
 
+			actor := e.ActorID
+			if e.ActorEmail != nil && *e.ActorEmail != "" {
+				actor = *e.ActorEmail
+			} else if e.ActorName != nil && *e.ActorName != "" {
+				actor = *e.ActorName
+			}
+
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("ID:"), e.ID)
+			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Outcome:"), e.Outcome)
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Action:"), e.Action)
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Actor Type:"), e.ActorType)
+			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Actor:"), actor)
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Actor ID:"), e.ActorID)
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Resource Type:"), e.ResourceType)
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Resource ID:"), e.ResourceID)
 
+			if e.DenialReason != nil {
+				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Denial reason:"), *e.DenialReason)
+			}
+
+			if e.RequestID != nil {
+				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Request ID:"), *e.RequestID)
+			}
+
+			if e.OriginIP != nil {
+				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Origin IP:"), *e.OriginIP)
+			}
+
 			_, _ = fmt.Fprintln(out)
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Created:"), cmdutil.FormatTime(e.CreatedAt))
+			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Recorded:"), cmdutil.FormatTime(e.RecordedAt))
 
 			return nil
 		},

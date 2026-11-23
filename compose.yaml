@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: "postgres@sha256:52e6ffd11fddd081ae63880b635b2a61c14008c17fc98cdc7ce5472265516dd0"
+    image: "postgres@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6"
     pull_policy: missing
     shm_size: "1g"
     command: >
@@ -87,7 +87,8 @@ services:
     ports:
       - "3200:3200"
       - "4317:4317"
-      - "4318:4318"
+      # RunsOn v3 binds 127.0.0.1:4318. CI sets TEMPO_OTLP_HTTP_PORT.
+      - "${TEMPO_OTLP_HTTP_PORT:-4318}:4318"
     volumes:
       - "./compose/tempo/tempo.yaml:/etc/tempo.yaml:ro"
       - "tempo-data:/var/tempo:rw"
@@ -122,28 +123,34 @@ services:
       - "--disable-background-timer-throttling"
       - "--disable-extensions"
 
-  pebble:
-    image: "ghcr.io/letsencrypt/pebble:2.10.0@sha256:68cf1ec8a8db96f64244d5f559c448bc8e54f2934e0dd53a414eabffda7a6f22"
+  # step-ca validates HTTP-01 on port 80; probod serves challenges on :10080.
+  # step-ca shares this service's network so loopback :80 hits Caddy, not an
+  # isolated container namespace (where *.localhost would miss the proxy).
+  acme-http-01-proxy:
+    image: "caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb"
     pull_policy: missing
     ports:
-      - "14000:14000" # ACME server
-      - "15000:15000" # Management interface
-    environment:
-      PEBBLE_VA_NOSLEEP: "1" # Don't sleep during validation for faster testing
-      PEBBLE_WFE_NONCEREJECT: "0" # Don't reject reused nonces
-      PEBBLE_VA_ALWAYS_VALID: "1" # Skip actual HTTP/DNS validation for local dev
-    command: -config /test/config/pebble-config.json -dnsserver 127.0.0.1:8053
+      - "80:80"
+      - "9000:9000" # step-ca ACME API (network_mode: service:… below)
     volumes:
-      - "./compose/pebble:/test/config:ro"
+      - "./compose/caddy/Caddyfile:/etc/caddy/Caddyfile:ro"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
-  pebble-challtestsrv:
-    image: "ghcr.io/letsencrypt/pebble-challtestsrv:2.10.0@sha256:df85447c39114cd2b3da971e751682ad2db19a996034b47d5392cd4a0f43406a"
+  step-ca:
+    image: "smallstep/step-ca:0.28.4@sha256:0f88382ac5af5c6b7bbba0c6e8fcefef52aee6f22ea364df8e02a09ffd0d22f3"
     pull_policy: missing
-    ports:
-      - "8055:8055" # HTTP-01 challenge test server
-      - "8053:8053" # DNS server
-      - "8056:8056" # Management API
-    command: -dnsserver ":8053" -http01 ":8055" -management ":8056"
+    network_mode: "service:acme-http-01-proxy"
+    depends_on:
+      - acme-http-01-proxy
+    environment:
+      DOCKER_STEPCA_INIT_NAME: "Probo Local CA"
+      DOCKER_STEPCA_INIT_DNS_NAMES: "localhost,127.0.0.1,step-ca"
+      DOCKER_STEPCA_INIT_REMOTE_MANAGEMENT: "true"
+      DOCKER_STEPCA_INIT_ACME: "true"
+      DOCKER_STEPCA_INIT_PASSWORD: "probod-local-dev-ca"
+    volumes:
+      - "./compose/step-ca:/home/step:rw"
 
   keycloak:
     image: "quay.io/keycloak/keycloak:26.6.1@sha256:26ae26445475f7fac5f90ee138b1bdb64324f5815fb16133ffdbdb122d97c4d8"
@@ -168,6 +175,12 @@ services:
     volumes:
       - "./compose/keycloak:/opt/keycloak/data/import:ro"
       - "keycloak-data:/opt/keycloak/data/h2:rw"
+
+  fakecloud:
+    image: "ghcr.io/faiscadev/fakecloud@sha256:fef9be8a400c95c02cb8af894742558e6cb7987700d1acb2b0abbb4a4b916fdc"
+    pull_policy: missing
+    ports:
+      - "4566:4566"
 
 volumes:
   postgres-data:

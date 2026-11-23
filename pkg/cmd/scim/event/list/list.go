@@ -1,21 +1,26 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package list
 
 import (
-	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -25,7 +30,7 @@ import (
 )
 
 const listQuery = `
-query($id: ID!, $first: Int, $after: CursorKey, $orderBy: SCIMEventOrder) {
+query ScimEventList($id: ID!, $first: Int, $after: CursorKey, $orderBy: SCIMEventOrder) {
   node(id: $id) {
     __typename
     ... on SCIMConfiguration {
@@ -65,6 +70,7 @@ type scimEvent struct {
 func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	var (
 		flagLimit    int
+		flagAfter    string
 		flagOrderDir string
 		flagOutput   *string
 	)
@@ -84,23 +90,14 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
-			cfg, err := f.Config()
-			if err != nil {
+			if err := cmdutil.ValidateLimit(flagLimit); err != nil {
 				return err
 			}
 
-			host, hc, err := cfg.DefaultHost()
+			client, _, err := f.GraphQLClient(cmdutil.ConnectEndpoint)
 			if err != nil {
 				return err
 			}
-
-			client := api.NewClient(
-				host,
-				hc.Token,
-				"/api/connect/v1/graphql",
-				cfg.HTTPTimeoutDuration(),
-				cmdutil.TokenRefreshOption(cfg, host, hc),
-			)
 
 			variables := map[string]any{
 				"id": args[0],
@@ -110,77 +107,46 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				},
 			}
 
-			events, totalCount, err := api.Paginate(
+			events, totalCount, nextCursor, err := api.Paginate(
 				client,
 				listQuery,
 				variables,
 				flagLimit,
-				func(data json.RawMessage) (*api.Connection[scimEvent], error) {
-					var resp struct {
-						Node *struct {
-							Typename string                    `json:"__typename"`
-							Events   api.Connection[scimEvent] `json:"events"`
-						} `json:"node"`
-					}
-					if err := json.Unmarshal(data, &resp); err != nil {
-						return nil, err
-					}
-
-					if resp.Node == nil {
-						return nil, fmt.Errorf("SCIM configuration %s not found", args[0])
-					}
-
-					if resp.Node.Typename != "SCIMConfiguration" {
-						return nil, fmt.Errorf("expected SCIMConfiguration node, got %s", resp.Node.Typename)
-					}
-
-					return &resp.Node.Events, nil
-				},
+				flagAfter,
+				api.NodeConnection[scimEvent]("events", "SCIMConfiguration", fmt.Sprintf("SCIM configuration %s not found", args[0])),
 			)
 			if err != nil {
 				return err
 			}
 
-			if *flagOutput == cmdutil.OutputJSON {
-				return cmdutil.PrintJSON(f.IOStreams.Out, events)
-			}
-
-			if len(events) == 0 {
-				_, _ = fmt.Fprintln(f.IOStreams.Out, "No SCIM events found.")
-				return nil
-			}
-
-			rows := make([][]string, 0, len(events))
-			for _, e := range events {
-				rows = append(rows, []string{
-					e.ID,
-					e.Method,
-					e.Path,
-					strconv.Itoa(e.StatusCode),
-					e.UserName,
-					cmdutil.FormatTime(e.CreatedAt),
-				})
-			}
-
-			t := cmdutil.NewTable("ID", "METHOD", "PATH", "STATUS", "USER", "CREATED").Rows(rows...)
-
-			_, _ = fmt.Fprintln(f.IOStreams.Out, t)
-
-			if totalCount > len(events) {
-				_, _ = fmt.Fprintf(
-					f.IOStreams.ErrOut,
-					"\nShowing %d of %d events\n",
-					len(events),
-					totalCount,
-				)
-			}
-
-			return nil
+			return cmdutil.PrintList(
+				f.IOStreams,
+				*flagOutput,
+				events,
+				totalCount,
+				cmdutil.ListView[scimEvent]{
+					Empty:      "No SCIM events found.",
+					Noun:       "events",
+					NextCursor: nextCursor,
+					Headers:    []string{"ID", "METHOD", "PATH", "STATUS", "USER", "CREATED"},
+					Row: func(e scimEvent) ([]string, error) {
+						return []string{
+							e.ID,
+							e.Method,
+							e.Path,
+							strconv.Itoa(e.StatusCode),
+							e.UserName,
+							cmdutil.FormatTime(e.CreatedAt),
+						}, nil
+					},
+				},
+			)
 		},
 	}
 
 	cmd.Flags().IntVarP(&flagLimit, "limit", "L", 30, "Maximum number of events to list")
-	cmd.Flags().StringVar(&flagOrderDir, "order-direction", "DESC", "Sort direction (ASC, DESC)")
+	cmdutil.AddAfterFlag(cmd, &flagAfter)
+	cmdutil.AddOrderDirectionFlag(cmd, &flagOrderDir, "DESC")
 	flagOutput = cmdutil.AddOutputFlag(cmd)
 
 	return cmd

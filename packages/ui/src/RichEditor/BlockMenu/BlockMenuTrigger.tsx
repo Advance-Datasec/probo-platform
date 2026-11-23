@@ -1,11 +1,10 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
-// Use of this source code is governed by the ISC license
+// Use of this source code is governed by the MIT license
 // that can be found in the LICENSE file.
 
 import { PlusIcon } from "@phosphor-icons/react";
 import { type Editor } from "@tiptap/react";
 
-import { getSlashStorage } from "../_lib/getSlashStorage";
 import { useBlockTrigger } from "../_lib/useBlockTrigger";
 import { activateSlashCommand } from "../SlashCommandExtension";
 
@@ -16,10 +15,11 @@ const { trigger } = blockMenuVariants();
 type BlockMenuTriggerProps = {
   editor: Editor;
   hoveredBlock: HTMLElement;
+  compact?: boolean;
 };
 
-export function BlockMenuTrigger({ editor, hoveredBlock }: BlockMenuTriggerProps) {
-  const { triggerRefs, triggerStyles, isPositioned } = useBlockTrigger(hoveredBlock, 32);
+export function BlockMenuTrigger({ editor, hoveredBlock, compact = false }: BlockMenuTriggerProps) {
+  const { triggerRefs, triggerStyles, isPositioned } = useBlockTrigger(hoveredBlock, compact ? 24 : 32);
 
   const handleTriggerClick = () => {
     try {
@@ -35,11 +35,9 @@ export function BlockMenuTrigger({ editor, hoveredBlock }: BlockMenuTriggerProps
         editor.chain()
           .focus()
           .setTextSelection(textPos)
-          .insertContent("/")
           .run();
 
-        const s = getSlashStorage(editor);
-        if (s) activateSlashCommand(s, textPos);
+        activateSlashCommand(editor.view, textPos);
         return;
       }
 
@@ -57,11 +55,9 @@ export function BlockMenuTrigger({ editor, hoveredBlock }: BlockMenuTriggerProps
         .focus()
         .insertContentAt(insertPos, { type: "paragraph" })
         .setTextSelection(textPos)
-        .insertContent("/")
         .run();
 
-      const s = getSlashStorage(editor);
-      if (s) activateSlashCommand(s, textPos);
+      activateSlashCommand(editor.view, textPos);
     } catch {
       // Block may no longer be in the document
     }
@@ -75,11 +71,12 @@ export function BlockMenuTrigger({ editor, hoveredBlock }: BlockMenuTriggerProps
       onClick={handleTriggerClick}
       onMouseDown={e => e.preventDefault()}
       type="button"
+      data-rich-editor-floating=""
       style={{
         ...triggerStyles,
         visibility: isPositioned ? "visible" : "hidden",
       }}
-      className={trigger()}
+      className={trigger({ compact })}
     >
       <PlusIcon size={14} weight="bold" />
     </button>

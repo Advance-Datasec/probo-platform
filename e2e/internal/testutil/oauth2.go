@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package testutil
 
@@ -54,17 +60,18 @@ type (
 		GrantTypes              []string `json:"grant_types"`
 		ResponseTypes           []string `json:"response_types"`
 		TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
-		Scopes                  string   `json:"scopes"`
+		Scopes                  string   `json:"scope"`
 	}
 
 	OAuth2IntrospectResponse struct {
-		Active    bool   `json:"active"`
-		Scope     string `json:"scope,omitempty"`
-		ClientID  string `json:"client_id,omitempty"`
-		Sub       string `json:"sub,omitempty"`
-		Exp       int64  `json:"exp,omitempty"`
-		Iat       int64  `json:"iat,omitempty"`
-		TokenType string `json:"token_type,omitempty"`
+		Active    bool     `json:"active"`
+		Scope     string   `json:"scope,omitempty"`
+		ClientID  string   `json:"client_id,omitempty"`
+		Sub       string   `json:"sub,omitempty"`
+		Audiences []string `json:"aud,omitempty"`
+		Exp       int64    `json:"exp,omitempty"`
+		Iat       int64    `json:"iat,omitempty"`
+		TokenType string   `json:"token_type,omitempty"`
 	}
 
 	OAuth2DeviceAuthResponse struct {
@@ -98,6 +105,7 @@ type (
 		ClaimsSupported                           []string `json:"claims_supported"`
 		ProtectedResources                        []string `json:"protected_resources,omitempty"`
 		ClientIDMetadataDocumentSupported         bool     `json:"client_id_metadata_document_supported"`
+		AuthorizationResponseIssuerSupported      bool     `json:"authorization_response_iss_parameter_supported"`
 	}
 
 	OAuth2ProtectedResourceMetadataResponse struct {
@@ -279,7 +287,28 @@ func OAuth2JWKS(c *Client) (*OAuth2JWKSResponse, *OAuth2HTTPResponse, error) {
 func OAuth2ProtectedResourceMetadata(
 	c *Client,
 ) (*OAuth2ProtectedResourceMetadataResponse, *OAuth2HTTPResponse, error) {
-	raw, err := getJSON(c.HTTPClient(), c.BaseURL()+"/.well-known/oauth-protected-resource", nil)
+	return oauth2ProtectedResourceMetadata(c, "/.well-known/oauth-protected-resource")
+}
+
+// OAuth2ProtectedResourceMetadataAt fetches RFC 9728 metadata at a path-aware
+// well-known URL (RFC 9728 §3.1).
+func OAuth2ProtectedResourceMetadataAt(
+	c *Client,
+	path string,
+) (*OAuth2ProtectedResourceMetadataResponse, *OAuth2HTTPResponse, error) {
+	return oauth2ProtectedResourceMetadata(c, path)
+}
+
+func oauth2ProtectedResourceMetadata(
+	c *Client,
+	path string,
+) (*OAuth2ProtectedResourceMetadataResponse, *OAuth2HTTPResponse, error) {
+	endpoint, err := url.JoinPath(c.BaseURL(), path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cannot build protected resource metadata URL: %w", err)
+	}
+
+	raw, err := getJSON(c.HTTPClient(), endpoint, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -436,6 +465,42 @@ func OAuth2TokenWithCode(
 	c *Client,
 	clientID, clientSecret, code, redirectURI, codeVerifier string,
 ) (*OAuth2TokenResponse, *OAuth2HTTPResponse, error) {
+	return OAuth2TokenWithCodeForResource(
+		c,
+		clientID,
+		clientSecret,
+		code,
+		redirectURI,
+		codeVerifier,
+		"",
+	)
+}
+
+func OAuth2TokenWithCodeForResource(
+	c *Client,
+	clientID, clientSecret, code, redirectURI, codeVerifier, resource string,
+) (*OAuth2TokenResponse, *OAuth2HTTPResponse, error) {
+	var resources []string
+	if resource != "" {
+		resources = []string{resource}
+	}
+
+	return OAuth2TokenWithCodeForResources(
+		c,
+		clientID,
+		clientSecret,
+		code,
+		redirectURI,
+		codeVerifier,
+		resources,
+	)
+}
+
+func OAuth2TokenWithCodeForResources(
+	c *Client,
+	clientID, clientSecret, code, redirectURI, codeVerifier string,
+	resources []string,
+) (*OAuth2TokenResponse, *OAuth2HTTPResponse, error) {
 	values := url.Values{
 		"grant_type":   {"authorization_code"},
 		"code":         {code},
@@ -444,6 +509,10 @@ func OAuth2TokenWithCode(
 
 	if codeVerifier != "" {
 		values.Set("code_verifier", codeVerifier)
+	}
+
+	if len(resources) > 0 {
+		values["resource"] = resources
 	}
 
 	raw, err := postFormWithBasicAuth(
@@ -509,9 +578,45 @@ func OAuth2TokenWithRefreshToken(
 	c *Client,
 	clientID, clientSecret, refreshToken string,
 ) (*OAuth2TokenResponse, *OAuth2HTTPResponse, error) {
+	return OAuth2TokenWithRefreshTokenForResource(
+		c,
+		clientID,
+		clientSecret,
+		refreshToken,
+		"",
+	)
+}
+
+func OAuth2TokenWithRefreshTokenForResource(
+	c *Client,
+	clientID, clientSecret, refreshToken, resource string,
+) (*OAuth2TokenResponse, *OAuth2HTTPResponse, error) {
+	var resources []string
+	if resource != "" {
+		resources = []string{resource}
+	}
+
+	return OAuth2TokenWithRefreshTokenForResources(
+		c,
+		clientID,
+		clientSecret,
+		refreshToken,
+		resources,
+	)
+}
+
+func OAuth2TokenWithRefreshTokenForResources(
+	c *Client,
+	clientID, clientSecret, refreshToken string,
+	resources []string,
+) (*OAuth2TokenResponse, *OAuth2HTTPResponse, error) {
 	values := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
+	}
+
+	if len(resources) > 0 {
+		values["resource"] = resources
 	}
 
 	raw, err := postFormWithBasicAuth(
@@ -520,6 +625,40 @@ func OAuth2TokenWithRefreshToken(
 		values,
 		clientID,
 		clientSecret,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if raw.StatusCode != http.StatusOK {
+		return nil, raw, nil
+	}
+
+	var result OAuth2TokenResponse
+	if err := json.Unmarshal(raw.Body, &result); err != nil {
+		return nil, raw, fmt.Errorf("cannot decode token response: %w", err)
+	}
+
+	return &result, raw, nil
+}
+
+// OAuth2TokenWithPublicClientRefresh refreshes tokens the way prb does:
+// client_id in the form body, no client secret.
+func OAuth2TokenWithPublicClientRefresh(
+	c *Client,
+	clientID string,
+	refreshToken string,
+) (*OAuth2TokenResponse, *OAuth2HTTPResponse, error) {
+	values := url.Values{
+		"grant_type":    {"refresh_token"},
+		"client_id":     {clientID},
+		"refresh_token": {refreshToken},
+	}
+
+	raw, err := postForm(
+		c.HTTPClient(),
+		oauth2BaseURL(c)+"/token",
+		values,
 	)
 	if err != nil {
 		return nil, nil, err

@@ -6,7 +6,7 @@ The [data.json](data.json) file and derived files contain data about various thi
 
 When using this data, you must:
 
-1. **Give appropriate credit** - Provide attribution to Govrly Inc. and include a link to this license
+1. **Give appropriate credit** - Provide attribution to Probo Inc. and include a link to this license
 2. **Indicate if changes were made** - If you modify the data, you must indicate that changes were made
 3. **Share under the same license** - If you remix, transform, or build upon the material, you must distribute your contributions under the same license as the original
 

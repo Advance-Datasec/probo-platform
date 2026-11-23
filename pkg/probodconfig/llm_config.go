@@ -1,25 +1,37 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probodconfig
+
+import (
+	"fmt"
+	"net/url"
+)
 
 type (
 	// LLMProviderConfig holds authentication and connection settings for an
 	// LLM provider (e.g. OpenAI, Anthropic).
 	LLMProviderConfig struct {
-		Type   string `json:"type"`              // "openai", "anthropic", "bedrock"
-		APIKey string `json:"api-key,omitempty"` // for OpenAI and Anthropic
+		Type    string `json:"type"`               // "openai", "anthropic", "bedrock"
+		APIKey  string `json:"api-key,omitempty"`  // for OpenAI and Anthropic
+		BaseURL string `json:"base-url,omitempty"` // https OpenAI or Anthropic compatible endpoint; empty uses the provider default
 	}
 
 	// LLMAgentConfig holds model parameters for a single agent. Provider
@@ -53,16 +65,12 @@ type (
 	// tracker-mapping background worker. LLM parameters for the mapping
 	// agent it runs live under AgentsConfig.TrackerMapping. AgentTimeout
 	// and AgentMaxTurns bound a single mapping agent run.
-	// DisambiguationAgentTimeout caps a single third-party
-	// disambiguation agent run; that agent runs inside this worker but
-	// uses its own LLM parameters from AgentsConfig.ThirdPartyDisambiguation.
 	TrackerMappingWorkerConfig struct {
-		Interval                   int `json:"interval"` // seconds between polls
-		MaxConcurrency             int `json:"max-concurrency"`
-		StaleAfter                 int `json:"stale-after"`   // seconds before a claim is recycled
-		AgentTimeout               int `json:"agent-timeout"` // seconds, single agent run
-		AgentMaxTurns              int `json:"agent-max-turns"`
-		DisambiguationAgentTimeout int `json:"disambiguation-agent-timeout"` // seconds, single disambiguation run
+		Interval       int `json:"interval"` // seconds between polls
+		MaxConcurrency int `json:"max-concurrency"`
+		StaleAfter     int `json:"stale-after"`   // seconds before a claim is recycled
+		AgentTimeout   int `json:"agent-timeout"` // seconds, single agent run
+		AgentMaxTurns  int `json:"agent-max-turns"`
 	}
 
 	// CommonPatternEnrichmentWorkerConfig holds worker-side tuning for
@@ -107,13 +115,33 @@ type (
 		Probo                      LLMAgentConfig               `json:"probo,omitzero"`
 		EvidenceDescriber          LLMAgentConfig               `json:"evidence-describer,omitzero"`
 		ThirdPartyVetter           LLMAgentConfig               `json:"third-party-vetter,omitzero"`
-		ThirdPartyDisambiguation   LLMAgentConfig               `json:"third-party-disambiguation,omitzero"`
 		TrackerMapping             LLMAgentConfig               `json:"tracker-mapping,omitzero"`
 		TrackerEnrichment          LLMAgentConfig               `json:"tracker-enrichment,omitzero"`
 		CommonThirdPartyEnrichment LLMAgentConfig               `json:"common-third-party-enrichment,omitzero"`
+		Slackbot                   LLMAgentConfig               `json:"slackbot,omitzero"`
 		Tools                      AgentToolsConfig             `json:"tools,omitzero"`
 	}
 )
+
+// Validate reports a BaseURL that is not an absolute https URL, so a
+// typo fails at startup instead of on every LLM call. An empty
+// BaseURL is valid and selects the provider default.
+func (c LLMProviderConfig) Validate() error {
+	if c.BaseURL == "" {
+		return nil
+	}
+
+	u, err := url.Parse(c.BaseURL)
+	if err != nil {
+		return fmt.Errorf("cannot parse %s base URL: %w", c.Type, err)
+	}
+
+	if u.Scheme != "https" || u.Host == "" {
+		return fmt.Errorf("%s base URL must be an absolute https URL, got %q", c.Type, c.BaseURL)
+	}
+
+	return nil
+}
 
 func (c LLMProviderConfig) IsZero() bool {
 	return c.APIKey == ""

@@ -1,28 +1,35 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
+import { MembershipRequiredError } from "@probo/relay";
 import {
   Button,
   Card,
   Field,
   IconChevronLeft,
   PageHeader,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import type { FormEventHandler } from "react";
+import { useTranslation } from "react-i18next";
 import { graphql, useMutation } from "react-relay";
 import { Link, useLocation, useNavigate } from "react-router";
 
@@ -43,8 +50,8 @@ const createOrganizationMutation = graphql`
 function NewOrganizationPageInner() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { toast } = useToast();
-  const { __ } = useTranslate();
+  const toast = useToast();
+  const { t } = useTranslation();
 
   const [createOrganization, isCreating]
     = useMutation<NewOrganizationPageMutation>(createOrganizationMutation);
@@ -54,10 +61,9 @@ function NewOrganizationPageInner() {
     const formData = new FormData(e.currentTarget);
     const name = formData.get("name") ? (formData.get("name") as string).toString() : "";
     if (!name) {
-      toast({
-        title: __("Error"),
-        description: __("Name is required"),
-        variant: "error",
+      toast.add({
+        title: t("common.error"), description: t("newOrganizationPage.errors.nameRequired"),
+        type: "error",
       });
       return;
     }
@@ -70,27 +76,34 @@ function NewOrganizationPageInner() {
       },
       onCompleted: (r, e) => {
         if (e) {
-          toast({
-            title: __("Error"),
-            description: formatError(__("Failed to create organization"), e),
-            variant: "error",
+          toast.add({
+            title: t("common.error"), description: formatError(t("newOrganizationPage.errors.create"), e),
+            type: "error",
           });
           return;
         }
 
         const org = r.createOrganization!.organization;
         void navigate(`/organizations/${org!.id}`);
-        toast({
-          title: __("Success"),
-          description: __("Organization has been created successfully"),
-          variant: "success",
+        toast.add({
+          title: t("common.success"), description: t("newOrganizationPage.messages.created"),
+          type: "success",
         });
       },
       onError: (e) => {
-        toast({
-          title: __("Error"),
+        if (e instanceof MembershipRequiredError) {
+          toast.add({
+            title: t("noOrganizationAccess.title"),
+            description: t("noOrganizationAccess.description"),
+            type: "error",
+          });
+          return;
+        }
+
+        toast.add({
+          title: t("common.error"),
           description: e.message,
-          variant: "error",
+          type: "error",
         });
       },
     });
@@ -103,34 +116,30 @@ function NewOrganizationPageInner() {
         className="mb-4 inline-flex gap-2 items-center"
       >
         <IconChevronLeft size={16} />
-        {__("Back")}
+        {t("newOrganizationPage.actions.back")}
       </Link>
       <PageHeader
-        title={__("Create Organization")}
-        description={__(
-          "Create a new organization to manage your compliance and security needs.",
-        )}
+        title={t("newOrganizationPage.title")}
+        description={t("newOrganizationPage.description")}
       />
       <Card padded asChild>
         <form onSubmit={e => void handleSubmit(e)} className="space-y-4">
           <h2 className="text-xl font-semibold mb-1">
-            {__("Organization Details")}
+            {t("newOrganizationPage.details")}
           </h2>
           <p className="text-txt-tertiary text-sm mb-4">
-            {__("Enter the basic information about your organization.")}
+            {t("newOrganizationPage.detailsDescription")}
           </p>
           <Field
             required
             name="name"
             type="text"
-            placeholder={__("Organization name")}
-            label={__("Organization name")}
-            help={__(
-              "The name of your organization as it will appear throughout the platform.",
-            )}
+            placeholder={t("newOrganizationPage.fields.name")}
+            label={t("newOrganizationPage.fields.name")}
+            help={t("newOrganizationPage.fields.nameHelp")}
           />
           <Button disabled={isCreating} type="submit" className="w-full">
-            {__("Create Organization")}
+            {t("newOrganizationPage.actions.create")}
           </Button>
         </form>
       </Card>

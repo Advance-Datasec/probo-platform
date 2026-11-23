@@ -1,21 +1,26 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package list
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -24,11 +29,11 @@ import (
 )
 
 const listQuery = `
-query($id: ID!, $first: Int, $after: CursorKey, $orderBy: TaskOrder) {
+query TaskList($id: ID!, $first: Int, $after: CursorKey, $orderBy: TaskOrder, $filter: TaskFilter) {
   node(id: $id) {
     __typename
     ... on Organization {
-      tasks(first: $first, after: $after, orderBy: $orderBy) {
+      tasks(first: $first, after: $after, orderBy: $orderBy, filter: $filter) {
         totalCount
         edges {
           node {
@@ -59,11 +64,15 @@ type task struct {
 
 func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	var (
-		flagOrg      string
-		flagLimit    int
-		flagOrderBy  string
-		flagOrderDir string
-		flagOutput   *string
+		flagOrg        string
+		flagLimit      int
+		flagAfter      string
+		flagOrderBy    string
+		flagOrderDir   string
+		flagQuery      string
+		flagState      string
+		flagAssignedTo string
+		flagOutput     *string
 	)
 
 	cmd := &cobra.Command{
@@ -73,38 +82,32 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 		Example: `  # List tasks in the default organization
   prb task list
 
+  # List in-progress tasks matching a search
+  prb task ls --query access --state IN_PROGRESS
+
   # List tasks sorted by priority
-  prb task ls --order-by PRIORITY_RANK --json`,
+  prb task ls --order-by PRIORITY_RANK --json
+
+  # List tasks assigned to a person
+  prb task ls --assigned-to <profile-id>`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := cmdutil.ValidateOutputFlag(flagOutput); err != nil {
 				return err
 			}
 
-			cfg, err := f.Config()
+			if err := cmdutil.ValidateLimit(flagLimit); err != nil {
+				return err
+			}
+
+			client, hc, err := f.GraphQLClient(cmdutil.ConsoleEndpoint)
 			if err != nil {
 				return err
 			}
 
-			host, hc, err := cfg.DefaultHost()
+			flagOrg, err = cmdutil.ResolveOrganization(flagOrg, hc.Organization)
 			if err != nil {
 				return err
-			}
-
-			client := api.NewClient(
-				host,
-				hc.Token,
-				"/api/console/v1/graphql",
-				cfg.HTTPTimeoutDuration(),
-				cmdutil.TokenRefreshOption(cfg, host, hc),
-			)
-
-			if flagOrg == "" {
-				flagOrg = hc.Organization
-			}
-
-			if flagOrg == "" {
-				return fmt.Errorf("organization is required; pass --org or set a default with 'prb auth login'")
 			}
 
 			variables := map[string]any{
@@ -122,83 +125,80 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				}
 			}
 
-			tasks, totalCount, err := api.Paginate(
+			filter := map[string]any{}
+			if flagQuery != "" {
+				filter["query"] = flagQuery
+			}
+
+			if flagState != "" {
+				if err := cmdutil.ValidateEnum(
+					"state",
+					flagState,
+					[]string{"BACKLOG", "TODO", "IN_PROGRESS", "DONE", "CANCELED", "DUPLICATE"},
+				); err != nil {
+					return err
+				}
+
+				filter["state"] = flagState
+			}
+
+			if flagAssignedTo != "" {
+				filter["assignedToId"] = flagAssignedTo
+			}
+
+			if len(filter) > 0 {
+				variables["filter"] = filter
+			}
+
+			tasks, totalCount, nextCursor, err := api.Paginate(
 				client,
 				listQuery,
 				variables,
 				flagLimit,
-				func(data json.RawMessage) (*api.Connection[task], error) {
-					var resp struct {
-						Node *struct {
-							Typename string               `json:"__typename"`
-							Tasks    api.Connection[task] `json:"tasks"`
-						} `json:"node"`
-					}
-					if err := json.Unmarshal(data, &resp); err != nil {
-						return nil, err
-					}
-
-					if resp.Node == nil {
-						return nil, fmt.Errorf("organization %s not found", flagOrg)
-					}
-
-					if resp.Node.Typename != "Organization" {
-						return nil, fmt.Errorf("expected Organization node, got %s", resp.Node.Typename)
-					}
-
-					return &resp.Node.Tasks, nil
-				},
+				flagAfter,
+				api.NodeConnection[task]("tasks", "Organization", fmt.Sprintf("organization %s not found", flagOrg)),
 			)
 			if err != nil {
 				return err
 			}
 
-			if *flagOutput == cmdutil.OutputJSON {
-				return cmdutil.PrintJSON(f.IOStreams.Out, tasks)
-			}
+			return cmdutil.PrintList(
+				f.IOStreams,
+				*flagOutput,
+				tasks,
+				totalCount,
+				cmdutil.ListView[task]{
+					Empty:      "No tasks found.",
+					Noun:       "tasks",
+					NextCursor: nextCursor,
+					Headers:    []string{"ID", "NAME", "STATE", "PRIORITY", "DEADLINE"},
+					Row: func(t task) ([]string, error) {
+						deadline := ""
+						if t.Deadline != nil {
+							deadline = *t.Deadline
+						}
 
-			if len(tasks) == 0 {
-				_, _ = fmt.Fprintln(f.IOStreams.Out, "No tasks found.")
-				return nil
-			}
-
-			rows := make([][]string, 0, len(tasks))
-			for _, t := range tasks {
-				deadline := ""
-				if t.Deadline != nil {
-					deadline = *t.Deadline
-				}
-
-				rows = append(rows, []string{
-					t.ID,
-					t.Name,
-					t.State,
-					t.Priority,
-					deadline,
-				})
-			}
-
-			t := cmdutil.NewTable("ID", "NAME", "STATE", "PRIORITY", "DEADLINE").Rows(rows...)
-
-			_, _ = fmt.Fprintln(f.IOStreams.Out, t)
-
-			if totalCount > len(tasks) {
-				_, _ = fmt.Fprintf(
-					f.IOStreams.ErrOut,
-					"\nShowing %d of %d tasks\n",
-					len(tasks),
-					totalCount,
-				)
-			}
-
-			return nil
+						return []string{
+							t.ID,
+							t.Name,
+							t.State,
+							t.Priority,
+							deadline,
+						}, nil
+					},
+				},
+			)
 		},
 	}
 
-	cmd.Flags().StringVar(&flagOrg, "org", "", "Organization ID")
+	cmdutil.AddOrganizationFlag(cmd, &flagOrg, "Organization ID")
 	cmd.Flags().IntVarP(&flagLimit, "limit", "L", 30, "Maximum number of tasks to list")
+	cmdutil.AddAfterFlag(cmd, &flagAfter)
 	cmd.Flags().StringVar(&flagOrderBy, "order-by", "", "Order by field (PRIORITY_RANK, CREATED_AT)")
-	cmd.Flags().StringVar(&flagOrderDir, "order-direction", "DESC", "Sort direction (ASC, DESC)")
+	cmdutil.AddOrderDirectionFlag(cmd, &flagOrderDir, "DESC")
+	cmd.Flags().StringVarP(&flagQuery, "query", "q", "", "Search tasks by name")
+	cmd.Flags().StringVar(&flagState, "state", "", "Filter by state (BACKLOG, TODO, IN_PROGRESS, DONE, CANCELED, DUPLICATE)")
+	cmd.Flags().StringVar(&flagAssignedTo, "assigned-to", "", "Filter by assigned profile ID")
 	flagOutput = cmdutil.AddOutputFlag(cmd)
 
 	return cmd

@@ -1,25 +1,29 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import {
-  formatDate,
-  getObligationStatusLabel,
   getObligationStatusVariant,
   promisifyMutation,
 } from "@probo/helpers";
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
+import { dateFormat } from "@probo/i18n";
 import {
   ActionDropdown,
   Badge,
@@ -39,6 +43,7 @@ import {
   Tr,
   useConfirm,
 } from "@probo/ui";
+import { useTranslation } from "react-i18next";
 import {
   graphql,
   type PreloadedQuery,
@@ -109,11 +114,11 @@ const obligationsPageFragment = graphql`
 `;
 
 export default function ObligationsPage({ queryRef }: ObligationsPageProps) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const organizationId = useOrganizationId();
   const navigate = useNavigate();
 
-  usePageTitle(__("Obligations"));
+  usePageTitle(t("obligationsPage.title"));
 
   const organization = usePreloadedQuery<ObligationGraphListQuery>(obligationsQuery, queryRef);
   const defaultApproverIds = (organization.node.obligationsDocument?.defaultApprovers ?? []).map(a => a.id);
@@ -137,17 +142,17 @@ export default function ObligationsPage({ queryRef }: ObligationsPageProps) {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={__("Obligations")}
-        description={__("Manage your organization's obligations.")}
+        title={t("obligationsPage.title")}
+        description={t("obligationsPage.description")}
       >
         <div className="flex gap-2">
           {organization.node.obligationsDocument?.id && (
             <Button variant="secondary" asChild>
               <Link
-                to={`/organizations/${organizationId}/documents/${organization.node.obligationsDocument.id}`}
+                to={`/organizations/${organizationId}/governance/documents/${organization.node.obligationsDocument.id}`}
               >
                 <IconPageTextLine size={16} />
-                {__("Document")}
+                {t("obligationsPage.actions.document")}
               </Link>
             </Button>
           )}
@@ -157,12 +162,12 @@ export default function ObligationsPage({ queryRef }: ObligationsPageProps) {
               defaultApproverIds={defaultApproverIds}
               onPublished={(documentId) => {
                 void navigate(
-                  `/organizations/${organizationId}/documents/${documentId}`,
+                  `/organizations/${organizationId}/governance/documents/${documentId}`,
                 );
               }}
             >
               <Button variant="secondary" icon={IconUpload}>
-                {__("Publish")}
+                {t("obligationsPage.actions.publish")}
               </Button>
             </PublishObligationListDialog>
           )}
@@ -171,7 +176,7 @@ export default function ObligationsPage({ queryRef }: ObligationsPageProps) {
               organizationId={organizationId}
               connection={connectionId}
             >
-              <Button icon={IconPlusLarge}>{__("Add obligation")}</Button>
+              <Button icon={IconPlusLarge}>{t("obligationsPage.actions.add")}</Button>
             </CreateObligationDialog>
           )}
         </div>
@@ -182,10 +187,10 @@ export default function ObligationsPage({ queryRef }: ObligationsPageProps) {
             <Card padded>
               <div className="text-center py-12">
                 <h3 className="text-lg font-semibold mb-2">
-                  {__("No obligations yet")}
+                  {t("obligationsPage.empty.title")}
                 </h3>
                 <p className="text-txt-tertiary mb-4">
-                  {__("Create your first obligation to get started.")}
+                  {t("obligationsPage.empty.description")}
                 </p>
               </div>
             </Card>
@@ -195,12 +200,12 @@ export default function ObligationsPage({ queryRef }: ObligationsPageProps) {
               <Table>
                 <Thead>
                   <Tr>
-                    <Th>{__("Area")}</Th>
-                    <Th>{__("Source")}</Th>
-                    <Th>{__("Status")}</Th>
-                    <Th>{__("Owner")}</Th>
-                    <Th>{__("Due Date")}</Th>
-                    {hasAnyAction && <Th>{__("Actions")}</Th>}
+                    <Th>{t("obligationsPage.columns.area")}</Th>
+                    <Th>{t("obligationsPage.columns.source")}</Th>
+                    <Th>{t("obligationsPage.columns.status")}</Th>
+                    <Th>{t("obligationsPage.columns.owner")}</Th>
+                    <Th>{t("obligationsPage.columns.dueDate")}</Th>
+                    {hasAnyAction && <Th>{t("obligationsPage.columns.actions")}</Th>}
                   </Tr>
                 </Thead>
                 <Tbody>
@@ -222,7 +227,7 @@ export default function ObligationsPage({ queryRef }: ObligationsPageProps) {
                     onClick={() => loadNext(10)}
                     disabled={!hasNext}
                   >
-                    {__("Load more")}
+                    {t("obligationsPage.actions.loadMore")}
                   </Button>
                 </div>
               )}
@@ -242,7 +247,7 @@ function ObligationRow({
   hasAnyAction: boolean;
 }) {
   const organizationId = useOrganizationId();
-  const { __ } = useTranslate();
+  const { i18n, t } = useTranslation();
   const [deleteObligation] = useMutation<ObligationGraphDeleteMutation>(deleteObligationMutation);
   const confirm = useConfirm();
 
@@ -258,14 +263,12 @@ function ObligationRow({
           },
         }),
       {
-        message: __(
-          "This will permanently delete this obligation. This action cannot be undone.",
-        ),
+        message: t("obligationsPage.deleteConfirmation"),
       },
     );
   };
 
-  const detailsUrl = `/organizations/${organizationId}/obligations/${obligation.id}`;
+  const detailsUrl = `/organizations/${organizationId}/registries/obligations/${obligation.id}`;
 
   return (
     <Tr to={detailsUrl}>
@@ -277,7 +280,7 @@ function ObligationRow({
             obligation.status || "NON_COMPLIANT",
           )}
         >
-          {getObligationStatusLabel(obligation.status || "NON_COMPLIANT")}
+          {t(`obligationsPage.statuses.${(obligation.status || "NON_COMPLIANT").toLowerCase()}`)}
         </Badge>
       </Td>
       <Td>{obligation.owner?.fullName || "-"}</Td>
@@ -285,11 +288,11 @@ function ObligationRow({
         {obligation.dueDate
           ? (
               <time dateTime={obligation.dueDate}>
-                {formatDate(obligation.dueDate)}
+                {dateFormat(i18n.language, obligation.dueDate)}
               </time>
             )
           : (
-              <span className="text-txt-tertiary">{__("No due date")}</span>
+              <span className="text-txt-tertiary">{t("obligationsPage.noDueDate")}</span>
             )}
       </Td>
       {hasAnyAction && (
@@ -301,7 +304,7 @@ function ObligationRow({
                 variant="danger"
                 onSelect={handleDelete}
               >
-                {__("Delete")}
+                {t("obligationsPage.actions.delete")}
               </DropdownItem>
             )}
           </ActionDropdown>

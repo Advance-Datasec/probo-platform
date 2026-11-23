@@ -1,20 +1,45 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+export type Period = {
+  start?: string | null;
+  end?: string | null;
+};
 
 export function formatDatetime(dateString?: string | null): string | undefined {
   if (!dateString) return undefined;
   return `${dateString}T00:00:00Z`;
+}
+
+export function toPeriod(
+  start?: string | null,
+  end?: string | null,
+): Period | null {
+  if (!start && !end) {
+    return null;
+  }
+
+  return {
+    start: start || null,
+    end: end || null,
+  };
 }
 
 export function toDateInput(dateString?: string | null): string {
@@ -30,13 +55,6 @@ export function todayAsDateInput(): string {
   return `${year}-${month}-${day}`;
 }
 
-export function formatDate(dateInput?: string | null): string {
-  if (!dateInput) return "";
-
-  const date = parseDate(dateInput);
-  return date.toLocaleDateString();
-}
-
 export function parseDate(dateString: string): Date {
   if (dateString.includes("T")) {
     return new Date(dateString);
@@ -49,35 +67,11 @@ export function parseDate(dateString: string): Date {
   );
 }
 
-export function formatDuration(duration?: string | null, __?: (s: string) => string): string | null {
-  if (!duration || !__) return null;
-
-  const timeMatch = duration.match(/PT(\d+)([MH])/);
-  if (timeMatch) {
-    const amount = parseInt(timeMatch[1], 10) || 0;
-    const unit = timeMatch[2];
-    if (unit === "M") {
-      return `${amount} ${amount === 1 ? __("Minute") : __("Minutes")}`;
-    } else if (unit === "H") {
-      return `${amount} ${amount === 1 ? __("Hour") : __("Hours")}`;
-    }
+/** True when the calendar day of `dateString` is strictly before today. */
+export function isPastDueDate(dateString?: string | null): boolean {
+  const day = toDateInput(dateString);
+  if (!day) {
+    return false;
   }
-
-  const dateMatch = duration.match(/P(\d+)([DW])/);
-  if (dateMatch) {
-    const amount = parseInt(dateMatch[1], 10) || 0;
-    const unit = dateMatch[2];
-    if (unit === "W") {
-      return `${amount} ${amount === 1 ? __("Week") : __("Weeks")}`;
-    } else if (unit === "D") {
-      const days = amount;
-      if (days % 7 === 0 && days > 0) {
-        const weeks = days / 7;
-        return `${weeks} ${weeks === 1 ? __("Week") : __("Weeks")}`;
-      }
-      return `${days} ${days === 1 ? __("Day") : __("Days")}`;
-    }
-  }
-
-  return null;
+  return day < todayAsDateInput();
 }

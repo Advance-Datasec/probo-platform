@@ -1,23 +1,27 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import {
   formatError,
-  getControlMaturityLevelLabel,
   promisifyMutation,
 } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   ActionDropdown,
   Badge,
@@ -27,8 +31,9 @@ import {
   IconPencil,
   IconTrashCan,
   useConfirm,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
+import { useTranslation } from "react-i18next";
 import {
   type PreloadedQuery,
   useMutation,
@@ -42,36 +47,36 @@ import type { FrameworkDetailPageFragment$data } from "#/__generated__/core/Fram
 import type { FrameworkGraphControlNodeQuery } from "#/__generated__/core/FrameworkGraphControlNodeQuery.graphql";
 import { LinkedAuditsCard } from "#/components/audits/LinkedAuditsCard";
 import { LinkedDocumentsCard } from "#/components/documents/LinkedDocumentsCard";
-import { LinkedMeasuresCard } from "#/components/measures/LinkedMeasuresCard";
+import { LinkedInternalControlsCard } from "#/components/internal-controls/LinkedInternalControlsCard";
 import { LinkedObligationsCard } from "#/components/obligations/LinkedObligationsCard";
 import { frameworkControlNodeQuery } from "#/hooks/graph/FrameworkGraph";
 import { useOrganizationId } from "#/hooks/useOrganizationId";
 
 import { FrameworkControlDialog } from "./dialogs/FrameworkControlDialog";
 
-const attachMeasureMutation = graphql`
+const attachInternalControlMutation = graphql`
   mutation FrameworkControlPageAttachMutation(
-      $input: CreateControlMeasureMappingInput!
+      $input: CreateControlInternalControlMappingInput!
       $connections: [ID!]!
   ) {
-      createControlMeasureMapping(input: $input) {
-          measureEdge @prependEdge(connections: $connections) {
+      createControlInternalControlMapping(input: $input) {
+          internalControlEdge @prependEdge(connections: $connections) {
               node {
                   id
-                  ...LinkedMeasuresCardFragment
+                  ...LinkedInternalControlsCardFragment
               }
           }
       }
   }
 `;
 
-const detachMeasureMutation = graphql`
+const detachInternalControlMutation = graphql`
   mutation FrameworkControlPageDetachMutation(
-      $input: DeleteControlMeasureMappingInput!
+      $input: DeleteControlInternalControlMappingInput!
       $connections: [ID!]!
   ) {
-      deleteControlMeasureMapping(input: $input) {
-          deletedMeasureId @deleteEdge(connections: $connections)
+      deleteControlInternalControlMapping(input: $input) {
+          deletedInternalControlId @deleteEdge(connections: $connections)
       }
   }
 `;
@@ -176,8 +181,8 @@ type Props = {
 * Display the control detail on the right panel
 */
 export default function FrameworkControlPage({ queryRef }: Props) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
   const { framework } = useOutletContext<{
     framework: FrameworkDetailPageFragment$data;
   }>();
@@ -187,12 +192,12 @@ export default function FrameworkControlPage({ queryRef }: Props) {
   const confirm = useConfirm();
   const navigate = useNavigate();
   // eslint-disable-next-line relay/generated-typescript-types
-  const [detachMeasure, isDetachingMeasure] = useMutation(
-    detachMeasureMutation,
+  const [detachInternalControl, isDetachingInternalControl] = useMutation(
+    detachInternalControlMutation,
   );
   // eslint-disable-next-line relay/generated-typescript-types
-  const [attachMeasure, isAttachingMeasure] = useMutation(
-    attachMeasureMutation,
+  const [attachInternalControl, isAttachingInternalControl] = useMutation(
+    attachInternalControlMutation,
   );
   // eslint-disable-next-line relay/generated-typescript-types
   const [detachDocument, isDetachingDocument] = useMutation(
@@ -218,9 +223,9 @@ export default function FrameworkControlPage({ queryRef }: Props) {
     detachObligationMutation,
   );
 
-  const canLinkMeasure = control.canCreateMeasureMapping;
-  const canUnlinkMeasure = control.canDeleteMeasureMapping;
-  const measuresReadOnly = !canLinkMeasure && !canUnlinkMeasure;
+  const canLinkInternalControl = control.canCreateInternalControlMapping;
+  const canUnlinkInternalControl = control.canDeleteInternalControlMapping;
+  const internalControlsReadOnly = !canLinkInternalControl && !canUnlinkInternalControl;
 
   const canLinkDocument = control.canCreateDocumentMapping;
   const canUnlinkDocument = control.canDeleteDocumentMapping;
@@ -244,25 +249,25 @@ export default function FrameworkControlPage({ queryRef }: Props) {
           ...options,
           onCompleted: (response, error) => {
             if (error) {
-              toast({
-                title: __("Error"),
+              toast.add({
+                title: t("frameworkControlPage.messages.error"),
                 description: formatError(
                   errorMessage,
                   error,
                 ),
-                variant: "error",
+                type: "error",
               });
             }
             options.onCompleted?.(response, error);
           },
           onError: (error) => {
-            toast({
-              title: __("Error"),
+            toast.add({
+              title: t("frameworkControlPage.messages.error"),
               description: formatError(
                 errorMessage,
                 error,
               ),
-              variant: "error",
+              type: "error",
             });
             options.onError?.(error);
           },
@@ -281,13 +286,13 @@ export default function FrameworkControlPage({ queryRef }: Props) {
           },
           onCompleted: () => {
             void navigate(
-              `/organizations/${organizationId}/frameworks/${framework.id}`,
+              `/organizations/${organizationId}/governance/frameworks/${framework.id}`,
             );
           },
         });
       },
       {
-        message: __("Are you sure you want to delete this control?"),
+        message: t("frameworkControlPage.deleteConfirmation"),
       },
     );
   };
@@ -308,7 +313,7 @@ export default function FrameworkControlPage({ queryRef }: Props) {
               control={control}
             >
               <Button icon={IconPencil} variant="secondary">
-                {__("Edit control")}
+                {t("frameworkControlPage.actions.editControl")}
               </Button>
             </FrameworkControlDialog>
           )}
@@ -319,7 +324,7 @@ export default function FrameworkControlPage({ queryRef }: Props) {
                 variant="danger"
                 onClick={onDelete}
               >
-                {__("Delete")}
+                {t("frameworkControlPage.actions.delete")}
               </DropdownItem>
             </ActionDropdown>
           )}
@@ -336,44 +341,44 @@ export default function FrameworkControlPage({ queryRef }: Props) {
         <Card padded className="mb-6 mt-6">
           <div className="space-y-3">
             <div className="flex items-center gap-2">
-              <span className="text-sm text-txt-secondary">{__("Best Practice")}</span>
+              <span className="text-sm text-txt-secondary">{t("frameworkControlPage.fields.bestPractice")}</span>
               <Badge variant={control.bestPractice ? "success" : "neutral"} size="sm">
-                {control.bestPractice ? __("Yes") : __("No")}
+                {control.bestPractice ? t("frameworkControlPage.answers.yes") : t("frameworkControlPage.answers.no")}
               </Badge>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-sm text-txt-secondary">{__("Maturity level")}</span>
+              <span className="text-sm text-txt-secondary">{t("frameworkControlPage.fields.maturityLevel")}</span>
               <Badge variant="neutral" size="sm">
-                {getControlMaturityLevelLabel(__, control.maturityLevel ?? "NONE")}
+                {t(`frameworkControlPage.maturityLevels.${(control.maturityLevel ?? "NONE").toLowerCase()}`)}
               </Badge>
             </div>
             {control.maturityLevel === "NONE" && control.notImplementedJustification && (
               <div>
-                <span className="text-xs text-txt-secondary">{__("Justification for non-implementation")}</span>
+                <span className="text-xs text-txt-secondary">{t("frameworkControlPage.fields.notImplementedJustification")}</span>
                 <div className="text-sm mt-0.5 whitespace-pre-wrap">{control.notImplementedJustification}</div>
               </div>
             )}
           </div>
         </Card>
         <div className="mb-4">
-          <LinkedMeasuresCard
+          <LinkedInternalControlsCard
             variant="card"
-            measures={
-              control.measures?.edges.map(edge => edge.node)
+            internalControls={
+              control.internalControls?.edges.map(edge => edge.node)
               ?? []
             }
             params={{ controlId: control.id }}
-            connectionId={control.measures?.__id ?? ""}
+            connectionId={control.internalControls?.__id ?? ""}
             onAttach={withErrorHandling(
-              attachMeasure,
-              __("Failed to link measure"),
+              attachInternalControl,
+              t("frameworkControlPage.errors.linkInternalControl"),
             )}
             onDetach={withErrorHandling(
-              detachMeasure,
-              __("Failed to unlink measure"),
+              detachInternalControl,
+              t("frameworkControlPage.errors.unlinkInternalControl"),
             )}
-            disabled={isAttachingMeasure || isDetachingMeasure}
-            readOnly={measuresReadOnly}
+            disabled={isAttachingInternalControl || isDetachingInternalControl}
+            readOnly={internalControlsReadOnly}
           />
         </div>
         <div className="mb-4">
@@ -387,11 +392,11 @@ export default function FrameworkControlPage({ queryRef }: Props) {
             connectionId={control.documents?.__id ?? ""}
             onAttach={withErrorHandling(
               attachDocument,
-              __("Failed to link document"),
+              t("frameworkControlPage.errors.linkDocument"),
             )}
             onDetach={withErrorHandling(
               detachDocument,
-              __("Failed to unlink document"),
+              t("frameworkControlPage.errors.unlinkDocument"),
             )}
             disabled={isAttachingDocument || isDetachingDocument}
             readOnly={documentsReadOnly}
@@ -407,11 +412,11 @@ export default function FrameworkControlPage({ queryRef }: Props) {
             connectionId={control.audits?.__id ?? ""}
             onAttach={withErrorHandling(
               attachAudit,
-              __("Failed to link audit"),
+              t("frameworkControlPage.errors.linkAudit"),
             )}
             onDetach={withErrorHandling(
               detachAudit,
-              __("Failed to unlink audit"),
+              t("frameworkControlPage.errors.unlinkAudit"),
             )}
             disabled={isAttachingAudit || isDetachingAudit}
             readOnly={auditsReadOnly}
@@ -429,11 +434,11 @@ export default function FrameworkControlPage({ queryRef }: Props) {
             connectionId={control.obligations?.__id ?? ""}
             onAttach={withErrorHandling(
               attachObligation,
-              __("Failed to link obligation"),
+              t("frameworkControlPage.errors.linkObligation"),
             )}
             onDetach={withErrorHandling(
               detachObligation,
-              __("Failed to unlink obligation"),
+              t("frameworkControlPage.errors.unlinkObligation"),
             )}
             disabled={
               isAttachingObligation || isDetachingObligation

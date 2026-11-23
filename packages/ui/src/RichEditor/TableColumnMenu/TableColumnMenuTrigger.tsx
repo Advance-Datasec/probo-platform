@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
-// Use of this source code is governed by the ISC license
+// Use of this source code is governed by the MIT license
 // that can be found in the LICENSE file.
 
 import { autoUpdate, offset, size, useFloating } from "@floating-ui/react";
@@ -9,7 +9,9 @@ import { type Editor } from "@tiptap/react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { DRAG_THRESHOLD } from "../_lib/constants";
+import { EditorFloatingPortal } from "../_lib/EditorFloatingPortal";
 import type { DropdownMenu } from "../_lib/useTableDropdownMenu";
+import { isSuggesting } from "../SuggestionExtension";
 
 import { getColumnRect, type HoveredColumn, moveColumn } from "./TableColumnMenu";
 import { tableColumnMenuVariants } from "./variants";
@@ -300,7 +302,7 @@ export function TableColumnMenuTrigger({
         try {
           const targetGap = computeTargetGap(ev.clientX, tableStart);
 
-          if (targetGap !== fromCol && targetGap !== fromCol + 1) {
+          if (!isSuggesting(editor) && targetGap !== fromCol && targetGap !== fromCol + 1) {
             const toCol
               = fromCol < targetGap ? targetGap - 1 : targetGap;
             moveColumn(editor, tableStart, fromCol, toCol);
@@ -342,39 +344,48 @@ export function TableColumnMenuTrigger({
   };
 
   return (
-    <>
-      <button
-        ref={(node) => {
-          handleRefs.setFloating(node);
-          setTriggerEl(node);
-          menuRefs.setReference(node);
-        }}
-        data-column-handle
-        onMouseDown={onHandleMouseDown}
-        type="button"
-        style={{
-          ...handleStyles,
-          visibility:
-            isPositioned && (hoveredCol || menuOpen) ? "visible" : "hidden",
-        }}
-        className={trigger()}
-      >
-        <DotsThreeIcon size={16} weight="bold" />
-      </button>
-      {dragIndicator && (
-        <div
-          style={{
-            position: "fixed",
-            left: dragIndicator.left - 1,
-            top: dragIndicator.top,
-            width: 2,
-            height: dragIndicator.height,
-            backgroundColor: "var(--color-border-info)",
-            zIndex: 40,
-            pointerEvents: "none",
+    <EditorFloatingPortal>
+      <>
+        <button
+          ref={(node) => {
+            handleRefs.setFloating(node);
+            setTriggerEl(node);
+            menuRefs.setReference(node);
           }}
-        />
-      )}
-    </>
+          data-column-handle
+          data-rich-editor-floating=""
+          aria-label="Column actions"
+          onMouseDown={onHandleMouseDown}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            setMenuOpen(prev => !prev);
+          }}
+          type="button"
+          style={{
+            ...handleStyles,
+            visibility:
+              isPositioned && (hoveredCol || menuOpen) ? "visible" : "hidden",
+          }}
+          className={trigger()}
+        >
+          <DotsThreeIcon size={16} weight="bold" />
+        </button>
+        {dragIndicator && (
+          <div
+            style={{
+              position: "fixed",
+              left: dragIndicator.left - 1,
+              top: dragIndicator.top,
+              width: 2,
+              height: dragIndicator.height,
+              backgroundColor: "var(--color-border-info)",
+              zIndex: 40,
+              pointerEvents: "none",
+            }}
+          />
+        )}
+      </>
+    </EditorFloatingPortal>
   );
 }

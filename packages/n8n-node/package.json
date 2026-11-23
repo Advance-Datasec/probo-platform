@@ -1,6 +1,6 @@
 {
   "name": "@probo/n8n-nodes-probo",
-  "version": "0.199.0",
+  "version": "0.274.0",
   "main": "index.js",
   "scripts": {
     "build": "n8n-node build",
@@ -30,11 +30,11 @@
     ]
   },
   "license": "MIT",
-  "description": "n8n nodes for integrating with the Govrly compliance platform API",
+  "description": "n8n nodes for integrating with the Probo compliance platform API",
   "keywords": [
     "n8n",
     "n8n-nodes",
-    "govrly",
+    "probo",
     "compliance",
     "soc2",
     "automation",
@@ -56,7 +56,7 @@
     "n8n-workflow": "*"
   },
   "devDependencies": {
-    "@n8n/node-cli": "0.37.1",
-    "eslint": "^9.39.4"
+    "@n8n/node-cli": "0.53.1",
+    "eslint": "9.29.0"
   }
 }

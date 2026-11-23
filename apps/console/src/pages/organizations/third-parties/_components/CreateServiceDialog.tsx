@@ -1,19 +1,24 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { cleanFormData, formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   Breadcrumb,
   Button,
@@ -22,15 +27,16 @@ import {
   DialogFooter,
   Field,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation } from "react-relay";
 import { graphql } from "relay-runtime";
-import { z } from "zod";
 
 import type { CreateServiceDialogMutation } from "#/__generated__/core/CreateServiceDialogMutation.graphql";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
+import { z } from "#/lib/zod";
 
 type Props = {
   children: ReactNode;
@@ -58,10 +64,10 @@ export function CreateServiceDialog({
   connectionId,
   thirdPartyId,
 }: Props) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   const schema = z.object({
-    name: z.string().min(1, __("Service name is required")),
+    name: z.string().min(1, t("createThirdPartyServiceDialog.validation.nameRequired")),
     description: z.string().optional(),
   });
 
@@ -74,7 +80,7 @@ export function CreateServiceDialog({
       },
     },
   );
-  const { toast } = useToast();
+  const toast = useToast();
   const [createService, isCreating] = useMutation<CreateServiceDialogMutation>(
     createServiceMutation,
   );
@@ -92,26 +98,26 @@ export function CreateServiceDialog({
       },
       onCompleted(_response, errors) {
         if (errors) {
-          toast({
-            title: __("Error"),
-            description: formatError(__("Failed to create service"), errors),
-            variant: "error",
+          toast.add({
+            title: t("createThirdPartyServiceDialog.messages.error"),
+            description: formatError(t("createThirdPartyServiceDialog.errors.create"), errors),
+            type: "error",
           });
           return;
         }
-        toast({
-          title: __("Success"),
-          description: __("Service created successfully."),
-          variant: "success",
+        toast.add({
+          title: t("createThirdPartyServiceDialog.messages.success"),
+          description: t("createThirdPartyServiceDialog.messages.created"),
+          type: "success",
         });
         dialogRef.current?.close();
         reset();
       },
       onError(error) {
-        toast({
-          title: __("Error"),
-          description: formatError(__("Failed to create service"), error),
-          variant: "error",
+        toast.add({
+          title: t("createThirdPartyServiceDialog.messages.error"),
+          description: formatError(t("createThirdPartyServiceDialog.errors.create"), error),
+          type: "error",
         });
       },
     });
@@ -125,30 +131,30 @@ export function CreateServiceDialog({
       ref={dialogRef}
       trigger={children}
       title={
-        <Breadcrumb items={[__("Services"), __("New Service")]} />
+        <Breadcrumb items={[t("createThirdPartyServiceDialog.breadcrumb.services"), t("createThirdPartyServiceDialog.breadcrumb.newService")]} />
       }
     >
       <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
         <DialogContent padded className="space-y-4">
           <Field
-            label={__("Name")}
+            label={t("createThirdPartyServiceDialog.fields.name")}
             {...register("name")}
             type="text"
             error={formState.errors.name?.message}
-            placeholder={__("Service name")}
+            placeholder={t("createThirdPartyServiceDialog.placeholders.name")}
             required
           />
           <Field
-            label={__("Description")}
+            label={t("createThirdPartyServiceDialog.fields.description")}
             {...register("description")}
             type="textarea"
             error={formState.errors.description?.message}
-            placeholder={__("Brief description of the service")}
+            placeholder={t("createThirdPartyServiceDialog.placeholders.description")}
           />
         </DialogContent>
         <DialogFooter>
           <Button type="submit" disabled={isCreating}>
-            {__("Create")}
+            {t("createThirdPartyServiceDialog.actions.create")}
           </Button>
         </DialogFooter>
       </form>

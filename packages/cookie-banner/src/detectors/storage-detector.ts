@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import type { Detector } from "./detector";
 import { isExtensionContext } from "./extension-context";
@@ -20,12 +26,30 @@ import type { DetectedStorageEntry, StorageSource } from "./types";
 
 const OWN_KEY_PREFIX = "probo_consent:";
 
+// Web IDL DOMString: Symbol throws; everything else is ToString.
+function toStorageDOMString(value: unknown): string {
+  if (typeof value === "symbol") {
+    throw new TypeError("Cannot convert a Symbol value to a string");
+  }
+
+  return String(value);
+}
+
+interface StorageWindowHook {
+  name: "localStorage" | "sessionStorage";
+  hadOwn: boolean;
+  ownDescriptor: PropertyDescriptor | undefined;
+}
+
 export class StorageDetector implements Detector {
   private readonly queue: ReportQueue;
   private readonly apiOrigin: string;
   private originalSetItem: typeof Storage.prototype.setItem | null = null;
   private originalIDBOpen: typeof IDBFactory.prototype.open | null = null;
   private originalCachesOpen: typeof CacheStorage.prototype.open | null = null;
+  private rawLocalStorage: Storage | null = null;
+  private rawSessionStorage: Storage | null = null;
+  private storageWindowHooks: StorageWindowHook[] = [];
 
   constructor(queue: ReportQueue, apiOrigin: string) {
     this.queue = queue;
@@ -58,22 +82,105 @@ export class StorageDetector implements Detector {
       caches.open = this.originalCachesOpen;
       this.originalCachesOpen = null;
     }
+
+    for (const hook of this.storageWindowHooks) {
+      try {
+        if (hook.hadOwn && hook.ownDescriptor) {
+          Object.defineProperty(window, hook.name, hook.ownDescriptor);
+        } else {
+          Reflect.deleteProperty(window, hook.name);
+        }
+      } catch {
+        // The accessor may be non-configurable on this window.
+      }
+    }
+    this.storageWindowHooks = [];
+    this.rawLocalStorage = null;
+    this.rawSessionStorage = null;
   }
 
   private wrapStorage(): void {
+    if (typeof Storage === "undefined") return;
+
+    this.rawLocalStorage = typeof localStorage === "undefined" ? null : localStorage;
+    this.rawSessionStorage = typeof sessionStorage === "undefined" ? null : sessionStorage;
+
     const originalSetItem = Storage.prototype.setItem;
+    const originalGetItem = Storage.prototype.getItem;
     this.originalSetItem = originalSetItem;
 
     const self = this;
 
     Storage.prototype.setItem = function (key: string, value: string) {
-      originalSetItem.call(this, key, value);
+      // Convert the key once. A second ToString in getItem would
+      // miss (or throw) when toString / toPrimitive is stateful.
+      const storedKey = toStorageDOMString(key);
+      originalSetItem.call(this, storedKey, value);
+
+      // Native setItem converts the value to DOMString (and throws
+      // on Symbol). Report the stored string so value_size is not
+      // NaN / a throw for null, numbers, and other non-strings.
+      const stored = originalGetItem.call(this, storedKey);
+      if (stored == null) return;
 
       const storageType: "local_storage" | "session_storage" =
-        this === localStorage ? "local_storage" : "session_storage";
+        self.isLocalStorage(this) ? "local_storage" : "session_storage";
 
-      self.onStorageWrite(key, value, storageType);
+      self.onStorageWrite(storedKey, stored, storageType);
     };
+
+    // Named writes (`localStorage.foo = "bar"`) go through the Storage
+    // IDL setter, not Storage.prototype.setItem — the same class of
+    // miss as the instance document.cookie hook. Expose a proxy so
+    // those assignments still hit the wrapped setItem.
+    this.installStorageProxy("localStorage");
+    this.installStorageProxy("sessionStorage");
+  }
+
+  private isLocalStorage(storage: Storage): boolean {
+    return storage === this.rawLocalStorage || storage === localStorage;
+  }
+
+  private installStorageProxy(name: "localStorage" | "sessionStorage"): void {
+    if (typeof window === "undefined") return;
+
+    const raw = window[name];
+    if (!raw) return;
+
+    const hadOwn = Object.prototype.hasOwnProperty.call(window, name);
+    const ownDescriptor = hadOwn ? Object.getOwnPropertyDescriptor(window, name) : undefined;
+
+    const proxy = new Proxy(raw, {
+      set(target, prop, value) {
+        if (typeof prop !== "string") {
+          return Reflect.set(target, prop, value);
+        }
+
+        target.setItem(prop, value);
+        return true;
+      },
+      get(target, prop) {
+        const value = Reflect.get(target, prop, target);
+        if (typeof value === "function") {
+          return value.bind(target);
+        }
+
+        return value;
+      },
+    });
+
+    try {
+      Object.defineProperty(window, name, {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return proxy;
+        },
+      });
+      this.storageWindowHooks.push({ name, hadOwn, ownDescriptor });
+    } catch {
+      // window.localStorage is not configurable in some embeddings.
+    }
   }
 
   private wrapIndexedDB(): void {

@@ -1,54 +1,60 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 type Translator = (s: string) => string;
 
 export const documentTypes = ["OTHER", "GOVERNANCE", "POLICY", "PROCEDURE", "PLAN", "REGISTER", "RECORD", "REPORT", "TEMPLATE", "STATEMENT_OF_APPLICABILITY"] as const;
 
-export function getDocumentTypeLabel(__: Translator, type: string) {
+export function getDocumentTypeLabel(t: Translator, type: string) {
     switch (type) {
         case "OTHER":
-            return __("Other");
+            return t("helpers.documentType.other");
         case "GOVERNANCE":
-            return __("Governance");
+            return t("helpers.documentType.governance");
         case "POLICY":
-            return __("Policy");
+            return t("helpers.documentType.policy");
         case "PROCEDURE":
-            return __("Procedure");
+            return t("helpers.documentType.procedure");
         case "PLAN":
-            return __("Plan");
+            return t("helpers.documentType.plan");
         case "REGISTER":
-            return __("Register");
+            return t("helpers.documentType.register");
         case "RECORD":
-            return __("Record");
+            return t("helpers.documentType.record");
         case "REPORT":
-            return __("Report");
+            return t("helpers.documentType.report");
         case "TEMPLATE":
-            return __("Template");
+            return t("helpers.documentType.template");
         case "STATEMENT_OF_APPLICABILITY":
-            return __("Statement of Applicability");
+            return t("helpers.documentType.statementOfApplicability");
     }
 }
 
 export const documentWriteModes = ["AUTHORED", "GENERATED"] as const;
 
-export function getDocumentWriteModeLabel(__: Translator, writeMode: string) {
+export function getDocumentWriteModeLabel(t: Translator, writeMode: string) {
     switch (writeMode) {
         case "AUTHORED":
-            return __("Authored");
+            return t("helpers.documentWriteMode.authored");
         case "GENERATED":
-            return __("Generated");
+            return t("helpers.documentWriteMode.generated");
     }
 }
 
@@ -59,15 +65,15 @@ export const documentClassifications = [
     "SECRET",
 ] as const;
 
-export function getDocumentClassificationLabel(__: Translator, classification: string) {
+export function getDocumentClassificationLabel(t: Translator, classification: string) {
     switch (classification) {
         case "PUBLIC":
-            return __("Public");
+            return t("helpers.documentClassification.public");
         case "INTERNAL":
-            return __("Internal");
+            return t("helpers.documentClassification.internal");
         case "CONFIDENTIAL":
-            return __("Confidential");
+            return t("helpers.documentClassification.confidential");
         case "SECRET":
-            return __("Secret");
+            return t("helpers.documentClassification.secret");
     }
 }

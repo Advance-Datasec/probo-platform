@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 // Package statichandler provides functionality for serving SPA (Single Page Application) frontends.
 package statichandler
@@ -22,9 +28,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"io/fs"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -35,6 +43,14 @@ type (
 	FileRenderer func(w io.Writer, r *http.Request) error
 
 	Option func(*Server)
+
+	// IndexData is the template data for the Faro collector meta tags in a
+	// portal index.html.
+	IndexData struct {
+		FaroEnabled      bool
+		FaroCollectorURL string
+		FaroAPIKey       string
+	}
 
 	GzipOptions struct {
 		EnableFileTypeCheck bool
@@ -58,6 +74,56 @@ func WithFileRenderer(path string, renderer FileRenderer) Option {
 	return func(s *Server) {
 		s.fileRenderers[path] = renderer
 	}
+}
+
+// NewIndexRenderer parses index.html under distPath as an html/template and
+// returns a renderer that executes it with data.
+func NewIndexRenderer(staticFiles fs.FS, distPath string, data any) (FileRenderer, error) {
+	tmpl, err := parseIndexTemplate(staticFiles, distPath)
+	if err != nil {
+		return nil, err
+	}
+
+	return func(w io.Writer, _ *http.Request) error {
+		return tmpl.Execute(w, data)
+	}, nil
+}
+
+// NewRequestIndexRenderer parses index.html under distPath as an html/template
+// and returns a renderer that executes it with the value from data for each
+// request.
+func NewRequestIndexRenderer(
+	staticFiles fs.FS,
+	distPath string,
+	data func(*http.Request) any,
+) (FileRenderer, error) {
+	tmpl, err := parseIndexTemplate(staticFiles, distPath)
+	if err != nil {
+		return nil, err
+	}
+
+	return func(w io.Writer, r *http.Request) error {
+		return tmpl.Execute(w, data(r))
+	}, nil
+}
+
+func parseIndexTemplate(staticFiles fs.FS, distPath string) (*template.Template, error) {
+	subFS, err := fs.Sub(staticFiles, distPath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open %s: %w", distPath, err)
+	}
+
+	indexBytes, err := fs.ReadFile(subFS, "index.html")
+	if err != nil {
+		return nil, fmt.Errorf("cannot read index.html: %w", err)
+	}
+
+	tmpl, err := template.New("index").Parse(string(indexBytes))
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse index.html template: %w", err)
+	}
+
+	return tmpl, nil
 }
 
 func NewServer(staticFiles fs.FS, distPath string, gzipOptions GzipOptions, opts ...Option) (*Server, error) {
@@ -216,6 +282,7 @@ func (s *Server) ServeSPA(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("ETag", quotedETag)
 
 	if strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".css") ||
+		strings.HasSuffix(path, ".map") ||
 		strings.HasSuffix(path, ".png") || strings.HasSuffix(path, ".jpg") ||
 		strings.HasSuffix(path, ".svg") || strings.HasSuffix(path, ".woff2") {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
@@ -243,7 +310,7 @@ func (w gzipResponseWriter) Write(b []byte) (int, error) {
 }
 
 func (s *Server) shouldCompressWithGzip(r *http.Request) bool {
-	if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+	if !acceptsGzip(r.Header.Get("Accept-Encoding")) {
 		return false
 	}
 
@@ -261,9 +328,43 @@ func (s *Server) shouldCompressWithGzip(r *http.Request) bool {
 	return false
 }
 
+// acceptsGzip reports whether the client accepts a gzip body. A quality of
+// zero means the client refused that encoding.
+func acceptsGzip(header string) bool {
+	for part := range strings.SplitSeq(header, ",") {
+		coding, params, _ := strings.Cut(part, ";")
+		coding = strings.TrimSpace(coding)
+
+		if !strings.EqualFold(coding, "gzip") && !strings.EqualFold(coding, "x-gzip") {
+			continue
+		}
+
+		quality := 1.0
+
+		for param := range strings.SplitSeq(params, ";") {
+			key, value, ok := strings.Cut(param, "=")
+			if !ok || !strings.EqualFold(strings.TrimSpace(key), "q") {
+				continue
+			}
+
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+			if err != nil || parsed <= 0 {
+				return false
+			}
+
+			quality = parsed
+		}
+
+		return quality > 0
+	}
+
+	return false
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.shouldCompressWithGzip(r) {
 		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Vary", "Accept-Encoding")
 		gz := gzip.NewWriter(w)
 
 		defer func() { _ = gz.Close() }()

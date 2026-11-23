@@ -24,12 +24,16 @@ Always the first parameter. Use private struct keys for context values:
 
 ```go
 type ctxKey struct{ name string }
-var trustCenterIDKey = &ctxKey{name: "trust_center_id"}
+var compliancePortalIDKey = &ctxKey{name: "compliance_portal_id"}
 ```
 
 ## Interfaces
 
-- Define in the consumer package, not the provider
+Define an interface when the package has more than one implementation, or when several unrelated types already share a small behavior.
+
+- Do not define an interface only to inject a dependency. Pass the concrete type.
+- Do not define an interface so a test can substitute a fake. Test the decision and formatting logic directly.
+- When an interface is warranted, define it in the consumer package, not the provider
 - Keep them small
 - Verify satisfaction at compile time:
 
@@ -54,5 +58,5 @@ func WithDryRun(dryRun bool) Option {
 
 ## Pointers
 
-Go 1.26: use `new(expr)` for pointer-to-value (e.g. `new(1)`, `new("foo")`, `new(time.Now())`).
+Use `new(expr)` for pointer-to-value (e.g. `new(1)`, `new("foo")`, `new(time.Now())`).
 Use `go.gearno.de/x/ref` only for dereference helpers (`ref.UnrefOrZero`).

@@ -1,0 +1,359 @@
+/* Copyright (c) 2026 Probo Inc <hello@probo.com>.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+@import "tailwindcss";
+@import "@probo/ui/src/v2/theme.css";
+@source "../../../packages/ui/src/v2";
+@source "../../../packages/ui/src/RichEditor";
+@source "../../../packages/tasks/src";
+
+/* The rich editor's chrome is styled for the console kit. The portal only
+ * loads the v2 theme, so the placeholder, slash menu, focus ring, mentions,
+ * task lists, and links have to be painted with v2 tokens here. */
+.ProseMirror-focused {
+  outline: none !important;
+}
+
+.tiptap p.is-empty-focused::before,
+.tiptap .slash-search[data-empty="true"]::after {
+  content: attr(data-placeholder);
+  color: var(--color-sand-a9);
+  pointer-events: none;
+}
+
+.tiptap p.is-empty-focused::before {
+  float: left;
+  height: 0;
+}
+
+.tiptap .slash-search {
+  border-radius: var(--radius-2);
+  background-color: var(--color-sand-3);
+  padding: 0.125rem 0.375rem;
+}
+
+.tiptap .node-mention,
+.tiptap .node-mention [data-node-view-wrapper] {
+  display: inline;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+
+.tiptap .mention {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  border-radius: var(--radius-1);
+  background-color: var(--color-indigo-3);
+  padding: 0.125rem 0.375rem;
+  font-size: var(--text-1);
+  line-height: var(--text-1--line-height);
+  letter-spacing: var(--text-1--letter-spacing);
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--color-indigo-11);
+}
+
+[data-rich-editor-floating]:not(button) {
+  border: 1px solid var(--color-sand-6);
+  border-radius: var(--radius-3);
+  background-color: var(--color-sand-1);
+  color: var(--color-sand-12);
+  box-shadow: var(--shadow-3);
+}
+
+[data-rich-editor-floating] button {
+  color: inherit;
+  background-color: transparent;
+}
+
+[data-rich-editor-floating] button:hover,
+[data-rich-editor-floating] button.bg-active {
+  background-color: var(--color-sand-3);
+}
+
+.tiptap ul[data-type="taskList"] {
+  margin-block: 0.5rem;
+  list-style: none;
+  padding-left: 0;
+}
+
+.tiptap ul[data-type="taskList"] > li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.tiptap ul[data-type="taskList"] > li > label {
+  margin-top: 0.125rem;
+  display: flex;
+  flex-shrink: 0;
+}
+
+.tiptap ul[data-type="taskList"] > li > label input {
+  height: 1rem;
+  width: 1rem;
+  cursor: pointer;
+}
+
+.tiptap ul[data-type="taskList"] > li > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.tiptap ul[data-type="taskList"] > li > div > p {
+  margin-block: 0;
+}
+
+.tiptap ul[data-type="taskList"] > li[data-checked="true"] > div > p {
+  color: var(--color-sand-11);
+  text-decoration: line-through;
+}
+
+.tiptap[contenteditable="false"] ul[data-type="taskList"] > li > label input {
+  pointer-events: none;
+}
+
+.tiptap a {
+  cursor: pointer;
+  font-weight: 400;
+  color: var(--color-sky-11);
+  text-decoration-line: underline;
+}
+
+.tiptap.ProseMirror-focused a:not(.rich-file) {
+  cursor: text;
+}
+
+.tiptap a.rich-file {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-block: 0.5rem;
+  border: 1px solid var(--color-sand-6);
+  border-radius: var(--radius-4);
+  background-color: transparent;
+  padding: 0.5rem 0.75rem;
+  font-size: var(--text-2);
+  line-height: var(--text-2--line-height);
+  letter-spacing: var(--text-2--letter-spacing);
+  font-weight: 400;
+  text-decoration-line: none;
+}
+
+.tiptap a.rich-file svg {
+  flex-shrink: 0;
+}
+
+.tiptap .rich-file-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-sand-12);
+}
+
+.tiptap .rich-file-size {
+  flex-shrink: 0;
+  color: var(--color-sand-11);
+}
+
+.tiptap .rich-upload,
+.tiptap .rich-image-missing {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-block: 0.5rem;
+  border: 1px dashed var(--color-sand-6);
+  border-radius: var(--radius-4);
+  padding: 0.5rem 0.75rem;
+  font-size: var(--text-2);
+  line-height: var(--text-2--line-height);
+  color: var(--color-sand-11);
+}
+
+.tiptap .ProseMirror-selectednode .rich-image-missing {
+  background-color: var(--color-sand-3);
+}
+
+.tiptap .rich-image-slot {
+  margin-block: 0.5rem;
+  width: 100%;
+}
+
+.tiptap .rich-image-frame {
+  position: relative;
+  margin-inline: auto;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.tiptap .rich-image {
+  display: block;
+  height: auto;
+  width: 100%;
+  max-width: 100%;
+  border-radius: var(--radius-3);
+}
+
+.tiptap .rich-image-handle {
+  position: absolute;
+  top: 50%;
+  z-index: var(--z-index-1);
+  display: flex;
+  height: 2.5rem;
+  width: 1.25rem;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+  appearance: none;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  opacity: 0;
+  touch-action: none;
+  transition: opacity 150ms;
+}
+
+.tiptap .rich-image-handle::before {
+  content: "";
+  height: 1.5rem;
+  width: 0.375rem;
+  border-radius: 9999px;
+  border: 1px solid var(--color-sand-8);
+  background-color: var(--color-sand-1);
+  box-shadow: var(--shadow-2);
+}
+
+.tiptap .rich-image-slot:hover .rich-image-handle,
+.tiptap .ProseMirror-selectednode .rich-image-handle,
+.tiptap .rich-image-handle:focus-visible {
+  opacity: 1;
+}
+
+.tiptap .rich-image-handle-left {
+  left: 0;
+  transform: translate(-50%, -50%);
+}
+
+.tiptap .rich-image-handle-right {
+  right: 0;
+  transform: translate(50%, -50%);
+}
+
+.tiptap .mention {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-1);
+  background-color: var(--color-indigo-3);
+  padding: 0.125rem 0.375rem;
+  vertical-align: middle;
+  font-size: var(--text-1);
+  line-height: var(--text-1--line-height);
+  letter-spacing: var(--text-1--letter-spacing);
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--color-indigo-11);
+}
+
+.tiptap .mention-suggestion {
+  border-radius: var(--radius-1);
+  background-color: var(--color-sand-3);
+  padding-inline: 0.125rem;
+}
+
+.status-pip-ring {
+  animation: status-pip-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes status-pip-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.4);
+  }
+}
+
+/* Only the workspace pane participates; the queue bar stays live. */
+:root {
+  view-transition-name: none;
+}
+
+@keyframes queue-slide-out-left {
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes queue-slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes queue-slide-out-right {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes queue-slide-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+}
+
+::view-transition-group(document-workspace) {
+  overflow: clip;
+}
+
+::view-transition-old(document-workspace) {
+  animation: 280ms ease-out both queue-slide-out-left;
+}
+
+::view-transition-new(document-workspace) {
+  animation: 280ms ease-out both queue-slide-in-right;
+}
+
+html[data-queue-direction="back"]::view-transition-old(document-workspace) {
+  animation-name: queue-slide-out-right;
+}
+
+html[data-queue-direction="back"]::view-transition-new(document-workspace) {
+  animation-name: queue-slide-in-left;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(document-workspace),
+  ::view-transition-new(document-workspace) {
+    animation: none;
+  }
+
+  .status-pip-ring {
+    animation: none;
+  }
+}

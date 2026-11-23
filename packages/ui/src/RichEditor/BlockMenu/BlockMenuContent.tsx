@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
-// Use of this source code is governed by the ISC license
+// Use of this source code is governed by the MIT license
 // that can be found in the LICENSE file.
 
 import {
@@ -11,11 +11,14 @@ import {
 } from "@floating-ui/react";
 import type { Icon } from "@phosphor-icons/react";
 import {
+  CheckSquareIcon,
   CodeBlockIcon,
   GridFourIcon,
+  ImageIcon,
   ListBulletsIcon,
   ListNumbersIcon,
   MinusIcon,
+  PaperclipIcon,
   QuotesIcon,
   TextHFourIcon,
   TextHOneIcon,
@@ -24,12 +27,24 @@ import {
   TextTIcon,
   TreeStructureIcon,
 } from "@phosphor-icons/react";
+import type { EditorState, Transaction } from "@tiptap/pm/state";
 import { type Editor } from "@tiptap/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { getSlashStorage } from "../_lib/getSlashStorage";
+import { EditorFloatingPortal } from "../_lib/EditorFloatingPortal";
 import { MenuButton } from "../MenuButton";
 import { deactivateSlashCommand } from "../SlashCommandExtension";
+import {
+  codeCommand,
+  headingCommand,
+  listCommand,
+  paragraphCommand,
+  suggestCommand,
+  suggestDivider,
+  wrapCommand,
+} from "../suggestionBlock";
+import { applySuggestingStructure } from "../SuggestionExtension";
+import { suggestInsertTable } from "../suggestionStructure";
 
 import { blockMenuVariants } from "./variants";
 
@@ -37,33 +52,46 @@ const { menu } = blockMenuVariants();
 
 type ChainCommands = ReturnType<Editor["chain"]>;
 
-type BlockItem = {
+type BlockCommand = {
   label: string;
   icon: Icon;
   action: (chain: ChainCommands) => ChainCommands;
+  suggest?: (state: EditorState, id: string) => Transaction | null;
 };
 
+type BlockPicker = {
+  label: string;
+  icon: Icon;
+  pick: "image" | "file";
+};
+
+type BlockItem = BlockCommand | BlockPicker;
+
 const BLOCK_ITEMS: BlockItem[] = [
-  { label: "Text", icon: TextTIcon, action: chain => chain.setParagraph() },
-  { label: "Heading 1", icon: TextHOneIcon, action: chain => chain.toggleHeading({ level: 1 }) },
-  { label: "Heading 2", icon: TextHTwoIcon, action: chain => chain.toggleHeading({ level: 2 }) },
-  { label: "Heading 3", icon: TextHThreeIcon, action: chain => chain.toggleHeading({ level: 3 }) },
-  { label: "Heading 4", icon: TextHFourIcon, action: chain => chain.toggleHeading({ level: 4 }) },
-  { label: "Bullet List", icon: ListBulletsIcon, action: chain => chain.toggleBulletList() },
-  { label: "Ordered List", icon: ListNumbersIcon, action: chain => chain.toggleOrderedList() },
-  { label: "Code Block", icon: CodeBlockIcon, action: chain => chain.toggleCodeBlock() },
-  { label: "Blockquote", icon: QuotesIcon, action: chain => chain.toggleBlockquote() },
-  { label: "Mermaid Diagram", icon: TreeStructureIcon, action: chain => chain.setCodeBlock({ language: "mermaid" }) },
-  { label: "Divider", icon: MinusIcon, action: chain => chain.setHorizontalRule() },
-  { label: "Table", icon: GridFourIcon, action: chain => chain.insertTable() },
+  { label: "Text", icon: TextTIcon, action: chain => chain.setParagraph(), suggest: (state, id) => suggestCommand(state, id, paragraphCommand()) },
+  { label: "Heading 1", icon: TextHOneIcon, action: chain => chain.toggleHeading({ level: 1 }), suggest: (state, id) => suggestCommand(state, id, headingCommand(1)) },
+  { label: "Heading 2", icon: TextHTwoIcon, action: chain => chain.toggleHeading({ level: 2 }), suggest: (state, id) => suggestCommand(state, id, headingCommand(2)) },
+  { label: "Heading 3", icon: TextHThreeIcon, action: chain => chain.toggleHeading({ level: 3 }), suggest: (state, id) => suggestCommand(state, id, headingCommand(3)) },
+  { label: "Heading 4", icon: TextHFourIcon, action: chain => chain.toggleHeading({ level: 4 }), suggest: (state, id) => suggestCommand(state, id, headingCommand(4)) },
+  { label: "Bullet List", icon: ListBulletsIcon, action: chain => chain.toggleBulletList(), suggest: (state, id) => suggestCommand(state, id, listCommand("bulletList")) },
+  { label: "Ordered List", icon: ListNumbersIcon, action: chain => chain.toggleOrderedList(), suggest: (state, id) => suggestCommand(state, id, listCommand("orderedList")) },
+  { label: "Task List", icon: CheckSquareIcon, action: chain => chain.toggleTaskList(), suggest: (state, id) => suggestCommand(state, id, listCommand("taskList")) },
+  { label: "Code Block", icon: CodeBlockIcon, action: chain => chain.toggleCodeBlock(), suggest: (state, id) => suggestCommand(state, id, codeCommand()) },
+  { label: "Blockquote", icon: QuotesIcon, action: chain => chain.toggleBlockquote(), suggest: (state, id) => suggestCommand(state, id, wrapCommand("blockquote")) },
+  { label: "Mermaid Diagram", icon: TreeStructureIcon, action: chain => chain.setCodeBlock({ language: "mermaid" }), suggest: (state, id) => suggestCommand(state, id, codeCommand("mermaid")) },
+  { label: "Divider", icon: MinusIcon, action: chain => chain.setHorizontalRule(), suggest: suggestDivider },
+  { label: "Table", icon: GridFourIcon, action: chain => chain.insertTable(), suggest: (state, id) => suggestInsertTable(state, id, 3, 3, true) },
+  { label: "Image", icon: ImageIcon, pick: "image" },
+  { label: "File", icon: PaperclipIcon, pick: "file" },
 ];
 
 type BlockMenuContentProps = {
   editor: Editor;
   slashState: { active: boolean; query: string; from: number };
+  onPickFiles?: (kind: "image" | "file") => void;
 };
 
-export function BlockMenuContent({ editor, slashState }: BlockMenuContentProps) {
+export function BlockMenuContent({ editor, slashState, onPickFiles }: BlockMenuContentProps) {
   const [slashNav, setSlashNav] = useState({ index: 0, query: "" });
   const slashDropdownRef = useRef<HTMLDivElement | null>(null);
 
@@ -72,11 +100,12 @@ export function BlockMenuContent({ editor, slashState }: BlockMenuContentProps) 
     : 0;
 
   const filteredItems = useMemo(() => {
-    if (!slashState.active) return BLOCK_ITEMS;
+    const source = onPickFiles ? BLOCK_ITEMS : BLOCK_ITEMS.filter(item => !("pick" in item));
+    if (!slashState.active) return source;
     const q = slashState.query.toLowerCase();
-    if (q.length === 0) return BLOCK_ITEMS;
-    return BLOCK_ITEMS.filter(item => item.label.toLowerCase().includes(q));
-  }, [slashState.active, slashState.query]);
+    if (q.length === 0) return source;
+    return source.filter(item => item.label.toLowerCase().includes(q));
+  }, [onPickFiles, slashState.active, slashState.query]);
 
   const {
     refs: slashMenuRefs,
@@ -109,32 +138,27 @@ export function BlockMenuContent({ editor, slashState }: BlockMenuContentProps) 
   }, [slashState.active, slashState.from, editor, slashMenuRefs]);
 
   const deactivateSlash = useCallback(() => {
-    if (!editor) return;
-    const s = getSlashStorage(editor);
-    if (s) deactivateSlashCommand(s);
+    deactivateSlashCommand(editor.view);
     setSlashNav({ index: 0, query: "" });
   }, [editor]);
 
   const handleSlashAction = useCallback(
     (item: BlockItem) => {
       if (!slashState.active) return;
-      const { from } = slashState;
-      const cursorPos = editor.state.selection.from;
 
       try {
-        editor.chain()
-          .focus()
-          .deleteRange({ from, to: cursorPos })
-          .run();
+        deactivateSlash();
 
-        item.action(editor.chain().focus()).run();
+        if ("pick" in item) {
+          onPickFiles?.(item.pick);
+        } else if (!item.suggest || !applySuggestingStructure(editor, item.suggest, { fresh: true })) {
+          item.action(editor.chain().focus()).run();
+        }
       } catch {
         // Block may no longer be in the document
       }
-
-      deactivateSlash();
     },
-    [editor, slashState, deactivateSlash],
+    [editor, slashState, deactivateSlash, onPickFiles],
   );
 
   useEffect(() => {
@@ -177,31 +201,34 @@ export function BlockMenuContent({ editor, slashState }: BlockMenuContentProps) 
   }, [editor, slashState.active, slashState.query, filteredItems, slashActiveIndex, handleSlashAction]);
 
   return (
-    <div
-      ref={(node) => {
-        slashDropdownRef.current = node;
-        slashMenuRefs.setFloating(node);
-      }}
-      style={slashMenuStyles}
-      onMouseDown={e => e.preventDefault()}
-      className={menu()}
-    >
-      {filteredItems.length > 0
-        ? filteredItems.map((item, index) => (
-            <MenuButton
-              key={item.label}
-              active={index === slashActiveIndex}
-              onClick={() => handleSlashAction(item)}
-            >
-              <item.icon size={16} weight="bold" />
-              {item.label}
-            </MenuButton>
-          ))
-        : (
-            <div className="px-2 py-1.5 text-sm text-txt-tertiary">
-              No results
-            </div>
-          )}
-    </div>
+    <EditorFloatingPortal>
+      <div
+        ref={(node) => {
+          slashDropdownRef.current = node;
+          slashMenuRefs.setFloating(node);
+        }}
+        style={slashMenuStyles}
+        onMouseDown={e => e.preventDefault()}
+        className={menu()}
+        data-rich-editor-floating=""
+      >
+        {filteredItems.length > 0
+          ? filteredItems.map((item, index) => (
+              <MenuButton
+                key={item.label}
+                active={index === slashActiveIndex}
+                onClick={() => handleSlashAction(item)}
+              >
+                <item.icon size={16} weight="bold" />
+                {item.label}
+              </MenuButton>
+            ))
+          : (
+              <div className="px-2 py-1.5 text-sm text-txt-tertiary">
+                No results
+              </div>
+            )}
+      </div>
+    </EditorFloatingPortal>
   );
 }

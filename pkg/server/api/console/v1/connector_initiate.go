@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_v1
 
@@ -22,11 +28,13 @@ import (
 	"go.gearno.de/kit/httpserver"
 	"go.gearno.de/kit/log"
 	"go.probo.inc/probo/pkg/connector"
+	"go.probo.inc/probo/pkg/connectorprotocol"
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/iam"
 	"go.probo.inc/probo/pkg/probo"
 	"go.probo.inc/probo/pkg/server/api/authn"
+	"go.probo.inc/probo/pkg/server/api/authz"
 )
 
 var errInvalidReconnectConnector = errors.New("invalid reconnect connector")
@@ -35,7 +43,7 @@ func handleConnectorInitiate(
 	logger *log.Logger,
 	proboSvc *probo.Service,
 	iamSvc *iam.Service,
-	connectorRegistry *connector.ConnectorRegistry,
+	connectorRegistry *connectorprotocol.Registry,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		provider := r.URL.Query().Get("provider")
@@ -44,7 +52,7 @@ func handleConnectorInitiate(
 			return
 		}
 
-		if _, err := connectorRegistry.Get(provider); err != nil {
+		if _, err := connectorRegistry.Lookup(provider, connectorprotocol.ProtocolOAuth2); err != nil {
 			httpserver.RenderError(w, http.StatusBadRequest, fmt.Errorf("unsupported provider: %q", provider))
 			return
 		}
@@ -52,11 +60,6 @@ func handleConnectorInitiate(
 		organizationID, err := gid.ParseGID(r.URL.Query().Get("organization_id"))
 		if err != nil {
 			httpserver.RenderError(w, http.StatusBadRequest, fmt.Errorf("invalid organization_id parameter"))
-			return
-		}
-
-		if authn.APIKeyFromContext(r.Context()) != nil {
-			httpserver.RenderError(w, http.StatusBadRequest, fmt.Errorf("api key authentication cannot be used for this endpoint"))
 			return
 		}
 
@@ -77,6 +80,7 @@ func handleConnectorInitiate(
 			Resource:  organizationID,
 			Session:   &session.ID,
 			Action:    probo.ActionConnectorInitiate,
+			Request:   authz.RequestMetadataFromHTTP(r),
 		})
 		if err != nil {
 			httpserver.RenderError(w, http.StatusForbidden, err)
@@ -86,11 +90,12 @@ func handleConnectorInitiate(
 		requestedScopes := r.URL.Query()["scope"]
 		prb := proboSvc
 
-		// Look up any existing connector so we can union its stored scopes
-		// into the new auth request. Cross-org/provider/protocol mismatches
-		// are caught inside Reconnect at callback time; this handler only
-		// needs the scope set.
-		existing, err := loadExistingConnector(r, prb, scope, organizationID, provider)
+		// Look up the connector this flow reconnects, if any, so we can
+		// union its stored scopes into the new auth request.
+		// Cross-org/provider/protocol mismatches are caught inside
+		// Reconnect at callback time; this handler only needs the scope
+		// set.
+		existing, err := loadExistingConnector(r, prb, scope)
 		if err != nil {
 			if errors.Is(err, coredata.ErrResourceNotFound) {
 				httpserver.RenderError(w, http.StatusBadRequest, fmt.Errorf("cannot reconnect: connector not found"))
@@ -108,18 +113,35 @@ func handleConnectorInitiate(
 			return
 		}
 
-		// Always request the union of (old granted ∪ new requested).
-		// Union-not-delta because most providers replace rather than
-		// merge. No short-circuit: every reconnect runs the full OAuth
+		// Hand the earlier grant to the connector rather than unioning it
+		// here: whether a reconnect may widen the request or must ask for
+		// exactly the registered scopes is a per-provider OAuth trait. No
+		// short-circuit either way — every reconnect runs the full OAuth
 		// flow so revoked or stale tokens are never silently reused.
-		opts := connector.InitiateOptions{Scopes: requestedScopes, Site: r.URL.Query().Get("site")}
+		name, err := initiateConnectorName(r, existing != nil)
+		if err != nil {
+			httpserver.RenderError(w, http.StatusBadRequest, err)
+			return
+		}
+
+		opts := connectorprotocol.InitiateOptions{
+			Scopes: requestedScopes,
+			Site:   r.URL.Query().Get("site"),
+			Name:   name,
+		}
 		if existing != nil {
-			opts.Scopes = connector.UnionScopes(existing.Connection.Scopes(), requestedScopes)
+			opts.GrantedScopes = existing.Connection.Scopes()
 			opts.IncludeGrantedScopes = true
 			opts.ConnectorID = existing.ID.String()
 		}
 
-		redirectURL, err := connectorRegistry.Initiate(r.Context(), provider, organizationID, opts, r)
+		redirectURL, err := connectorRegistry.Initiate(
+			r.Context(),
+			provider,
+			organizationID,
+			opts,
+			r,
+		)
 		if err != nil {
 			logger.ErrorCtx(r.Context(), "cannot initiate connector", log.Error(err))
 			httpserver.RenderError(w, http.StatusInternalServerError, fmt.Errorf("internal error"))
@@ -132,41 +154,41 @@ func handleConnectorInitiate(
 }
 
 // loadExistingConnector returns the connector the initiate handler
-// should reconnect, or nil if this is a fresh install. An explicit
-// `connector_id` query parameter selects a specific row; otherwise the
-// handler falls back to the widest-scope (org, provider) row. Callers
-// must distinguish ErrResourceNotFound (explicit id not found — 400)
-// from nil (no existing row — fresh install path).
+// should reconnect, or nil for a fresh connect. Reconnect is explicit:
+// only a connector_id query parameter selects a row — a bare initiate
+// always creates a new connector, so an organization can connect the
+// same provider several times. Callers must distinguish
+// ErrResourceNotFound (explicit id not found — 400) from nil
+// (fresh-connect path).
 func loadExistingConnector(
 	r *http.Request,
 	prb *probo.Service,
 	scope coredata.Scoper,
-	organizationID gid.GID,
-	provider string,
 ) (*coredata.Connector, error) {
-	if explicitID := r.URL.Query().Get("connector_id"); explicitID != "" {
-		parsedID, err := gid.ParseGID(explicitID)
-		if err != nil {
-			return nil, fmt.Errorf("%w: cannot parse connector id: %w", errInvalidReconnectConnector, err)
-		}
-
-		found, err := prb.Connectors.GetWithConnection(r.Context(), scope, parsedID)
-		if err != nil {
-			return nil, err
-		}
-
-		return found, nil
-	}
-
-	found, err := prb.Connectors.GetByOrganizationIDAndProvider(
-		r.Context(),
-		scope,
-		organizationID,
-		coredata.ConnectorProvider(provider),
-	)
-	if errors.Is(err, coredata.ErrResourceNotFound) {
+	explicitID := r.URL.Query().Get("connector_id")
+	if explicitID == "" {
 		return nil, nil
 	}
 
-	return found, err
+	parsedID, err := gid.ParseGID(explicitID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: cannot parse connector id: %w", errInvalidReconnectConnector, err)
+	}
+
+	return prb.Connectors.GetWithConnection(r.Context(), scope, parsedID)
+}
+
+// initiateConnectorName reads the label for a fresh connect. A reconnect
+// keeps the name already stored on the row, so the parameter is ignored.
+func initiateConnectorName(r *http.Request, reconnecting bool) (string, error) {
+	if reconnecting {
+		return "", nil
+	}
+
+	name, err := connector.NormalizeConnectorName(r.URL.Query().Get("name"))
+	if err != nil {
+		return "", fmt.Errorf("invalid name parameter")
+	}
+
+	return name, nil
 }

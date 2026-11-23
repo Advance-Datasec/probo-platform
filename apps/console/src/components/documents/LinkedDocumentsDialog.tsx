@@ -1,18 +1,23 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   Dialog,
@@ -27,6 +32,7 @@ import {
   Spinner,
 } from "@probo/ui";
 import { type ReactNode, Suspense, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useLazyLoadQuery, usePaginationFragment } from "react-relay";
 import { graphql } from "relay-runtime";
 
@@ -71,14 +77,8 @@ const documentsFragment = graphql`
       edges {
         node {
           id
-          versions(first: 1, orderBy: { field: CREATED_AT, direction: DESC }) {
-            edges {
-              node {
-                title
-                documentType
-              }
-            }
-          }
+          title
+          documentType
         }
       }
     }
@@ -95,16 +95,16 @@ type Props = {
 };
 
 export function LinkedDocumentDialog({ children, ...props }: Props) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (
-    <Dialog trigger={children} title={__("Link documents")}>
+    <Dialog trigger={children} title={t("linkedDocumentsDialog.title")}>
       <DialogContent>
         <Suspense fallback={<Spinner centered />}>
           <LinkedDocumentsDialogContent {...props} />
         </Suspense>
       </DialogContent>
-      <DialogFooter exitLabel={__("Close")} />
+      <DialogFooter exitLabel={t("linkedDocumentsDialog.actions.close")} />
     </Dialog>
   );
 }
@@ -123,7 +123,7 @@ function LinkedDocumentsDialogContent(props: Omit<Props, "children">) {
       documentsFragment,
       query.organization as LinkedDocumentsDialogFragment$key,
     );
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [search, setSearch] = useState("");
   const documents = useMemo(
     () => data.documents?.edges?.map(edge => edge.node) ?? [],
@@ -135,7 +135,7 @@ function LinkedDocumentsDialogContent(props: Omit<Props, "children">) {
 
   const filteredDocuments = useMemo(() => {
     return documents.filter(document =>
-      document.versions.edges[0].node.title.toLowerCase().includes(search.toLowerCase()),
+      document.title.toLowerCase().includes(search.toLowerCase()),
     );
   }, [documents, search]);
 
@@ -144,7 +144,7 @@ function LinkedDocumentsDialogContent(props: Omit<Props, "children">) {
       <div className="flex items-center gap-2 sticky top-0 relative py-4 bg-linear-to-b from-50% from-level-2 to-level-2/0 px-6">
         <Input
           icon={IconMagnifyingGlass}
-          placeholder={__("Search documents...")}
+          placeholder={t("linkedDocumentsDialog.searchPlaceholder")}
           onValueChange={setSearch}
         />
       </div>
@@ -181,7 +181,7 @@ type RowProps = {
 };
 
 function DocumentRow(props: RowProps) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   const isLinked = props.linkedDocuments.has(props.document.id);
   const onClick = isLinked ? props.onUnlink : props.onLink;
@@ -192,8 +192,8 @@ function DocumentRow(props: RowProps) {
       className="py-4 flex items-center gap-4 hover:bg-subtle cursor-pointer px-6 w-full h-[100px]"
       onClick={() => onClick(props.document.id)}
     >
-      {props.document.versions.edges[0].node.title}
-      <DocumentTypeBadge type={props.document.versions.edges[0].node.documentType} />
+      {props.document.title}
+      <DocumentTypeBadge type={props.document.documentType} />
       <Button
         disabled={props.disabled}
         className="ml-auto"
@@ -203,7 +203,9 @@ function DocumentRow(props: RowProps) {
         <span>
           <IconComponent size={16} />
           {" "}
-          {isLinked ? __("Unlink") : __("Link")}
+          {isLinked
+            ? t("linkedDocumentsDialog.actions.unlink")
+            : t("linkedDocumentsDialog.actions.link")}
         </span>
       </Button>
     </button>

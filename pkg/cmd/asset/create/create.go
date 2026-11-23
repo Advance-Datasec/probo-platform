@@ -1,22 +1,29 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package create
 
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
@@ -25,7 +32,7 @@ import (
 )
 
 const createMutation = `
-mutation($input: CreateAssetInput!) {
+mutation AssetCreate($input: CreateAssetInput!) {
   createAsset(input: $input) {
     assetEdge {
       node {
@@ -70,7 +77,7 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
   prb asset create
 
   # Create an asset non-interactively
-  prb asset create --name "Production Database" --asset-type VIRTUAL --amount 50000`,
+  prb asset create --name "Production Database" --asset-type VIRTUAL --amount 1 --owner <profile-id> --data-types-stored "Customer records"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := f.Config()
 			if err != nil {
@@ -90,12 +97,9 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 				cmdutil.TokenRefreshOption(cfg, host, hc),
 			)
 
-			if flagOrg == "" {
-				flagOrg = hc.Organization
-			}
-
-			if flagOrg == "" {
-				return fmt.Errorf("organization is required; pass --org or set a default with 'prb auth login'")
+			flagOrg, err = cmdutil.ResolveOrganization(flagOrg, hc.Organization)
+			if err != nil {
+				return err
 			}
 
 			if f.IOStreams.IsInteractive() {
@@ -122,6 +126,43 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 						return err
 					}
 				}
+
+				if !cmd.Flags().Changed("amount") {
+					var amount string
+
+					err := huh.NewInput().
+						Title("Amount").
+						Value(&amount).
+						Run()
+					if err != nil {
+						return err
+					}
+
+					flagAmount, err = strconv.Atoi(amount)
+					if err != nil {
+						return fmt.Errorf("amount must be an integer")
+					}
+				}
+
+				if flagOwner == "" {
+					err := huh.NewInput().
+						Title("Owner profile ID").
+						Value(&flagOwner).
+						Run()
+					if err != nil {
+						return err
+					}
+				}
+
+				if flagDataTypesStored == "" {
+					err := huh.NewInput().
+						Title("Data types stored").
+						Value(&flagDataTypesStored).
+						Run()
+					if err != nil {
+						return err
+					}
+				}
 			}
 
 			if flagName == "" {
@@ -132,22 +173,25 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("asset type is required; pass --asset-type or run interactively")
 			}
 
+			if flagAmount < 1 {
+				return fmt.Errorf("amount must be at least 1; pass --amount")
+			}
+
+			if flagOwner == "" {
+				return fmt.Errorf("owner is required; pass --owner or run interactively")
+			}
+
+			if flagDataTypesStored == "" {
+				return fmt.Errorf("data types stored is required; pass --data-types-stored or run interactively")
+			}
+
 			input := map[string]any{
-				"organizationId": flagOrg,
-				"name":           flagName,
-				"assetType":      flagAssetType,
-			}
-
-			if cmd.Flags().Changed("amount") {
-				input["amount"] = flagAmount
-			}
-
-			if flagOwner != "" {
-				input["ownerId"] = flagOwner
-			}
-
-			if flagDataTypesStored != "" {
-				input["dataTypesStored"] = flagDataTypesStored
+				"organizationId":  flagOrg,
+				"name":            flagName,
+				"assetType":       flagAssetType,
+				"amount":          flagAmount,
+				"ownerId":         flagOwner,
+				"dataTypesStored": flagDataTypesStored,
 			}
 
 			if len(flagThirdPartyIDs) > 0 {
@@ -179,13 +223,13 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&flagOrg, "org", "", "Organization ID")
+	cmdutil.AddOrganizationFlag(cmd, &flagOrg, "Organization ID")
 	cmd.Flags().StringVar(&flagName, "name", "", "Asset name (required)")
 	cmd.Flags().StringVar(&flagAssetType, "asset-type", "", "Asset type: PHYSICAL, VIRTUAL (required)")
-	cmd.Flags().IntVar(&flagAmount, "amount", 0, "Asset amount")
-	cmd.Flags().StringVar(&flagOwner, "owner", "", "Owner profile ID")
-	cmd.Flags().StringVar(&flagDataTypesStored, "data-types-stored", "", "Data types stored")
-	cmd.Flags().StringSliceVar(&flagThirdPartyIDs, "thirdParty-ids", nil, "ThirdParty IDs (comma-separated)")
+	cmd.Flags().IntVar(&flagAmount, "amount", 0, "Asset amount (required, at least 1)")
+	cmd.Flags().StringVar(&flagOwner, "owner", "", "Owner profile ID (required)")
+	cmd.Flags().StringVar(&flagDataTypesStored, "data-types-stored", "", "Data types stored (required)")
+	cmd.Flags().StringSliceVar(&flagThirdPartyIDs, "third-party-ids", nil, "Third party IDs (comma-separated)")
 
 	return cmd
 }

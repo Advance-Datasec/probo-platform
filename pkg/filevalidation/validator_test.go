@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package filevalidation
 
@@ -18,6 +24,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewValidator(t *testing.T) {
@@ -92,6 +100,29 @@ func TestNewValidator(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWithMimeTypes(t *testing.T) {
+	t.Parallel()
+
+	v := NewValidator(WithMimeTypes("image/jpeg", "image/png"))
+
+	assert.True(t, v.AllowedMimeTypes["image/jpeg"])
+	assert.True(t, v.AllowedMimeTypes["image/png"])
+	assert.Contains(t, v.AllowedExtensions, ".jpg")
+	assert.False(t, v.AllowedMimeTypes["image/webp"])
+	assert.False(t, v.AllowedMimeTypes["image/svg+xml"])
+}
+
+func TestWithMimeTypes_PanicsOnUnknown(t *testing.T) {
+	t.Parallel()
+
+	assert.Panics(
+		t,
+		func() {
+			NewValidator(WithMimeTypes("image/jpg"))
+		},
+	)
 }
 
 func TestWithMaxFileSize(t *testing.T) {
@@ -180,6 +211,22 @@ func TestValidate(t *testing.T) {
 			filename:    "test.jpg",
 			contentType: "image/jpeg",
 			fileSize:    1024 * 1024,
+			shouldError: false,
+		},
+		{
+			name:        "Log file with browser text/plain MIME",
+			validator:   NewValidator(WithCategories(CategoryText)),
+			filename:    "auth.log",
+			contentType: "text/plain",
+			fileSize:    1024,
+			shouldError: false,
+		},
+		{
+			name:        "Log file with text/x-log MIME",
+			validator:   NewValidator(WithCategories(CategoryText)),
+			filename:    "auth.log",
+			contentType: "text/x-log",
+			fileSize:    1024,
 			shouldError: false,
 		},
 		{
@@ -296,6 +343,19 @@ func TestValidateEdgeCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidate_CSVReportedAsExcel(t *testing.T) {
+	t.Parallel()
+
+	v := NewValidator(WithCategories(CategoryData, CategorySpreadsheet))
+
+	assert.NoError(t, v.Validate("report.csv", "application/vnd.ms-excel", 1024))
+	assert.NoError(t, v.Validate("sheet.xls", "application/vnd.ms-excel", 1024))
+
+	mime, ok := v.ContentTypeForFilename("report.csv")
+	assert.True(t, ok)
+	assert.Equal(t, "text/csv", mime)
 }
 
 // Test each file category individually
@@ -521,4 +581,52 @@ func TestValidateCustomAllowedExtensions(t *testing.T) {
 	if !contains(err.Error(), "content type \"image/png\" does not match extension \".jpg\"") {
 		t.Errorf("Unexpected error message: %s", err.Error())
 	}
+}
+
+func TestFileValidator_ContentTypeForFilename(t *testing.T) {
+	t.Parallel()
+
+	validator := NewValidator(WithCategories(
+		CategoryDocument,
+		CategorySpreadsheet,
+		CategoryPresentation,
+		CategoryText,
+		CategoryImage,
+		CategoryData,
+	))
+
+	tests := []struct {
+		name     string
+		filename string
+		want     string
+		ok       bool
+	}{
+		{name: "png", filename: "dot.png", want: "image/png", ok: true},
+		{name: "uppercase extension", filename: "notes.TXT", want: "text/plain", ok: true},
+		{name: "log prefers text/plain", filename: "app.log", want: "text/plain", ok: true},
+		{name: "video is excluded", filename: "clip.mp4", ok: false},
+		{name: "no extension", filename: "readme", ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := validator.ContentTypeForFilename(tt.filename)
+			if ok != tt.ok || got != tt.want {
+				t.Errorf("ContentTypeForFilename(%q) = %q, %v; want %q, %v", tt.filename, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
+func TestContentTypeForAttachment(t *testing.T) {
+	t.Parallel()
+
+	got, ok := ContentTypeForAttachment("diagram.png")
+	assert.True(t, ok)
+	assert.Equal(t, "image/png", got)
+
+	_, ok = ContentTypeForAttachment("clip.mp4")
+	assert.False(t, ok)
 }

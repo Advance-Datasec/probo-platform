@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package iam
 
@@ -358,7 +364,7 @@ func (s SessionService) OpenPasswordChildSessionForOrganization(
 				return fmt.Errorf("cannot load profile: %w", err)
 			}
 
-			if profile.State == coredata.ProfileStateInactive {
+			if profile.State == coredata.ProfileStateDeactivated {
 				return NewUserInactiveError(profile.ID)
 			}
 
@@ -463,7 +469,7 @@ func (s SessionService) OpenSAMLChildSessionForOrganization(
 				return fmt.Errorf("cannot load profile: %w", err)
 			}
 
-			if profile.State == coredata.ProfileStateInactive {
+			if profile.State == coredata.ProfileStateDeactivated {
 				return NewUserInactiveError(profile.ID)
 			}
 
@@ -556,7 +562,7 @@ func (s SessionService) OpenOIDCChildSessionForOrganization(
 				return fmt.Errorf("cannot load profile: %w", err)
 			}
 
-			if profile.State == coredata.ProfileStateInactive {
+			if profile.State == coredata.ProfileStateDeactivated {
 				return NewUserInactiveError(profile.ID)
 			}
 
@@ -596,6 +602,49 @@ func (s SessionService) OpenOIDCChildSessionForOrganization(
 	}
 
 	return childSession, membership, nil
+}
+
+func (s SessionService) AssumeEmployeePortalSession(
+	ctx context.Context,
+	sessionID gid.GID,
+	employeePortalID gid.GID,
+	continueURL string,
+) (*coredata.Session, *coredata.Membership, gid.GID, error) {
+	var organizationID gid.GID
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			scope := coredata.NewScopeFromObjectID(employeePortalID)
+
+			portal := &coredata.EmployeePortal{}
+			if err := portal.LoadByID(ctx, conn, scope, employeePortalID); err != nil {
+				if err == coredata.ErrResourceNotFound {
+					return err
+				}
+
+				return fmt.Errorf("cannot load employee portal: %w", err)
+			}
+
+			if !portal.Active {
+				return coredata.ErrResourceNotFound
+			}
+
+			organizationID = portal.OrganizationID
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, nil, gid.Nil, err
+	}
+
+	childSession, membership, err := s.AssumeOrganizationSession(ctx, sessionID, organizationID, continueURL)
+	if err != nil {
+		return nil, nil, organizationID, err
+	}
+
+	return childSession, membership, organizationID, nil
 }
 
 func (s SessionService) AssumeOrganizationSession(
@@ -645,7 +694,7 @@ func (s SessionService) AssumeOrganizationSession(
 				return fmt.Errorf("cannot load profile: %w", err)
 			}
 
-			if profile.State == coredata.ProfileStateInactive {
+			if profile.State == coredata.ProfileStateDeactivated {
 				return NewUserInactiveError(profile.ID)
 			}
 
@@ -670,7 +719,7 @@ func (s SessionService) AssumeOrganizationSession(
 				return fmt.Errorf("cannot load SAML configuration: %w", err)
 			}
 
-			if err == nil {
+			if err == nil && samlConfig.SSOEnabled() {
 				switch samlConfig.EnforcementPolicy {
 				case coredata.SAMLEnforcementPolicyRequired:
 					if rootSession.AuthMethod != coredata.AuthMethodSAML {

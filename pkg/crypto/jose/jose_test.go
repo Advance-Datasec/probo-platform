@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package jose_test
 
@@ -288,6 +294,403 @@ func TestJWTHeader_JSON(t *testing.T) {
 			assert.Equal(t, "RS256", raw["alg"])
 			assert.Equal(t, "JWT", raw["typ"])
 			assert.Equal(t, "my-kid", raw["kid"])
+		},
+	)
+}
+
+func TestValidateRSAPublicKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run(
+		"accepts a 2048-bit modulus",
+		func(t *testing.T) {
+			t.Parallel()
+
+			key := testRSAKey(t)
+
+			assert.NoError(t, jose.ValidateRSAPublicKey(&key.PublicKey))
+		},
+	)
+
+	t.Run(
+		"rejects a modulus below the minimum",
+		func(t *testing.T) {
+			t.Parallel()
+
+			err := jose.ValidateRSAPublicKey(
+				&rsa.PublicKey{
+					N: new(big.Int).Lsh(big.NewInt(1), 1023),
+					E: 65537,
+				},
+			)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "modulus is 1024 bits")
+			assert.Contains(t, err.Error(), "minimum is 2048")
+		},
+	)
+
+	t.Run(
+		"rejects a negative modulus",
+		func(t *testing.T) {
+			t.Parallel()
+
+			err := jose.ValidateRSAPublicKey(
+				&rsa.PublicKey{
+					N: new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 2047)),
+					E: 65537,
+				},
+			)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "modulus must be positive")
+		},
+	)
+
+	t.Run(
+		"rejects an even exponent",
+		func(t *testing.T) {
+			t.Parallel()
+
+			err := jose.ValidateRSAPublicKey(
+				&rsa.PublicKey{
+					N: new(big.Int).Lsh(big.NewInt(1), 2047),
+					E: 2,
+				},
+			)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "exponent must be an odd integer at least 3")
+		},
+	)
+
+	t.Run(
+		"rejects a nil public key",
+		func(t *testing.T) {
+			t.Parallel()
+
+			err := jose.ValidateRSAPublicKey(nil)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "public key is required")
+		},
+	)
+}
+
+func TestRSAPublicKeyFromJWK(t *testing.T) {
+	t.Parallel()
+
+	key := testRSAKey(t)
+	jwk := jose.RSAPublicKeyToJWK(&key.PublicKey, "kid-1")
+
+	t.Run(
+		"round trips rsa public key",
+		func(t *testing.T) {
+			t.Parallel()
+
+			pubKey, err := jose.RSAPublicKeyFromJWK(jwk)
+			require.NoError(t, err)
+			assert.Equal(t, key.N, pubKey.N)
+			assert.Equal(t, key.E, pubKey.E)
+		},
+	)
+
+	t.Run(
+		"rejects unsupported key type",
+		func(t *testing.T) {
+			t.Parallel()
+
+			_, err := jose.RSAPublicKeyFromJWK(jose.JWK{KeyType: "EC"})
+			require.Error(t, err)
+		},
+	)
+
+	t.Run(
+		"rejects invalid rsa exponent",
+		func(t *testing.T) {
+			t.Parallel()
+
+			invalidExponent := jwk
+			invalidExponent.E = base64.RawURLEncoding.EncodeToString(
+				new(big.Int).Lsh(big.NewInt(1), 128).Bytes(),
+			)
+
+			_, err := jose.RSAPublicKeyFromJWK(invalidExponent)
+			require.Error(t, err)
+		},
+	)
+
+	t.Run(
+		"rejects a modulus below the minimum",
+		func(t *testing.T) {
+			t.Parallel()
+
+			weakModulus := jwk
+			weakModulus.N = base64.RawURLEncoding.EncodeToString(
+				new(big.Int).Lsh(big.NewInt(1), 1023).Bytes(),
+			)
+
+			_, err := jose.RSAPublicKeyFromJWK(weakModulus)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "modulus is 1024 bits")
+		},
+	)
+}
+
+func TestPublicKeyFromJWKS(t *testing.T) {
+	t.Parallel()
+
+	key := testRSAKey(t)
+	jwks := &jose.JWKS{
+		Keys: []jose.JWK{
+			jose.RSAPublicKeyToJWK(&key.PublicKey, "kid-1"),
+			jose.RSAPublicKeyToJWK(&key.PublicKey, "kid-2"),
+		},
+	}
+
+	t.Run(
+		"finds matching key",
+		func(t *testing.T) {
+			t.Parallel()
+
+			pubKey, err := jose.PublicKeyFromJWKS(jwks, "kid-2")
+			require.NoError(t, err)
+			assert.Equal(t, key.E, pubKey.E)
+		},
+	)
+
+	t.Run(
+		"errors when kid is missing",
+		func(t *testing.T) {
+			t.Parallel()
+
+			_, err := jose.PublicKeyFromJWKS(jwks, "missing")
+			require.Error(t, err)
+		},
+	)
+
+	t.Run(
+		"errors when jwks is nil",
+		func(t *testing.T) {
+			t.Parallel()
+
+			_, err := jose.PublicKeyFromJWKS(nil, "kid-1")
+			require.Error(t, err)
+		},
+	)
+}
+
+func TestVerifyJWT(t *testing.T) {
+	t.Parallel()
+
+	key := testRSAKey(t)
+
+	t.Run(
+		"verifies signed jwt",
+		func(t *testing.T) {
+			t.Parallel()
+
+			claims := map[string]string{"sub": "test"}
+
+			token, err := jose.SignJWT(key, "kid-1", claims)
+			require.NoError(t, err)
+
+			payload, err := jose.VerifyJWT(token, &key.PublicKey)
+			require.NoError(t, err)
+
+			var decoded map[string]string
+
+			err = json.Unmarshal(payload, &decoded)
+			require.NoError(t, err)
+			assert.Equal(t, "test", decoded["sub"])
+		},
+	)
+
+	t.Run(
+		"rejects malformed jwt",
+		func(t *testing.T) {
+			t.Parallel()
+
+			_, err := jose.VerifyJWT("", &key.PublicKey)
+			require.Error(t, err)
+
+			_, err = jose.VerifyJWT("only-one-part", &key.PublicKey)
+			require.Error(t, err)
+
+			_, err = jose.VerifyJWT("two.parts", &key.PublicKey)
+			require.Error(t, err)
+
+			_, err = jose.VerifyJWT("too.many.parts.here", &key.PublicKey)
+			require.Error(t, err)
+		},
+	)
+
+	t.Run(
+		"rejects tampered payload",
+		func(t *testing.T) {
+			t.Parallel()
+
+			token, err := jose.SignJWT(key, "kid-1", map[string]string{"sub": "test"})
+			require.NoError(t, err)
+
+			parts := strings.Split(token, ".")
+			parts[1] = base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"evil"}`))
+			tampered := strings.Join(parts, ".")
+
+			_, err = jose.VerifyJWT(tampered, &key.PublicKey)
+			require.Error(t, err)
+		},
+	)
+
+	t.Run(
+		"rejects tampered header",
+		func(t *testing.T) {
+			t.Parallel()
+
+			token, err := jose.SignJWT(key, "kid-1", map[string]string{"sub": "test"})
+			require.NoError(t, err)
+
+			parts := strings.Split(token, ".")
+			parts[0] = base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT","kid":"kid-1"}`))
+			tampered := strings.Join(parts, ".")
+
+			_, err = jose.VerifyJWT(tampered, &key.PublicKey)
+			require.Error(t, err)
+		},
+	)
+
+	t.Run(
+		"rejects unsupported algorithm",
+		func(t *testing.T) {
+			t.Parallel()
+
+			cases := []struct {
+				name string
+				alg  string
+			}{
+				{name: "hs256", alg: "HS256"},
+				{name: "none", alg: "none"},
+				{name: "lowercase rs256", alg: "rs256"},
+			}
+
+			for _, tc := range cases {
+				t.Run(
+					tc.name,
+					func(t *testing.T) {
+						t.Parallel()
+
+						header := base64.RawURLEncoding.EncodeToString(
+							[]byte(`{"alg":"` + tc.alg + `","typ":"JWT","kid":"kid-1"}`),
+						)
+						payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"test"}`))
+						token := header + "." + payload + ".c2ln"
+
+						_, err := jose.VerifyJWT(token, &key.PublicKey)
+						require.Error(t, err)
+					},
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"rejects signature from different key",
+		func(t *testing.T) {
+			t.Parallel()
+
+			otherKey := testRSAKey(t)
+
+			token, err := jose.SignJWT(otherKey, "kid-1", map[string]string{"sub": "test"})
+			require.NoError(t, err)
+
+			_, err = jose.VerifyJWT(token, &key.PublicKey)
+			require.Error(t, err)
+		},
+	)
+}
+
+func TestVerifyJWTWithJWKS(t *testing.T) {
+	t.Parallel()
+
+	key := testRSAKey(t)
+	jwks := &jose.JWKS{
+		Keys: []jose.JWK{
+			jose.RSAPublicKeyToJWK(&key.PublicKey, "kid-1"),
+		},
+	}
+
+	t.Run(
+		"verifies signed jwt",
+		func(t *testing.T) {
+			t.Parallel()
+
+			token, err := jose.SignJWT(key, "kid-1", map[string]string{"sub": "test"})
+			require.NoError(t, err)
+
+			payload, err := jose.VerifyJWTWithJWKS(token, jwks)
+			require.NoError(t, err)
+
+			var decoded map[string]string
+
+			err = json.Unmarshal(payload, &decoded)
+			require.NoError(t, err)
+			assert.Equal(t, "test", decoded["sub"])
+		},
+	)
+
+	t.Run(
+		"rejects missing key id",
+		func(t *testing.T) {
+			t.Parallel()
+
+			header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+			payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"test"}`))
+			token := header + "." + payload + ".c2ln"
+
+			_, err := jose.VerifyJWTWithJWKS(token, jwks)
+			require.Error(t, err)
+		},
+	)
+
+	t.Run(
+		"rejects unknown key id",
+		func(t *testing.T) {
+			t.Parallel()
+
+			token, err := jose.SignJWT(key, "unknown-kid", map[string]string{"sub": "test"})
+			require.NoError(t, err)
+
+			_, err = jose.VerifyJWTWithJWKS(token, jwks)
+			require.Error(t, err)
+		},
+	)
+
+	t.Run(
+		"rejects token signed with key outside jwks",
+		func(t *testing.T) {
+			t.Parallel()
+
+			otherKey := testRSAKey(t)
+
+			token, err := jose.SignJWT(otherKey, "kid-1", map[string]string{"sub": "test"})
+			require.NoError(t, err)
+
+			_, err = jose.VerifyJWTWithJWKS(token, jwks)
+			require.Error(t, err)
+		},
+	)
+
+	t.Run(
+		"rejects nil jwks",
+		func(t *testing.T) {
+			t.Parallel()
+
+			token, err := jose.SignJWT(key, "kid-1", map[string]string{"sub": "test"})
+			require.NoError(t, err)
+
+			_, err = jose.VerifyJWTWithJWKS(token, nil)
+			require.Error(t, err)
 		},
 	)
 }

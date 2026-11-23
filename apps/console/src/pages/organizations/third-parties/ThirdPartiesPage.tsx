@@ -1,19 +1,24 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   IconPageTextLine,
@@ -25,6 +30,8 @@ import {
   Thead,
   Tr,
 } from "@probo/ui";
+import { useState, useTransition } from "react";
+import { useTranslation } from "react-i18next";
 import {
   graphql,
   type PreloadedQuery,
@@ -32,10 +39,12 @@ import {
   usePreloadedQuery,
 } from "react-relay";
 import { useNavigate } from "react-router";
+import { useDebounceCallback } from "usehooks-ts";
 
 import type { ThirdPartiesPageFragment$key } from "#/__generated__/core/ThirdPartiesPageFragment.graphql";
 import type { ThirdPartiesPageQuery } from "#/__generated__/core/ThirdPartiesPageQuery.graphql";
 import type { ThirdPartiesPageRefetchQuery } from "#/__generated__/core/ThirdPartiesPageRefetchQuery.graphql";
+import { SearchField } from "#/components/SearchField/SearchField";
 import { SortableTable, SortableTh } from "#/components/SortableTable";
 import { useOrganizationId } from "#/hooks/useOrganizationId";
 
@@ -103,7 +112,7 @@ interface ThirdPartiesPageProps {
 }
 
 export default function ThirdPartiesPage(props: ThirdPartiesPageProps) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const organizationId = useOrganizationId();
   const navigate = useNavigate();
 
@@ -112,6 +121,14 @@ export default function ThirdPartiesPage(props: ThirdPartiesPageProps) {
     ThirdPartiesPageRefetchQuery,
     ThirdPartiesPageFragment$key
   >(thirdPartiesFragment, queryData.organization);
+
+  const [search, setSearch] = useState("");
+  const [, startTransition] = useTransition();
+
+  const filterFor = (query: string) => ({
+    ...ThirdPartiesConnectionFilter,
+    query: query.trim() || null,
+  });
 
   const refetch = ({
     order,
@@ -124,15 +141,30 @@ export default function ThirdPartiesPage(props: ThirdPartiesPageProps) {
           direction: order.direction as "ASC" | "DESC",
           field: order.field as "NAME" | "CREATED_AT" | "UPDATED_AT",
         },
+        filter: filterFor(search),
       },
       { fetchPolicy: "network-only" },
     );
   };
 
+  const refetchSearch = useDebounceCallback((query: string) => {
+    startTransition(() => {
+      pagination.refetch(
+        { filter: filterFor(query) },
+        { fetchPolicy: "network-only" },
+      );
+    });
+  }, 300);
+
+  const handleSearchChange = (value: string) => {
+    setSearch(value);
+    refetchSearch(value);
+  };
+
   const thirdParties = fragmentData.thirdParties?.edges.map(edge => edge.node) ?? [];
   const connectionId = fragmentData.thirdParties.__id;
 
-  usePageTitle(__("Third parties"));
+  usePageTitle(t("nav.allThirdParties"));
 
   const hasAnyAction = thirdParties.some(({ canDelete }) => canDelete);
 
@@ -143,10 +175,8 @@ export default function ThirdPartiesPage(props: ThirdPartiesPageProps) {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={__("Third parties")}
-        description={__(
-          "Third parties are external services and providers that your company uses. Add them to keep track of their risk and compliance status.",
-        )}
+        title={t("nav.allThirdParties")}
+        description={t("thirdPartiesPage.description")}
       >
         <div className="flex gap-2">
           {thirdPartiesDocument && (
@@ -154,10 +184,10 @@ export default function ThirdPartiesPage(props: ThirdPartiesPageProps) {
               variant="secondary"
               icon={IconPageTextLine}
               onClick={() => void navigate(
-                `/organizations/${organizationId}/documents/${thirdPartiesDocument.id}`,
+                `/organizations/${organizationId}/governance/documents/${thirdPartiesDocument.id}`,
               )}
             >
-              {__("Document")}
+              {t("thirdPartiesPage.actions.document")}
             </Button>
           )}
           {fragmentData.canPublishThirdParty && (
@@ -165,11 +195,11 @@ export default function ThirdPartiesPage(props: ThirdPartiesPageProps) {
               organizationId={organizationId}
               defaultApproverIds={defaultApproverIds}
               onPublished={documentId => void navigate(
-                `/organizations/${organizationId}/documents/${documentId}`,
+                `/organizations/${organizationId}/governance/documents/${documentId}`,
               )}
             >
               <Button variant="secondary" icon={IconUpload}>
-                {__("Publish")}
+                {t("thirdPartiesPage.actions.publish")}
               </Button>
             </PublishThirdPartyListDialog>
           )}
@@ -178,18 +208,24 @@ export default function ThirdPartiesPage(props: ThirdPartiesPageProps) {
               connection={connectionId}
               organizationId={organizationId}
             >
-              <Button icon={IconPlusLarge}>{__("Add third party")}</Button>
+              <Button icon={IconPlusLarge}>{t("thirdPartiesPage.actions.add")}</Button>
             </CreateThirdPartyDialog>
           )}
         </div>
       </PageHeader>
+      <SearchField
+        placeholder={t("thirdPartiesPage.searchPlaceholder")}
+        value={search}
+        onValueChange={handleSearchChange}
+        className="w-72"
+      />
       <SortableTable {...pagination} refetch={refetch}>
         <Thead>
           <Tr>
-            <SortableTh field="NAME">{__("Third party")}</SortableTh>
-            <Th>{__("Assessed At")}</Th>
-            <Th>{__("Data Risk")}</Th>
-            <Th>{__("Business Risk")}</Th>
+            <SortableTh field="NAME">{t("thirdPartiesPage.columns.thirdParty")}</SortableTh>
+            <Th>{t("thirdPartiesPage.columns.assessedAt")}</Th>
+            <Th>{t("thirdPartiesPage.columns.dataRisk")}</Th>
+            <Th>{t("thirdPartiesPage.columns.businessRisk")}</Th>
             {hasAnyAction && <Th></Th>}
           </Tr>
         </Thead>

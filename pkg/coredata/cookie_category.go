@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -57,6 +63,7 @@ type (
 		Kind            CookieCategoryKind `db:"kind"`
 		Rank            int                `db:"rank"`
 		GCMConsentTypes []string           `db:"gcm_consent_types"`
+		TCFPurposeIDs   []int              `db:"tcf_purpose_ids"`
 		PostHogConsent  bool               `db:"posthog_consent"`
 		CreatedAt       time.Time          `db:"created_at"`
 		UpdatedAt       time.Time          `db:"updated_at"`
@@ -217,6 +224,7 @@ SELECT
 	kind,
 	rank,
 	gcm_consent_types,
+	tcf_purpose_ids,
 	posthog_consent,
 	created_at,
 	updated_at
@@ -269,6 +277,7 @@ SELECT
 	kind,
 	rank,
 	gcm_consent_types,
+	tcf_purpose_ids,
 	posthog_consent,
 	created_at,
 	updated_at
@@ -296,6 +305,10 @@ WHERE
 
 	*c = categories
 
+	if len(categories) != len(gid.NewSet(categoryIDs...)) {
+		return ErrResourceNotFound
+	}
+
 	return nil
 }
 
@@ -318,6 +331,7 @@ SELECT
 	kind,
 	rank,
 	gcm_consent_types,
+	tcf_purpose_ids,
 	posthog_consent,
 	created_at,
 	updated_at
@@ -403,6 +417,7 @@ INSERT INTO cookie_categories (
 	kind,
 	rank,
 	gcm_consent_types,
+	tcf_purpose_ids,
 	posthog_consent,
 	created_at,
 	updated_at
@@ -417,6 +432,7 @@ INSERT INTO cookie_categories (
 	@kind,
 	@rank,
 	@gcm_consent_types,
+	@tcf_purpose_ids,
 	@posthog_consent,
 	@created_at,
 	@updated_at
@@ -434,6 +450,7 @@ INSERT INTO cookie_categories (
 		"kind":              c.Kind,
 		"rank":              c.Rank,
 		"gcm_consent_types": c.GCMConsentTypes,
+		"tcf_purpose_ids":   c.TCFPurposeIDs,
 		"posthog_consent":   c.PostHogConsent,
 		"created_at":        c.CreatedAt,
 		"updated_at":        c.UpdatedAt,
@@ -465,6 +482,7 @@ SET
 	slug = @slug,
 	description = @description,
 	gcm_consent_types = @gcm_consent_types,
+	tcf_purpose_ids = @tcf_purpose_ids,
 	posthog_consent = @posthog_consent,
 	updated_at = @updated_at
 WHERE
@@ -480,6 +498,7 @@ WHERE
 		"slug":              c.Slug,
 		"description":       c.Description,
 		"gcm_consent_types": c.GCMConsentTypes,
+		"tcf_purpose_ids":   c.TCFPurposeIDs,
 		"posthog_consent":   c.PostHogConsent,
 		"updated_at":        c.UpdatedAt,
 	}
@@ -631,6 +650,7 @@ SELECT
 	kind,
 	rank,
 	gcm_consent_types,
+	tcf_purpose_ids,
 	posthog_consent,
 	created_at,
 	updated_at

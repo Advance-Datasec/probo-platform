@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package mcp_test
 
@@ -35,10 +41,10 @@ func TestMCP_DPIA_CRUD(t *testing.T) {
 	var addResult struct {
 		DataProtectionImpactAssessment struct {
 			ID string `json:"id"`
-		} `json:"dataProtectionImpactAssessment"`
+		} `json:"data_protection_impact_assessment"`
 	}
 	mc.CallToolInto("addDataProtectionImpactAssessment", map[string]any{
-		"processingActivityId": paID,
+		"processing_activity_id": paID,
 	}, &addResult)
 	require.NotEmpty(t, addResult.DataProtectionImpactAssessment.ID)
 
@@ -46,7 +52,7 @@ func TestMCP_DPIA_CRUD(t *testing.T) {
 	var getResult struct {
 		DataProtectionImpactAssessment struct {
 			ID string `json:"id"`
-		} `json:"dataProtectionImpactAssessment"`
+		} `json:"data_protection_impact_assessment"`
 	}
 	mc.CallToolInto("getDataProtectionImpactAssessment", map[string]any{
 		"id": addResult.DataProtectionImpactAssessment.ID,
@@ -58,7 +64,7 @@ func TestMCP_DPIA_CRUD(t *testing.T) {
 		DataProtectionImpactAssessment struct {
 			ID          string `json:"id"`
 			Description string `json:"description"`
-		} `json:"dataProtectionImpactAssessment"`
+		} `json:"data_protection_impact_assessment"`
 	}
 	mc.CallToolInto("updateDataProtectionImpactAssessment", map[string]any{
 		"id":          addResult.DataProtectionImpactAssessment.ID,
@@ -70,16 +76,16 @@ func TestMCP_DPIA_CRUD(t *testing.T) {
 	var listResult struct {
 		DataProtectionImpactAssessments []struct {
 			ID string `json:"id"`
-		} `json:"dataProtectionImpactAssessments"`
+		} `json:"data_protection_impact_assessments"`
 	}
 	mc.CallToolInto("listDataProtectionImpactAssessments", map[string]any{
-		"organizationId": orgID,
+		"organization_id": orgID,
 	}, &listResult)
 	assert.NotEmpty(t, listResult.DataProtectionImpactAssessments)
 
 	// Delete
 	var deleteResult struct {
-		DeletedDataProtectionImpactAssessmentID string `json:"deletedDataProtectionImpactAssessmentId"`
+		DeletedDataProtectionImpactAssessmentID string `json:"deleted_data_protection_impact_assessment_id"`
 	}
 	mc.CallToolInto("deleteDataProtectionImpactAssessment", map[string]any{
 		"id": addResult.DataProtectionImpactAssessment.ID,
@@ -99,10 +105,10 @@ func TestMCP_TIA_CRUD(t *testing.T) {
 	var addResult struct {
 		TransferImpactAssessment struct {
 			ID string `json:"id"`
-		} `json:"transferImpactAssessment"`
+		} `json:"transfer_impact_assessment"`
 	}
 	mc.CallToolInto("addTransferImpactAssessment", map[string]any{
-		"processingActivityId": paID,
+		"processing_activity_id": paID,
 	}, &addResult)
 	require.NotEmpty(t, addResult.TransferImpactAssessment.ID)
 
@@ -110,7 +116,7 @@ func TestMCP_TIA_CRUD(t *testing.T) {
 	var getResult struct {
 		TransferImpactAssessment struct {
 			ID string `json:"id"`
-		} `json:"transferImpactAssessment"`
+		} `json:"transfer_impact_assessment"`
 	}
 	mc.CallToolInto("getTransferImpactAssessment", map[string]any{
 		"id": addResult.TransferImpactAssessment.ID,
@@ -121,12 +127,12 @@ func TestMCP_TIA_CRUD(t *testing.T) {
 	var updateResult struct {
 		TransferImpactAssessment struct {
 			ID           string `json:"id"`
-			DataSubjects string `json:"dataSubjects"`
-		} `json:"transferImpactAssessment"`
+			DataSubjects string `json:"data_subjects"`
+		} `json:"transfer_impact_assessment"`
 	}
 	mc.CallToolInto("updateTransferImpactAssessment", map[string]any{
-		"id":           addResult.TransferImpactAssessment.ID,
-		"dataSubjects": "EU Residents",
+		"id":            addResult.TransferImpactAssessment.ID,
+		"data_subjects": "EU Residents",
 	}, &updateResult)
 	assert.Equal(t, "EU Residents", updateResult.TransferImpactAssessment.DataSubjects)
 
@@ -134,16 +140,16 @@ func TestMCP_TIA_CRUD(t *testing.T) {
 	var listResult struct {
 		TransferImpactAssessments []struct {
 			ID string `json:"id"`
-		} `json:"transferImpactAssessments"`
+		} `json:"transfer_impact_assessments"`
 	}
 	mc.CallToolInto("listTransferImpactAssessments", map[string]any{
-		"organizationId": orgID,
+		"organization_id": orgID,
 	}, &listResult)
 	assert.NotEmpty(t, listResult.TransferImpactAssessments)
 
 	// Delete
 	var deleteResult struct {
-		DeletedTransferImpactAssessmentID string `json:"deletedTransferImpactAssessmentId"`
+		DeletedTransferImpactAssessmentID string `json:"deleted_transfer_impact_assessment_id"`
 	}
 	mc.CallToolInto("deleteTransferImpactAssessment", map[string]any{
 		"id": addResult.TransferImpactAssessment.ID,

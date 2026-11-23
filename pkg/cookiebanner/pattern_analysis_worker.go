@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package cookiebanner
 
@@ -38,8 +44,9 @@ const (
 	// because it appears inside UUIDs, which splitTokens preserves as a
 	// single token; a value like "done:ecdd43d7-0193-4d24-b6ed-..."
 	// must split on ":" so the trailing UUID is isolated and collapsed
-	// to a wildcard rather than shredded into fixed hex anchors.
-	primarySeparators = "_:."
+	// to a wildcard rather than shredded into fixed hex anchors. `/`
+	// does the same for path-shaped keys (clientSourceId/<id>/<uuid>).
+	primarySeparators = "_:./"
 )
 
 // durationUnits mirrors the snap table from cookie-utils.ts. The same
@@ -177,35 +184,23 @@ func (h *patternAnalysisHandler) Process(ctx context.Context, banner coredata.Co
 					maxAge = &v
 				}
 
-				source := bestSource(group)
-
-				// Carry over the resolved org ThirdParty (and its
-				// description) from the merged exacts when they agree,
-				// so the glob is seeded rather than re-mapped from
-				// scratch. Mapping is still re-armed below so the glob
-				// derives its own catalog row; the pre-set third party
-				// lets the mapping worker skip the expensive org
-				// resolution. Only the insert path consumes these: an
-				// existing glob is reloaded and keeps its own mapping.
-				inheritedThirdPartyID, inheritedDescription := inheritedMapping(group)
+				source, provenance := bestSource(group)
 
 				now := time.Now()
 				globPattern := &coredata.TrackerPattern{
-					ID:                 gid.New(banner.ID.TenantID(), coredata.TrackerPatternEntityType),
-					OrganizationID:     group[0].OrganizationID,
-					CookieBannerID:     banner.ID,
-					CookieCategoryID:   key.categoryID,
-					TrackerType:        key.trackerType,
-					Pattern:            key.template,
-					MatchType:          coredata.TrackerPatternMatchTypeGlob,
-					DisplayName:        key.template,
-					MaxAgeSeconds:      maxAge,
-					ThirdPartyID:       inheritedThirdPartyID,
-					Description:        inheritedDescription,
-					Source:             source,
-					MappingRequestedAt: &now,
-					CreatedAt:          now,
-					UpdatedAt:          now,
+					ID:                   gid.New(banner.ID.TenantID(), coredata.TrackerPatternEntityType),
+					OrganizationID:       group[0].OrganizationID,
+					CookieBannerID:       banner.ID,
+					CookieCategoryID:     key.categoryID,
+					TrackerType:          key.trackerType,
+					Pattern:              key.template,
+					MatchType:            coredata.TrackerPatternMatchTypeGlob,
+					MaxAgeSeconds:        maxAge,
+					Source:               source,
+					SourceCookieBannerID: provenance,
+					MappingRequestedAt:   &now,
+					CreatedAt:            now,
+					UpdatedAt:            now,
 				}
 
 				inserted, err := globPattern.InsertIfNotExists(ctx, tx, scope)
@@ -232,6 +227,7 @@ func (h *patternAnalysisHandler) Process(ctx context.Context, banner coredata.Co
 
 					if shouldPromoteSource(globPattern.Source, source) {
 						globPattern.Source = source
+						globPattern.SourceCookieBannerID = provenance
 						globPattern.UpdatedAt = now
 
 						if err := globPattern.Update(ctx, tx, scope); err != nil {
@@ -254,6 +250,10 @@ func (h *patternAnalysisHandler) Process(ctx context.Context, banner coredata.Co
 						return fmt.Errorf("cannot relink detected trackers from pattern %q: %w", exactPattern.Pattern, err)
 					}
 
+					if err := coredata.AddDailyPatternHits(ctx, tx, scope, exactPattern.ID, globPattern.ID); err != nil {
+						return fmt.Errorf("cannot add daily hits from pattern %q: %w", exactPattern.Pattern, err)
+					}
+
 					if err := exactPattern.Delete(ctx, tx, scope); err != nil {
 						return fmt.Errorf("cannot delete orphaned exact pattern %q: %w", exactPattern.Pattern, err)
 					}
@@ -272,11 +272,6 @@ func (h *patternAnalysisHandler) Process(ctx context.Context, banner coredata.Co
 			adopted, err := h.adoptUncategorisedPatterns(ctx, tx, scope, banner)
 			if err != nil {
 				return fmt.Errorf("cannot adopt uncategorised patterns: %w", err)
-			}
-
-			var patterns coredata.TrackerPatterns
-			if err := patterns.RefreshLastMatchedAtByCookieBannerID(ctx, tx, scope, banner.ID); err != nil {
-				return fmt.Errorf("cannot refresh last_matched_at: %w", err)
 			}
 
 			// Merging exact patterns into a glob in the same category
@@ -489,6 +484,14 @@ func templateCandidates(name string) []string {
 
 	for i, ch := range name {
 		if ch == '_' || ch == '-' {
+			// Only a final segment looksVariable already accepts. A
+			// short project id (ABC123) is stable on one site, and a
+			// tail that still contains a separator is another name.
+			suffix := name[i+1:]
+			if suffix == "" || strings.ContainsAny(suffix, primarySeparators+"-") || !looksVariable(suffix) {
+				continue
+			}
+
 			tmpl := name[:i+1] + "*"
 			if templateHasFixedAnchor(tmpl) {
 				candidates = append(candidates, tmpl)
@@ -499,6 +502,10 @@ func templateCandidates(name string) []string {
 	tokens, seps := splitTokens(name)
 	if len(tokens) >= 3 && len(seps) > 0 {
 		for pos := 1; pos < len(tokens)-1; pos++ {
+			if !looksVariable(tokens[pos]) {
+				continue
+			}
+
 			left := joinTokens(tokens[:pos], seps[:pos-1])
 			right := joinTokens(tokens[pos+1:], seps[pos+1:])
 
@@ -599,7 +606,7 @@ func splitTokens(name string) ([]string, []byte) {
 		if isUUIDShape(part) || !strings.Contains(part, "-") {
 			tokens = append(tokens, part)
 		} else {
-			for j, sub := range strings.Split(part, "-") {
+			for j, sub := range collapseHyphenUUIDRuns(strings.Split(part, "-")) {
 				if j > 0 {
 					seps = append(seps, '-')
 				}
@@ -614,6 +621,53 @@ func splitTokens(name string) ([]string, []byte) {
 	}
 
 	return tokens, seps
+}
+
+// collapseHyphenUUIDRuns joins a consecutive 8-4-4-4-12 hex run back
+// into one token. Hyphen is both a name delimiter and the UUID
+// delimiter, so splitTokens cannot isolate an embedded UUID the way
+// "_" / ":" / "." / "/" can. Without this, community-form-<uuid>-creation
+// shreds into community-form-*-40a2-48c8-abfa-*-creation because the
+// 4-hex groups stay under looksVariable's length-8 bar.
+func collapseHyphenUUIDRuns(parts []string) []string {
+	if len(parts) < 5 {
+		return parts
+	}
+
+	out := make([]string, 0, len(parts))
+
+	for i := 0; i < len(parts); {
+		if i+4 < len(parts) &&
+			isHexLen(parts[i], 8) &&
+			isHexLen(parts[i+1], 4) &&
+			isHexLen(parts[i+2], 4) &&
+			isHexLen(parts[i+3], 4) &&
+			isHexLen(parts[i+4], 12) {
+			out = append(out, strings.Join(parts[i:i+5], "-"))
+			i += 5
+
+			continue
+		}
+
+		out = append(out, parts[i])
+		i++
+	}
+
+	return out
+}
+
+func isHexLen(s string, n int) bool {
+	if len(s) != n {
+		return false
+	}
+
+	for _, ch := range s {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') && (ch < 'A' || ch > 'F') {
+			return false
+		}
+	}
+
+	return true
 }
 
 // splitOnAny splits s on every byte found in separators, returning the
@@ -704,15 +758,14 @@ func globMatch(pattern, name string) bool {
 }
 
 // sourceRank converts a CookieSource into a comparable rank that
-// reflects signal strength: SCRIPT > HTTP > EXTENSION > PRE_EXISTING.
-// SCRIPT is a real page tracker observed being written by page JS;
-// HTTP is a real server-set cookie (a Set-Cookie response header),
-// which is page evidence just like SCRIPT and so must outrank both
-// browser-extension state and the PRE_EXISTING catch-all — otherwise a
-// cookie first enumerated as PRE_EXISTING and later re-observed only
-// via Set-Cookie would stay PRE_EXISTING and remain agent-skipped.
-// EXTENSION is high-confidence extension state; PRE_EXISTING (and nil)
-// is the low-signal catch-all.
+// reflects signal strength: SCRIPT > EXTENSION > HTTP > PRE_EXISTING.
+// SCRIPT is a real page tracker observed being written by page JS.
+// EXTENSION is a confirmed page-world extension write; HTTP must sit
+// below it because cookieStore echoes those writes as HTTP and would
+// otherwise replace a confirmed extension with that echo. HTTP is still
+// stronger than PRE_EXISTING so a cookie first enumerated on load and
+// later seen via Set-Cookie can advance. PRE_EXISTING (and nil) is the
+// low-signal catch-all.
 func sourceRank(s *coredata.CookieSource) int {
 	if s == nil {
 		return 0
@@ -721,9 +774,9 @@ func sourceRank(s *coredata.CookieSource) int {
 	switch *s {
 	case coredata.CookieSourceScript:
 		return 3
-	case coredata.CookieSourceHTTP:
-		return 2
 	case coredata.CookieSourceExtension:
+		return 2
+	case coredata.CookieSourceHTTP:
 		return 1
 	default:
 		return 0
@@ -731,95 +784,39 @@ func sourceRank(s *coredata.CookieSource) int {
 }
 
 // shouldPromoteSource reports whether candidate represents a stronger
-// signal than existing under the SCRIPT > EXTENSION > PRE_EXISTING
-// precedence used across the cookie-banner pipeline. Equal ranks do
-// not promote so we avoid pointless writes.
+// signal than existing under the SCRIPT > EXTENSION > HTTP >
+// PRE_EXISTING precedence used across the cookie-banner pipeline. Equal
+// ranks do not promote so we avoid pointless writes.
 func shouldPromoteSource(existing, candidate *coredata.CookieSource) bool {
 	return sourceRank(candidate) > sourceRank(existing)
 }
 
 // bestSource rolls up the source values of a group of exact patterns
-// being merged into a single glob. Precedence is SCRIPT > HTTP >
-// EXTENSION > PRE_EXISTING, mirroring the asymmetric signal strength of
-// each bucket: SCRIPT is high-confidence page evidence (a real page
-// tracker), HTTP is a real server-set cookie (a Set-Cookie response
-// header) and is page evidence too, EXTENSION is high-confidence
-// extension state, and PRE_EXISTING is the catch-all that may include
-// extension state injected before SDK load. nil collapses into
-// PRE_EXISTING.
-func bestSource(patterns []*coredata.TrackerPattern) *coredata.CookieSource {
-	var (
-		hasHTTP      bool
-		hasExtension bool
-	)
+// being merged into a single glob. Precedence is SCRIPT > EXTENSION >
+// HTTP > PRE_EXISTING, mirroring sourceRank: SCRIPT is high-confidence
+// page evidence, EXTENSION is a confirmed extension write, HTTP is a
+// Set-Cookie or cookieStore echo (and must not outrank EXTENSION), and
+// PRE_EXISTING is the catch-all. nil collapses into PRE_EXISTING.
+func bestSource(patterns []*coredata.TrackerPattern) (*coredata.CookieSource, *gid.GID) {
+	var best *coredata.TrackerPattern
 
 	for _, p := range patterns {
 		if p.Source == nil {
 			continue
 		}
 
-		switch *p.Source {
-		case coredata.CookieSourceScript:
-			return p.Source
-		case coredata.CookieSourceHTTP:
-			hasHTTP = true
-		case coredata.CookieSourceExtension:
-			hasExtension = true
+		if best == nil || sourceRank(p.Source) > sourceRank(best.Source) {
+			best = p
 		}
 	}
 
-	switch {
-	case hasHTTP:
-		src := coredata.CookieSourceHTTP
-		return &src
-	case hasExtension:
-		src := coredata.CookieSourceExtension
-		return &src
-	default:
+	if best == nil {
 		src := coredata.CookieSourcePreExisting
-		return &src
-	}
-}
 
-// inheritedMapping rolls up the resolved org ThirdParty of a group of
-// exact patterns being merged into a glob, so the glob can be seeded
-// instead of re-mapped from scratch. It returns a third party only when
-// every resolved member agrees on a single id: a conflicting group (or
-// one with no resolved member) returns nil, leaving the glob blank for a
-// fresh mapping pass. When a third party is chosen, the description of
-// the first member carrying that same id with non-empty text is returned
-// too; the catalog link (common_tracker_pattern_id) is deliberately not
-// inherited, since it is keyed on the exact pattern string rather than
-// the glob template and the mapping worker derives the right row itself.
-func inheritedMapping(patterns []*coredata.TrackerPattern) (*gid.GID, string) {
-	var thirdPartyID *gid.GID
-
-	for _, p := range patterns {
-		if p.ThirdPartyID == nil {
-			continue
-		}
-
-		if thirdPartyID == nil {
-			thirdPartyID = p.ThirdPartyID
-			continue
-		}
-
-		if *thirdPartyID != *p.ThirdPartyID {
-			return nil, ""
-		}
+		return &src, nil
 	}
 
-	if thirdPartyID == nil {
-		return nil, ""
-	}
-
-	for _, p := range patterns {
-		if p.ThirdPartyID != nil && *p.ThirdPartyID == *thirdPartyID && p.Description != "" {
-			return thirdPartyID, p.Description
-		}
-	}
-
-	return thirdPartyID, ""
+	return best.Source, best.SourceCookieBannerID
 }
 
 func (h *patternAnalysisHandler) adoptUncategorisedPatterns(
@@ -924,6 +921,7 @@ func (h *patternAnalysisHandler) adoptUncategorisedPatterns(
 		// EXTENSION → SCRIPT) without redundant writes.
 		if shouldPromoteSource(match.Source, ep.Source) {
 			match.Source = ep.Source
+			match.SourceCookieBannerID = ep.SourceCookieBannerID
 			match.UpdatedAt = time.Now()
 
 			if err := match.Update(ctx, tx, scope); err != nil {
@@ -936,6 +934,10 @@ func (h *patternAnalysisHandler) adoptUncategorisedPatterns(
 			if err := match.SetMappingRequested(ctx, tx); err != nil {
 				return false, fmt.Errorf("cannot request mapping after source promotion on glob pattern %q: %w", match.Pattern, err)
 			}
+		}
+
+		if err := coredata.AddDailyPatternHits(ctx, tx, scope, ep.ID, match.ID); err != nil {
+			return false, fmt.Errorf("cannot add daily hits from pattern %q: %w", ep.Pattern, err)
 		}
 
 		if err := ep.Delete(ctx, tx, scope); err != nil {

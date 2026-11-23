@@ -1,18 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
-
-type Translator = (s: string) => string;
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 // ISO 3166-1 alpha-2 country codes and supported regions.
 export const countries = [
@@ -46,271 +50,31 @@ export const countries = [
 
 export type CountryCode = typeof countries[number];
 
-const countryNames: Record<CountryCode, (t: Translator) => string> = {
-    "GLOBAL": (__) => __("Global"),
-    "AD": (__) => __("Andorra"),
-    "AE": (__) => __("United Arab Emirates"),
-    "AF": (__) => __("Afghanistan"),
-    "AG": (__) => __("Antigua and Barbuda"),
-    "AI": (__) => __("Anguilla"),
-    "AL": (__) => __("Albania"),
-    "AM": (__) => __("Armenia"),
-    "AO": (__) => __("Angola"),
-    "AQ": (__) => __("Antarctica"),
-    "AR": (__) => __("Argentina"),
-    "AS": (__) => __("American Samoa"),
-    "AT": (__) => __("Austria"),
-    "AU": (__) => __("Australia"),
-    "AW": (__) => __("Aruba"),
-    "AX": (__) => __("Åland Islands"),
-    "AZ": (__) => __("Azerbaijan"),
-    "BA": (__) => __("Bosnia and Herzegovina"),
-    "BB": (__) => __("Barbados"),
-    "BD": (__) => __("Bangladesh"),
-    "BE": (__) => __("Belgium"),
-    "BF": (__) => __("Burkina Faso"),
-    "BG": (__) => __("Bulgaria"),
-    "BH": (__) => __("Bahrain"),
-    "BI": (__) => __("Burundi"),
-    "BJ": (__) => __("Benin"),
-    "BL": (__) => __("Saint Barthélemy"),
-    "BM": (__) => __("Bermuda"),
-    "BN": (__) => __("Brunei"),
-    "BO": (__) => __("Bolivia"),
-    "BQ": (__) => __("Bonaire, Sint Eustatius and Saba"),
-    "BR": (__) => __("Brazil"),
-    "BS": (__) => __("Bahamas"),
-    "BT": (__) => __("Bhutan"),
-    "BV": (__) => __("Bouvet Island"),
-    "BW": (__) => __("Botswana"),
-    "BY": (__) => __("Belarus"),
-    "BZ": (__) => __("Belize"),
-    "CA": (__) => __("Canada"),
-    "CC": (__) => __("Cocos (Keeling) Islands"),
-    "CD": (__) => __("Congo (DRC)"),
-    "CF": (__) => __("Central African Republic"),
-    "CG": (__) => __("Congo (Republic)"),
-    "CH": (__) => __("Switzerland"),
-    "CI": (__) => __("Côte d'Ivoire"),
-    "CK": (__) => __("Cook Islands"),
-    "CL": (__) => __("Chile"),
-    "CM": (__) => __("Cameroon"),
-    "CN": (__) => __("China"),
-    "CO": (__) => __("Colombia"),
-    "CR": (__) => __("Costa Rica"),
-    "CU": (__) => __("Cuba"),
-    "CV": (__) => __("Cape Verde"),
-    "CW": (__) => __("Curaçao"),
-    "CX": (__) => __("Christmas Island"),
-    "CY": (__) => __("Cyprus"),
-    "CZ": (__) => __("Czechia"),
-    "DE": (__) => __("Germany"),
-    "DJ": (__) => __("Djibouti"),
-    "DK": (__) => __("Denmark"),
-    "DM": (__) => __("Dominica"),
-    "DO": (__) => __("Dominican Republic"),
-    "DZ": (__) => __("Algeria"),
-    "EC": (__) => __("Ecuador"),
-    "EE": (__) => __("Estonia"),
-    "EG": (__) => __("Egypt"),
-    "EH": (__) => __("Western Sahara"),
-    "ER": (__) => __("Eritrea"),
-    "ES": (__) => __("Spain"),
-    "ET": (__) => __("Ethiopia"),
-    "EU": (__) => __("EU"),
-    "FI": (__) => __("Finland"),
-    "FJ": (__) => __("Fiji"),
-    "FK": (__) => __("Falkland Islands"),
-    "FM": (__) => __("Micronesia"),
-    "FO": (__) => __("Faroe Islands"),
-    "FR": (__) => __("France"),
-    "GA": (__) => __("Gabon"),
-    "GB": (__) => __("United Kingdom"),
-    "GD": (__) => __("Grenada"),
-    "GE": (__) => __("Georgia"),
-    "GF": (__) => __("French Guiana"),
-    "GG": (__) => __("Guernsey"),
-    "GH": (__) => __("Ghana"),
-    "GI": (__) => __("Gibraltar"),
-    "GL": (__) => __("Greenland"),
-    "GM": (__) => __("Gambia"),
-    "GN": (__) => __("Guinea"),
-    "GP": (__) => __("Guadeloupe"),
-    "GQ": (__) => __("Equatorial Guinea"),
-    "GR": (__) => __("Greece"),
-    "GT": (__) => __("Guatemala"),
-    "GU": (__) => __("Guam"),
-    "GW": (__) => __("Guinea-Bissau"),
-    "GY": (__) => __("Guyana"),
-    "HK": (__) => __("Hong Kong"),
-    "HM": (__) => __("Heard Island and McDonald Islands"),
-    "HN": (__) => __("Honduras"),
-    "HR": (__) => __("Croatia"),
-    "HT": (__) => __("Haiti"),
-    "HU": (__) => __("Hungary"),
-    "ID": (__) => __("Indonesia"),
-    "IE": (__) => __("Ireland"),
-    "IL": (__) => __("Israel"),
-    "IM": (__) => __("Isle of Man"),
-    "IN": (__) => __("India"),
-    "IO": (__) => __("British Indian Ocean Territory"),
-    "IQ": (__) => __("Iraq"),
-    "IR": (__) => __("Iran"),
-    "IS": (__) => __("Iceland"),
-    "IT": (__) => __("Italy"),
-    "JE": (__) => __("Jersey"),
-    "JM": (__) => __("Jamaica"),
-    "JO": (__) => __("Jordan"),
-    "JP": (__) => __("Japan"),
-    "KE": (__) => __("Kenya"),
-    "KG": (__) => __("Kyrgyzstan"),
-    "KH": (__) => __("Cambodia"),
-    "KI": (__) => __("Kiribati"),
-    "KM": (__) => __("Comoros"),
-    "KN": (__) => __("Saint Kitts and Nevis"),
-    "KP": (__) => __("North Korea"),
-    "KR": (__) => __("South Korea"),
-    "KW": (__) => __("Kuwait"),
-    "KY": (__) => __("Cayman Islands"),
-    "KZ": (__) => __("Kazakhstan"),
-    "LA": (__) => __("Laos"),
-    "LB": (__) => __("Lebanon"),
-    "LC": (__) => __("Saint Lucia"),
-    "LI": (__) => __("Liechtenstein"),
-    "LK": (__) => __("Sri Lanka"),
-    "LR": (__) => __("Liberia"),
-    "LS": (__) => __("Lesotho"),
-    "LT": (__) => __("Lithuania"),
-    "LU": (__) => __("Luxembourg"),
-    "LV": (__) => __("Latvia"),
-    "LY": (__) => __("Libya"),
-    "MA": (__) => __("Morocco"),
-    "MC": (__) => __("Monaco"),
-    "MD": (__) => __("Moldova"),
-    "ME": (__) => __("Montenegro"),
-    "MF": (__) => __("Saint Martin"),
-    "MG": (__) => __("Madagascar"),
-    "MH": (__) => __("Marshall Islands"),
-    "MK": (__) => __("North Macedonia"),
-    "ML": (__) => __("Mali"),
-    "MM": (__) => __("Myanmar"),
-    "MN": (__) => __("Mongolia"),
-    "MO": (__) => __("Macau"),
-    "MP": (__) => __("Northern Mariana Islands"),
-    "MQ": (__) => __("Martinique"),
-    "MR": (__) => __("Mauritania"),
-    "MS": (__) => __("Montserrat"),
-    "MT": (__) => __("Malta"),
-    "MU": (__) => __("Mauritius"),
-    "MV": (__) => __("Maldives"),
-    "MW": (__) => __("Malawi"),
-    "MX": (__) => __("Mexico"),
-    "MY": (__) => __("Malaysia"),
-    "MZ": (__) => __("Mozambique"),
-    "NA": (__) => __("Namibia"),
-    "NC": (__) => __("New Caledonia"),
-    "NE": (__) => __("Niger"),
-    "NF": (__) => __("Norfolk Island"),
-    "NG": (__) => __("Nigeria"),
-    "NI": (__) => __("Nicaragua"),
-    "NL": (__) => __("Netherlands"),
-    "NO": (__) => __("Norway"),
-    "NP": (__) => __("Nepal"),
-    "NR": (__) => __("Nauru"),
-    "NU": (__) => __("Niue"),
-    "NZ": (__) => __("New Zealand"),
-    "OM": (__) => __("Oman"),
-    "PA": (__) => __("Panama"),
-    "PE": (__) => __("Peru"),
-    "PF": (__) => __("French Polynesia"),
-    "PG": (__) => __("Papua New Guinea"),
-    "PH": (__) => __("Philippines"),
-    "PK": (__) => __("Pakistan"),
-    "PL": (__) => __("Poland"),
-    "PM": (__) => __("Saint Pierre and Miquelon"),
-    "PN": (__) => __("Pitcairn"),
-    "PR": (__) => __("Puerto Rico"),
-    "PS": (__) => __("Palestine"),
-    "PT": (__) => __("Portugal"),
-    "PW": (__) => __("Palau"),
-    "PY": (__) => __("Paraguay"),
-    "QA": (__) => __("Qatar"),
-    "RE": (__) => __("Réunion"),
-    "RO": (__) => __("Romania"),
-    "RS": (__) => __("Serbia"),
-    "RU": (__) => __("Russia"),
-    "RW": (__) => __("Rwanda"),
-    "SA": (__) => __("Saudi Arabia"),
-    "SB": (__) => __("Solomon Islands"),
-    "SC": (__) => __("Seychelles"),
-    "SD": (__) => __("Sudan"),
-    "SE": (__) => __("Sweden"),
-    "SG": (__) => __("Singapore"),
-    "SH": (__) => __("Saint Helena"),
-    "SI": (__) => __("Slovenia"),
-    "SJ": (__) => __("Svalbard and Jan Mayen"),
-    "SK": (__) => __("Slovakia"),
-    "SL": (__) => __("Sierra Leone"),
-    "SM": (__) => __("San Marino"),
-    "SN": (__) => __("Senegal"),
-    "SO": (__) => __("Somalia"),
-    "SR": (__) => __("Suriname"),
-    "SS": (__) => __("South Sudan"),
-    "ST": (__) => __("São Tomé and Príncipe"),
-    "SV": (__) => __("El Salvador"),
-    "SX": (__) => __("Sint Maarten"),
-    "SY": (__) => __("Syria"),
-    "SZ": (__) => __("Eswatini"),
-    "TC": (__) => __("Turks and Caicos Islands"),
-    "TD": (__) => __("Chad"),
-    "TF": (__) => __("French Southern Territories"),
-    "TG": (__) => __("Togo"),
-    "TH": (__) => __("Thailand"),
-    "TJ": (__) => __("Tajikistan"),
-    "TK": (__) => __("Tokelau"),
-    "TL": (__) => __("Timor-Leste"),
-    "TM": (__) => __("Turkmenistan"),
-    "TN": (__) => __("Tunisia"),
-    "TO": (__) => __("Tonga"),
-    "TR": (__) => __("Turkey"),
-    "TT": (__) => __("Trinidad and Tobago"),
-    "TV": (__) => __("Tuvalu"),
-    "TW": (__) => __("Taiwan"),
-    "TZ": (__) => __("Tanzania"),
-    "UA": (__) => __("Ukraine"),
-    "UG": (__) => __("Uganda"),
-    "UM": (__) => __("United States Minor Outlying Islands"),
-    "US": (__) => __("USA"),
-    "UY": (__) => __("Uruguay"),
-    "UZ": (__) => __("Uzbekistan"),
-    "VA": (__) => __("Vatican City"),
-    "VC": (__) => __("Saint Vincent and the Grenadines"),
-    "VE": (__) => __("Venezuela"),
-    "VG": (__) => __("Virgin Islands (British)"),
-    "VI": (__) => __("Virgin Islands (U.S.)"),
-    "VN": (__) => __("Vietnam"),
-    "VU": (__) => __("Vanuatu"),
-    "WF": (__) => __("Wallis and Futuna"),
-    "WS": (__) => __("Samoa"),
-    "YE": (__) => __("Yemen"),
-    "YT": (__) => __("Mayotte"),
-    "ZA": (__) => __("South Africa"),
-    "ZM": (__) => __("Zambia"),
-    "ZW": (__) => __("Zimbabwe"),
+// Pseudo-regions accepted by our CountryCode enum but not by Intl.DisplayNames.
+const pseudoRegionNames: Partial<Record<CountryCode, string>> = {
+    GLOBAL: "Global",
 };
 
-export function getCountryName(__: Translator, code: CountryCode): string {
-    const translator = countryNames[code];
-    return translator ? translator(__) : code;
+export function getCountryName(language: string, code: CountryCode): string {
+    const pseudoName = pseudoRegionNames[code];
+    if (pseudoName) {
+        return pseudoName;
+    }
+
+    try {
+        return new Intl.DisplayNames(language, { type: "region" }).of(code) ?? code;
+    } catch {
+        return code;
+    }
 }
 
-export function getCountryOptions(__: Translator) {
+export function getCountryOptions(lang: string) {
     return countries.map(code => ({
         value: code,
-        label: getCountryName(__, code),
+        label: getCountryName(lang, code),
     }));
 }
 
-export function getCountryLabel(__: Translator, code: CountryCode): string {
-    return getCountryName(__, code);
+export function getCountryLabel(lang: string, code: CountryCode): string {
+    return getCountryName(lang, code);
 }

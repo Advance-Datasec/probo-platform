@@ -17,13 +17,13 @@ Configured in `apps/console/src/environments.ts`. Each has its own store with 1-
 
 ## Relay compiler
 
-Config lives in `relay.config.json` at the repo root with three projects (`core`, `iam`, `trust`) mapped to different source directories and schemas. Each project uses `schema` pointing to `base.graphql` and `schemaExtensions` pointing to the `graphql/` directory containing the per-entity schema files. Generated files go into `__generated__/` directories.
+Config lives in `relay.config.json` at the repo root with three projects (`core`, `iam`, `complianceportal`) mapped to different source directories and schemas. Each project uses `schema` pointing to `base.graphql` and `schemaExtensions` pointing to the `graphql/` directory containing the per-entity schema files. Generated files go into `__generated__/` directories.
 
 ```sh
 make relay  # merge split schemas + clean + compile
 ```
 
-Custom scalar mappings: `Datetime → string`, `GID → string`, `CursorKey → string`, `Duration → string`, `BigInt → number`, `EmailAddr → string`.
+Custom scalar mappings: `Datetime → string`, `GID → string`, `CursorKey → string`, `TimeSpan → string`, `BigInt → number`, `EmailAddr → string`.
 
 ## Naming operations and fragments
 
@@ -261,6 +261,52 @@ const logoUrl = organization.logo?.downloadUrl ?? undefined; // logo stays optio
 
 Do **not** reach for `@required` to silence nullability on fields that are *genuinely* optional (an avatar, a logo, a description that may be empty). Those keep their nullable type and get a real empty/fallback state. Likewise, never select a field, mark it `@required(action: THROW)`, and rely on the throw as control flow for an expected-empty case — that is an error path, not a branch. And there is no need to annotate fields the schema already declares non-null (`String!`, `Organization!`).
 
+### Node type guards
+
+A `node(id:)` query resolves to an interface (`Node`), so the page must narrow it
+to the concrete type before use. When the `__typename` is not what the view
+expects, throw a **typed** error the nearest error boundary can map to the right
+state (a not-found page), not a bare `Error`:
+
+```tsx
+// Good — NotFoundError is mapped to the 404 state by the boundary
+import { NotFoundError } from "#/lib/relay/errors";
+
+const data = usePreloadedQuery<UpdateDetailPageQuery>(updateDetailPageQuery, queryRef);
+if (data.node?.__typename !== "MailingListUpdate") {
+  throw new NotFoundError("Update not found");
+}
+const update = data.node; // narrowed to MailingListUpdate
+```
+
+```tsx
+// Bad — an untyped error only renders a generic failure
+if (data.node?.__typename !== "MailingListUpdate") {
+  throw new Error("Update not found");
+}
+```
+
+This is a client-side invariant, distinct from server field errors (which flow
+through `@throwOnFieldError`; see below). See
+[`error-handling.md`](error-handling.md).
+
+### Field errors (`@throwOnFieldError`)
+
+To contain a **partial** GraphQL failure (data present, one field errored) to the
+component that reads the bad field, annotate the query or fragment with
+`@throwOnFieldError`. The field error then throws at the read site
+(`usePreloadedQuery` / `useFragment`) and is caught by the nearest `ErrorBoundary`
+— on a **fragment** to isolate a section/row, on a **query** for page-level
+fields. This only works when the network layer leaves field-level errors in the
+response (see the portal fetch in [`error-handling.md`](error-handling.md)).
+
+```graphql
+# Good — a field error in this fragment throws at the section's useFragment
+fragment RecentUpdatesSection_trustCenter on TrustCenter @throwOnFieldError {
+  updates(first: 5) { edges { node { id ...MailingListUpdateListItem_update } } }
+}
+```
+
 ### Refetchable fragments
 
 For lists that support sorting and pagination, use `@refetchable` with `@argumentDefinitions`:
@@ -297,6 +343,44 @@ const [data, refetch] = useRefetchableFragment(thirdPartyContactsFragment, third
 const connectionId = data.contacts.__id;
 ```
 
+## Refetch inside a transition
+
+`refetch` (and `loadQuery` / `usePaginationFragment`) **suspends** while the new
+data loads. The nearest `Suspense` boundary is usually the **route-level** one,
+whose fallback is the whole-page skeleton — so a bare `refetch` (e.g. re-running
+a list query when a filter changes) blanks the entire page, toolbar included, on
+every change.
+
+Wrap the refetch in `startTransition` (React `useTransition`). A transition keeps
+the current UI mounted instead of falling back to the boundary, and exposes
+`isPending` so you can scope the loading affordance to just the results — a dim,
+an inline spinner, or a small placeholder — never the whole tree. This is the
+default for filter/sort refetches; prefer a scoped transition over a page-level
+Suspense fallback.
+
+```tsx
+// Bad — refetch suspends to the route skeleton; the toolbar and results flash
+useEffect(() => { refetch(variables); }, [refetch, variables]);
+```
+
+```tsx
+// Good — transition keeps the toolbar + current results mounted; only results dim
+const [isPending, startTransition] = useTransition();
+useEffect(() => {
+  startTransition(() => {
+    refetch(variables, { fetchPolicy: "store-or-network" });
+  });
+}, [refetch, variables]);
+
+// scope the loading state to the results container:
+<div aria-busy={isPending} className={`… transition-opacity ${isPending ? "opacity-60" : ""}`}>
+  {/* list */}
+</div>
+```
+
+See [`state-management.md`](state-management.md#filtering-a-list) for the full
+list-filtering pattern (pure URL-state hook + single-owner debounced search).
+
 ## Pagination
 
 Use `usePaginationFragment` for cursor-based Relay pagination:
@@ -313,7 +397,9 @@ The `@connection(key: "...", filters: [...])` directive on the fragment tells Re
 
 ## Mutations
 
-Every mutation **must** update the Relay store so the UI reflects changes immediately — never rely on a page reload. Use `@appendEdge`/`@prependEdge` for creates, `@deleteEdge` for deletes, node `id` returns for in-place updates, and `updater` functions for complex multi-connection operations.
+Every mutation **must** update the Relay store so the UI reflects changes immediately — never rely on a page reload. Use `@appendEdge`/`@prependEdge` for creates, `@deleteEdge` / `@deleteRecord` for deletes, node `id` returns for in-place updates, and `updater` functions only when the operation cannot be expressed via the payload.
+
+When a mutation creates, updates, or clears a **parameterized linked field** on a parent (e.g. `Document.compliancePortalDocument(compliancePortalId:)`), the payload must return that parent with the linked field selected under the same arguments. Prefer that over a manual `store.setLinkedRecord` / `setValue` updater. See also the Node checklist in [`graphql.md`](graphql.md#node-interface).
 
 ### `useMutation`
 
@@ -326,17 +412,20 @@ The project mutation primitive — awaitable, preserves every `UseMutationConfig
 The mechanics live in `@probo/relay` as `createUseMutation(useNotifier)` — a factory that wraps `react-relay`'s `useMutation` (promise wrapping, `onCompleted`/`onError` dispatch, `errorToast` semantics) but knows nothing about toasts or i18n. Each app binds it once to its own feedback stack via a `MutationNotifier` and re-exports the result as the canonical `useMutation`:
 
 ```tsx
-// apps/compliance-portal/src/lib/relay/useMutation.ts — the only place feedback is wired
+// apps/console/src/lib/relay/useMutation.ts — the only place feedback is wired
 import { createUseMutation, type MutationNotifier } from "@probo/relay";
 
 function useMutationNotifier(): MutationNotifier {
-  const toast = Toast.useToastManager();
+  const toast = useToast();
   const { t } = useTranslation();
   return useMemo<MutationNotifier>(() => ({
     notifySuccess: (title) => toast.add({ title, type: "success" }),
     notifyError: (error, title) => {
-      const finalTitle = title ?? t("common.error");
-      toast.add({ title: finalTitle, description: formatError(finalTitle, error as GraphQLError), type: "error" });
+      toast.add({
+        title: title ?? t("common.error"),
+        description: formatError(t("mutation.errors.commit"), error as GraphQLError),
+        type: "error",
+      });
     },
   }), [toast, t]);
 }
@@ -375,10 +464,10 @@ createCookieBanner({ variables: { ... } });
 const [deleteThirdParty] = useMutation<ThirdPartyGraphDeleteMutation>(deleteThirdPartyMutation);
 ```
 
-For mutations with user feedback, queue a toast with Base UI's toast manager (`Toast.useToastManager()`; see [`ui.md`](ui.md#user-feedback-toasts)) from the `onCompleted` / `onError` callbacks:
+For mutations with user feedback, queue a toast with `useToast()` (see [`ui.md`](ui.md#user-feedback-toasts)) from the `onCompleted` / `onError` callbacks:
 
 ```tsx
-const toast = Toast.useToastManager();
+const toast = useToast();
 const [createObligation, isCreating] = useMutation<CreateObligationMutation>(createObligationMutation);
 
 const onSubmit = (input: ObligationInput) => {

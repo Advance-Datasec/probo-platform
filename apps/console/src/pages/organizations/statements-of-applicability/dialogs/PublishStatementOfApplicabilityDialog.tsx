@@ -1,19 +1,24 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   Dialog,
@@ -22,18 +27,19 @@ import {
   IconSend,
   IconUpload,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import type { ReactNode } from "react";
 import { useMemo, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation } from "react-relay";
 import { graphql } from "relay-runtime";
-import { z } from "zod";
 
 import type { PublishStatementOfApplicabilityDialogMutation } from "#/__generated__/core/PublishStatementOfApplicabilityDialogMutation.graphql";
 import { PeopleMultiSelectField } from "#/components/form/PeopleMultiSelectField";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
 import { useOrganizationId } from "#/hooks/useOrganizationId";
+import { z } from "#/lib/zod";
 
 const publishMutation = graphql`
   mutation PublishStatementOfApplicabilityDialogMutation(
@@ -62,8 +68,8 @@ export function PublishStatementOfApplicabilityDialog({
   defaultApproverIds = [],
   onPublished,
 }: Props) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
   const organizationId = useOrganizationId();
   const dialogRef = useDialogRef();
 
@@ -102,12 +108,12 @@ export function PublishStatementOfApplicabilityDialog({
       onCompleted(response) {
         const documentId = response.publishStatementOfApplicability?.documentEdge?.node?.id;
         if (documentId) {
-          toast({
-            title: __("Success"),
+          toast.add({
+            title: t("publishStatementOfApplicabilityDialog.messages.success"),
             description: hasApprovers
-              ? __("Approval requested successfully.")
-              : __("Statement of Applicability published successfully."),
-            variant: "success",
+              ? t("publishStatementOfApplicabilityDialog.messages.approvalRequested")
+              : t("publishStatementOfApplicabilityDialog.messages.published"),
+            type: "success",
           });
           dialogRef.current?.close();
           reset();
@@ -115,13 +121,13 @@ export function PublishStatementOfApplicabilityDialog({
         }
       },
       onError(error) {
-        toast({
-          title: __("Error"),
+        toast.add({
+          title: t("publishStatementOfApplicabilityDialog.messages.error"),
           description: formatError(
-            __("Failed to publish Statement of Applicability"),
+            t("publishStatementOfApplicabilityDialog.errors.publish"),
             error,
           ),
-          variant: "error",
+          type: "error",
         });
       },
     });
@@ -132,20 +138,20 @@ export function PublishStatementOfApplicabilityDialog({
       className="max-w-xl"
       ref={dialogRef}
       trigger={children}
-      title={__("Publish Statement of Applicability")}
+      title={t("publishStatementOfApplicabilityDialog.title")}
     >
       <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
         <DialogContent padded>
           <div className="space-y-4">
             <p className="text-sm text-txt-secondary">
-              {__("Select approvers to request approval before publishing, or publish directly without approvers.")}
+              {t("publishStatementOfApplicabilityDialog.description")}
             </p>
             <PeopleMultiSelectField
               name="approverIds"
-              label={__("Approvers")}
+              label={t("publishStatementOfApplicabilityDialog.fields.approvers")}
               control={control}
               organizationId={organizationId}
-              placeholder={__("Add approvers...")}
+              placeholder={t("publishStatementOfApplicabilityDialog.placeholders.approvers")}
             />
           </div>
         </DialogContent>
@@ -157,7 +163,7 @@ export function PublishStatementOfApplicabilityDialog({
             onClick={() => { minorRef.current = true; }}
             disabled={isPublishing}
           >
-            {__("Publish as minor")}
+            {t("publishStatementOfApplicabilityDialog.actions.publishMinor")}
           </Button>
           <Button
             type="submit"
@@ -165,7 +171,7 @@ export function PublishStatementOfApplicabilityDialog({
             onClick={() => { minorRef.current = false; }}
             disabled={isPublishing}
           >
-            {hasApprovers ? __("Request approval") : __("Publish")}
+            {hasApprovers ? t("publishStatementOfApplicabilityDialog.actions.requestApproval") : t("publishStatementOfApplicabilityDialog.actions.publish")}
           </Button>
         </DialogFooter>
       </form>

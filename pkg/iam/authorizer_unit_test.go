@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package iam
 
@@ -18,7 +24,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -281,12 +290,16 @@ func TestAuthorizer_BuildAuditLogEntry(t *testing.T) {
 	resourceID := gid.New(tenantID, coredata.FrameworkEntityType)
 	sessionID := gid.New(gid.NilTenant, coredata.SessionEntityType)
 
+	longReason := strings.Repeat("a", 1023) + "ézzz"
+
 	tests := []struct {
 		name          string
 		params        AuthorizeParams
 		resourceAttrs policy.Attributes
+		decision      error
 		wantNil       bool
 		wantActorType coredata.AuditLogActorType
+		wantReason    string
 	}{
 		{
 			name: "dry run returns nil",
@@ -350,6 +363,20 @@ func TestAuthorizer_BuildAuditLogEntry(t *testing.T) {
 			},
 			wantActorType: coredata.AuditLogActorTypeAPIKey,
 		},
+		{
+			name: "denial records the outcome and a rune-safe reason",
+			params: AuthorizeParams{
+				Principal: principalID,
+				Resource:  resourceID,
+				Action:    "core:framework:get",
+			},
+			resourceAttrs: policy.Attributes{
+				"organization_id": orgID.String(),
+			},
+			decision:      errors.New(longReason),
+			wantActorType: coredata.AuditLogActorTypeAPIKey,
+			wantReason:    strings.Repeat("a", 1023),
+		},
 	}
 
 	for _, tt := range tests {
@@ -360,7 +387,15 @@ func TestAuthorizer_BuildAuditLogEntry(t *testing.T) {
 				logger: log.NewLogger(log.WithOutput(io.Discard)),
 			}
 
-			entry := a.buildAuditLogEntry(context.Background(), tt.params, tt.resourceAttrs)
+			entry := a.buildAuditLogEntry(
+				context.Background(),
+				tt.params,
+				tt.resourceAttrs,
+				tt.decision,
+				auditActor{},
+				RequestMetadata{},
+				time.Now(),
+			)
 			if tt.wantNil {
 				assert.Nil(t, entry)
 
@@ -372,6 +407,18 @@ func TestAuthorizer_BuildAuditLogEntry(t *testing.T) {
 			assert.Equal(t, tt.params.Principal, entry.ActorID)
 			assert.Equal(t, tt.params.Resource, entry.ResourceID)
 			assert.Equal(t, tt.params.Action, entry.Action)
+
+			if tt.decision == nil {
+				assert.Equal(t, coredata.AuditLogOutcomeAllowed, entry.Outcome)
+				assert.Nil(t, entry.DenialReason)
+
+				return
+			}
+
+			assert.Equal(t, coredata.AuditLogOutcomeDenied, entry.Outcome)
+			require.NotNil(t, entry.DenialReason)
+			assert.Equal(t, tt.wantReason, *entry.DenialReason)
+			assert.True(t, utf8.ValidString(*entry.DenialReason))
 		})
 	}
 }
@@ -427,6 +474,15 @@ func TestAuthorizer_WrappedInternalErrors(t *testing.T) {
 
 		_, ok := errors.AsType[*ErrAssumptionRequired](err)
 		assert.False(t, ok)
+	})
+
+	t.Run("load audit actor returns the load error", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := a.loadAuditActor(context.Background(), tx, principalID)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "cannot load audit log actor")
+		assert.ErrorIs(t, err, queryErr)
 	})
 
 	t.Run("build principal attributes wraps load errors", func(t *testing.T) {

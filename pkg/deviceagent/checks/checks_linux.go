@@ -1,21 +1,29 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package checks
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -693,6 +701,14 @@ func linuxRunAsUser(ctx context.Context, user, name string, args ...string) CmdR
 }
 
 func linuxFirewall(ctx context.Context) Result {
+	var verdict *Result
+
+	keep := func(r Result) {
+		if verdict == nil || verdict.Status != StatusUnknown || r.Status == StatusUnknown {
+			verdict = &r
+		}
+	}
+
 	if CommandExists("ufw") {
 		out := RunCommand(ctx, "ufw", "status")
 		if out.Err == nil {
@@ -703,7 +719,7 @@ func linuxFirewall(ctx context.Context) Result {
 				return pass(ev)
 			}
 
-			return fail(ev)
+			keep(fail(ev))
 		}
 	}
 
@@ -715,7 +731,7 @@ func linuxFirewall(ctx context.Context) Result {
 			return pass(ev)
 		}
 
-		return fail(ev)
+		keep(fail(ev))
 	}
 
 	if CommandExists("nft") {
@@ -725,43 +741,46 @@ func linuxFirewall(ctx context.Context) Result {
 			"backend":       "nftables",
 			"rules_excerpt": truncate(out.Stdout, 400),
 		}
-		if out.Err != nil {
+
+		switch {
+		case out.Err != nil:
 			ev["error"] = out.Err.Error()
-			return unknown(ev)
-		}
-
-		if strings.Contains(out.Stdout, "chain ") {
+			keep(unknown(ev))
+		case strings.Contains(out.Stdout, "chain "):
 			return pass(ev)
+		default:
+			keep(fail(ev))
 		}
-
-		return fail(ev)
 	}
 
 	if CommandExists("iptables") {
 		out := RunCommand(ctx, "iptables", "-S", "INPUT")
 
-		ev := map[string]any{"backend": "iptables"}
-		if out.Err != nil {
-			ev["error"] = out.Err.Error()
-			return unknown(ev)
-		}
-
 		policy, rules := parseIptablesInput(out.Stdout)
-		ev["input_policy"] = policy
 
-		ev["input_rules"] = rules
-		if policy == "DROP" || policy == "REJECT" {
+		ev := map[string]any{
+			"backend":      "iptables",
+			"input_policy": policy,
+			"input_rules":  rules,
+		}
+
+		switch {
+		case out.Err != nil:
+			keep(unknown(map[string]any{"backend": "iptables", "error": out.Err.Error()}))
+		case policy == "DROP" || policy == "REJECT":
 			return pass(ev)
+		case rules == 0:
+			keep(fail(ev))
+		default:
+			// ACCEPT policy with some rules means the operator is filtering,
+			// but we cannot tell from -S whether the rules are restrictive
+			// or permissive without modelling the chain.
+			keep(unknown(ev))
 		}
+	}
 
-		if rules == 0 {
-			return fail(ev)
-		}
-
-		// ACCEPT policy with some rules means the operator is filtering,
-		// but we cannot tell from -S whether the rules are restrictive
-		// or permissive without modelling the chain.
-		return unknown(ev)
+	if verdict != nil {
+		return *verdict
 	}
 
 	return unknown(
@@ -830,6 +849,22 @@ func linuxOSVersion(ctx context.Context) Result {
 		"id":          kvLookup(body, "ID"),
 	}
 
+	kernel, kernelErr := os.ReadFile("/proc/sys/kernel/osrelease")
+	switch kernelErr {
+	case nil:
+		ev["kernel_version"] = string(bytes.TrimSpace(kernel))
+
+	default:
+		res := RunCommand(ctx, "uname", "-r")
+
+		switch res.Err {
+		case nil:
+			ev["kernel_version"] = strings.TrimSpace(res.Stdout)
+		default:
+			ev["kernel_version_error"] = fmt.Errorf("%w; %w", kernelErr, res.Err).Error()
+		}
+	}
+
 	return pass(ev)
 }
 
@@ -868,41 +903,6 @@ func linuxAutoUpdate(ctx context.Context) Result {
 	)
 }
 
-func linuxPasswordPolicy(ctx context.Context) Result {
-	data, err := os.ReadFile("/etc/login.defs")
-	if err != nil {
-		return unknown(map[string]any{"error": err.Error()})
-	}
-
-	body := string(data)
-	minLen := loginDefsLookup(body, "PASS_MIN_LEN")
-	maxDays := loginDefsLookup(body, "PASS_MAX_DAYS")
-
-	ev := map[string]any{
-		"pass_min_len":  minLen,
-		"pass_max_days": maxDays,
-	}
-	if minLen == "" {
-		ev["parse_error"] = "PASS_MIN_LEN not set"
-		return fail(ev)
-	}
-
-	minLenValue, err := strconv.Atoi(minLen)
-	if err != nil {
-		ev["parse_error"] = "invalid PASS_MIN_LEN value"
-		return unknown(ev)
-	}
-
-	if minLenValue >= 8 {
-		ev["pass_min_len_value"] = minLenValue
-		return pass(ev)
-	}
-
-	ev["pass_min_len_value"] = minLenValue
-
-	return fail(ev)
-}
-
 func linuxRemoteLogin(ctx context.Context) Result {
 	if !CommandExists("systemctl") {
 		return unknown(map[string]any{"note": "systemctl unavailable"})
@@ -917,16 +917,16 @@ func linuxRemoteLogin(ctx context.Context) Result {
 	}
 
 	ev := map[string]any{"is_active": merged}
-	switch merged {
-	case "active":
+	switch linuxRemoteLoginStatus(merged) {
+	case StatusFail:
 		return fail(ev)
-	case "inactive", "failed":
+	case StatusPass:
 		return pass(ev)
-	case "":
+	case StatusNotApplicable:
 		return notApplicable(ev)
+	default:
+		return unknown(ev)
 	}
-
-	return unknown(ev)
 }
 
 // linuxMalwareProtection tracks AV/EDR agent services, not MAC frameworks.
@@ -1014,22 +1014,6 @@ func kvLookup(body, key string) string {
 			v = strings.Trim(v, `"`)
 
 			return v
-		}
-	}
-
-	return ""
-}
-
-func loginDefsLookup(body, key string) string {
-	for line := range strings.SplitSeq(body, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[0] == key {
-			return fields[1]
 		}
 	}
 

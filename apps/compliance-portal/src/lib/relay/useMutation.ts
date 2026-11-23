@@ -1,34 +1,47 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { Toast } from "@base-ui/react/toast";
 import { formatError, type GraphQLError } from "@probo/helpers";
 import { createUseMutation, type MutationNotifier } from "@probo/relay";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router";
+
+import { consumeAuthGate } from "#/lib/auth/continueUrl";
+import { useLocale } from "#/lib/i18n/useLocale";
 
 /**
  * Binds the shared awaitable useMutation (`@probo/relay`) to this app's
- * feedback stack: Base UI toasts, i18next titles, and `formatError`
- * descriptions. This is the only place those opinions are wired.
+ * feedback stack: Base UI toasts, i18next titles, `formatError` descriptions,
+ * and auth-gate redirects (sign-in / full-name / NDA). This is the only place
+ * those opinions are wired — every mutation gets gate handling for free.
  *
  * Always import useMutation from `#/lib/relay/useMutation` — never useMutation
  * from react-relay.
  */
 function useMutationNotifier(): MutationNotifier {
-  const toast = Toast.useToastManager();
+  const toast = useToast();
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const locale = useLocale();
 
   return useMemo<MutationNotifier>(
     () => ({
@@ -43,8 +56,12 @@ function useMutationNotifier(): MutationNotifier {
           type: "error",
         });
       },
+      handleFailure: (error, continueUrl) =>
+        consumeAuthGate(error, continueUrl, (to) => {
+          void navigate(to);
+        }, locale),
     }),
-    [toast, t],
+    [toast, t, navigate, locale],
   );
 }
 

@@ -1,18 +1,23 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   Checkbox,
@@ -24,25 +29,18 @@ import {
   useDialogRef,
 } from "@probo/ui";
 import { forwardRef, type ReactNode, useImperativeHandle } from "react";
-import { z } from "zod";
+import { useTranslation } from "react-i18next";
 
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
 
-const pdfDownloadSchema = z.object({
-  withWatermark: z.boolean(),
-  watermarkEmail: z
-    .string()
-    .email("Please enter a valid email address")
-    .optional()
-    .or(z.literal("")),
-  withSignatures: z.boolean(),
-});
-
-type PdfDownloadFormData = z.infer<typeof pdfDownloadSchema>;
+import {
+  type ExportFormData,
+  exportSchema,
+} from "./watermark";
 
 type Props = {
   children?: ReactNode;
-  onDownload: (options: PdfDownloadFormData) => void;
+  onDownload: (options: ExportFormData) => void;
   isLoading?: boolean;
   defaultEmail: string;
 };
@@ -54,15 +52,15 @@ export type PdfDownloadDialogRef = {
 
 export const PdfDownloadDialog = forwardRef<PdfDownloadDialogRef, Props>(
   ({ children, onDownload, isLoading = false, defaultEmail }, ref) => {
-    const { __ } = useTranslate();
+    const { t } = useTranslation();
     const dialogRef = useDialogRef();
 
     const { register, handleSubmit, formState, watch, setValue }
-      = useFormWithSchema(pdfDownloadSchema, {
+      = useFormWithSchema(exportSchema, {
         defaultValues: {
           withWatermark: false,
-          watermarkEmail: defaultEmail,
-          withSignatures: true,
+          watermarkText: defaultEmail,
+          withSignatures: false,
         },
       });
 
@@ -74,10 +72,12 @@ export const PdfDownloadDialog = forwardRef<PdfDownloadDialogRef, Props>(
       close: () => dialogRef.current?.close(),
     }));
 
-    const onSubmit = (data: PdfDownloadFormData) => {
+    const onSubmit = (data: ExportFormData) => {
       const options = {
         ...data,
-        watermarkEmail: data.withWatermark ? data.watermarkEmail : undefined,
+        watermarkText: data.withWatermark && data.watermarkText !== defaultEmail
+          ? data.watermarkText
+          : undefined,
       };
       onDownload(options);
       dialogRef.current?.close();
@@ -89,7 +89,7 @@ export const PdfDownloadDialog = forwardRef<PdfDownloadDialogRef, Props>(
         <Dialog
           className="max-w-md"
           ref={dialogRef}
-          title={__("Download PDF Options")}
+          title={t("pdfDownloadDialog.title")}
         >
           <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
             <DialogContent className="space-y-4" padded>
@@ -101,12 +101,10 @@ export const PdfDownloadDialog = forwardRef<PdfDownloadDialogRef, Props>(
                   />
                   <div className="flex-1">
                     <label className="text-sm font-medium text-txt-primary cursor-pointer">
-                      {__("Include signatures")}
+                      {t("pdfDownloadDialog.includeSignatures.label")}
                     </label>
                     <p className="text-xs text-txt-secondary mt-1">
-                      {__(
-                        "Show signature information and approval details in the PDF",
-                      )}
+                      {t("pdfDownloadDialog.includeSignatures.description")}
                     </p>
                   </div>
                 </div>
@@ -118,12 +116,10 @@ export const PdfDownloadDialog = forwardRef<PdfDownloadDialogRef, Props>(
                   />
                   <div className="flex-1">
                     <label className="text-sm font-medium text-txt-primary cursor-pointer">
-                      {__("Add watermark")}
+                      {t("pdfDownloadDialog.watermark.label")}
                     </label>
                     <p className="text-xs text-txt-secondary mt-1">
-                      {__(
-                        "Add confidential watermark with email and timestamp",
-                      )}
+                      {t("pdfDownloadDialog.watermark.description")}
                     </p>
                   </div>
                 </div>
@@ -131,11 +127,11 @@ export const PdfDownloadDialog = forwardRef<PdfDownloadDialogRef, Props>(
                 {watchWatermark && (
                   <div className="ml-6">
                     <Field
-                      label={__("Watermark email")}
-                      {...register("watermarkEmail")}
-                      type="email"
-                      placeholder={__("Enter email address")}
-                      error={formState.errors.watermarkEmail?.message}
+                      label={t("pdfDownloadDialog.watermark.textLabel")}
+                      {...register("watermarkText")}
+                      type="text"
+                      placeholder={t("pdfDownloadDialog.watermark.textPlaceholder")}
+                      error={formState.errors.watermarkText?.message}
                       autoComplete="off"
                       required
                     />
@@ -149,11 +145,11 @@ export const PdfDownloadDialog = forwardRef<PdfDownloadDialogRef, Props>(
                   ? (
                       <>
                         <Spinner size={16} />
-                        {__("Downloading...")}
+                        {t("pdfDownloadDialog.actions.downloading")}
                       </>
                     )
                   : (
-                      __("Download PDF")
+                      t("pdfDownloadDialog.actions.download")
                     )}
               </Button>
             </DialogFooter>

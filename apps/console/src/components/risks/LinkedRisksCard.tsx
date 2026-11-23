@@ -1,22 +1,26 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   IconTrashCan,
-  RiskBadge,
   Table,
   Tbody,
   Td,
@@ -25,6 +29,7 @@ import {
   Tr,
   TrButton,
 } from "@probo/ui";
+import { useTranslation } from "react-i18next";
 import { useFragment } from "react-relay";
 import { graphql } from "relay-runtime";
 
@@ -36,9 +41,8 @@ import { LinkedRisksDialog } from "./LinkedRisksDialog";
 const linkedRiskFragment = graphql`
   fragment LinkedRisksCardFragment on Risk {
     id
+    referenceId
     name
-    inherentRiskScore
-    residualRiskScore
   }
 `;
 
@@ -71,7 +75,7 @@ type Props<Params> = {
  * Reusable component that displays a list of linked risks
  */
 export function LinkedRisksCard<Params>(props: Props<Params>) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   const onAttach = (riskId: string) => {
     props.onAttach({
@@ -102,9 +106,8 @@ export function LinkedRisksCard<Params>(props: Props<Params>) {
       <Table>
         <Thead>
           <Tr>
-            <Th>{__("Name")}</Th>
-            <Th>{__("Inherent Risk")}</Th>
-            <Th>{__("Residual Risk")}</Th>
+            <Th>{t("linkedRisksCard.columns.referenceId")}</Th>
+            <Th>{t("linkedRisksCard.columns.name")}</Th>
             {!props.readOnly && <Th></Th>}
           </Tr>
         </Thead>
@@ -112,10 +115,10 @@ export function LinkedRisksCard<Params>(props: Props<Params>) {
           {props.risks.length === 0 && (
             <Tr>
               <Td
-                colSpan={props.readOnly ? 3 : 4}
+                colSpan={props.readOnly ? 2 : 3}
                 className="text-center text-txt-secondary"
               >
-                {__("No risks linked")}
+                {t("linkedRisksCard.empty")}
               </Td>
             </Tr>
           )}
@@ -135,7 +138,9 @@ export function LinkedRisksCard<Params>(props: Props<Params>) {
               onLink={onAttach}
               onUnlink={onDetach}
             >
-              <TrButton colspan={4}>{__("Link risk")}</TrButton>
+              <TrButton colspan={3}>
+                {t("linkedRisksCard.actions.link")}
+              </TrButton>
             </LinkedRisksDialog>
           )}
         </Tbody>
@@ -151,17 +156,14 @@ function RiskRow(props: {
 }) {
   const risk = useFragment(linkedRiskFragment, props.risk);
   const organizationId = useOrganizationId();
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (
-    <Tr to={`/organizations/${organizationId}/risks/${risk.id}`}>
+    <Tr to={`/organizations/${organizationId}/risk-management/risks/${risk.id}`}>
+      <Td>
+        <span className="font-mono text-sm">{risk.referenceId}</span>
+      </Td>
       <Td>{risk.name}</Td>
-      <Td>
-        <RiskBadge level={risk.inherentRiskScore} />
-      </Td>
-      <Td>
-        <RiskBadge level={risk.residualRiskScore} />
-      </Td>
       {!props.readOnly && (
         <Td noLink width={50} className="text-end">
           <Button
@@ -169,7 +171,7 @@ function RiskRow(props: {
             onClick={() => props.onClick(risk.id)}
             icon={IconTrashCan}
           >
-            {__("Unlink")}
+            {t("linkedRisksCard.actions.unlink")}
           </Button>
         </Td>
       )}

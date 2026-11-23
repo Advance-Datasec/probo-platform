@@ -1,21 +1,28 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -154,6 +161,31 @@ func (s ProcessingActivityService) Get(
 	return processingActivity, nil
 }
 
+func (s ProcessingActivityService) GetByIDs(
+	ctx context.Context,
+	scope coredata.Scoper,
+	processingActivityIDs ...gid.GID,
+) (coredata.ProcessingActivities, error) {
+	var processingActivities coredata.ProcessingActivities
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := processingActivities.LoadByIDs(ctx, conn, scope, processingActivityIDs); err != nil &&
+				!errors.Is(err, coredata.ErrResourceNotFound) {
+				return fmt.Errorf("cannot load processing activities by ids: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return processingActivities, nil
+}
+
 func (s *ProcessingActivityService) Create(
 	ctx context.Context, scope coredata.Scoper,
 	req *CreateProcessingActivityRequest,
@@ -195,11 +227,34 @@ func (s *ProcessingActivityService) Create(
 				return fmt.Errorf("cannot load organization: %w", err)
 			}
 
+			if req.DataProtectionOfficerID != nil {
+				dpo := &coredata.MembershipProfile{}
+				if err := dpo.LoadByID(ctx, conn, scope, *req.DataProtectionOfficerID); err != nil {
+					return fmt.Errorf("cannot load data protection officer profile: %w", err)
+				}
+			}
+
 			if err := processingActivity.Insert(ctx, conn, scope); err != nil {
 				return fmt.Errorf("cannot insert processing activity: %w", err)
 			}
 
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				processingActivity.ID,
+				processingActivity.OrganizationID,
+				processingActivity.Name,
+				processingActivity.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
 			if len(req.ThirdPartyIDs) > 0 {
+				thirdParties := &coredata.ThirdParties{}
+				if err := thirdParties.LoadByIDs(ctx, conn, scope, req.ThirdPartyIDs); err != nil {
+					return fmt.Errorf("cannot load thirdParties: %w", err)
+				}
+
 				if err := processingActivityThirdParties.Insert(ctx, conn, scope, processingActivity.ID, req.OrganizationID, req.ThirdPartyIDs); err != nil {
 					return fmt.Errorf("cannot create processing activity thirdParties: %w", err)
 				}
@@ -302,6 +357,13 @@ func (s *ProcessingActivityService) Update(
 			}
 
 			if req.DataProtectionOfficerID != nil {
+				if *req.DataProtectionOfficerID != nil {
+					dpo := &coredata.MembershipProfile{}
+					if err := dpo.LoadByID(ctx, conn, scope, **req.DataProtectionOfficerID); err != nil {
+						return fmt.Errorf("cannot load data protection officer profile: %w", err)
+					}
+				}
+
 				processingActivity.DataProtectionOfficerID = *req.DataProtectionOfficerID
 			}
 
@@ -311,7 +373,25 @@ func (s *ProcessingActivityService) Update(
 				return fmt.Errorf("cannot update processing activity: %w", err)
 			}
 
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				processingActivity.ID,
+				processingActivity.OrganizationID,
+				processingActivity.Name,
+				processingActivity.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
 			if req.ThirdPartyIDs != nil {
+				if len(*req.ThirdPartyIDs) > 0 {
+					thirdParties := &coredata.ThirdParties{}
+					if err := thirdParties.LoadByIDs(ctx, conn, scope, *req.ThirdPartyIDs); err != nil {
+						return fmt.Errorf("cannot load thirdParties: %w", err)
+					}
+				}
+
 				if err := processingActivityThirdParties.Merge(ctx, conn, scope, processingActivity.ID, processingActivity.OrganizationID, *req.ThirdPartyIDs); err != nil {
 					return fmt.Errorf("cannot update processing activity thirdParties: %w", err)
 				}
@@ -336,6 +416,10 @@ func (s ProcessingActivityService) Delete(
 	return s.svc.pg.WithTx(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
+			if err := clearProcessingActivitySearch(ctx, tx, scope, processingActivityID); err != nil {
+				return err
+			}
+
 			err := processingActivity.Delete(ctx, tx, scope)
 			if err != nil {
 				return fmt.Errorf("cannot delete processing activity: %w", err)
@@ -395,4 +479,43 @@ func (s ProcessingActivityService) CountForOrganizationID(
 	}
 
 	return count, nil
+}
+
+func clearProcessingActivitySearch(
+	ctx context.Context,
+	conn pg.Querier,
+	scope coredata.Scoper,
+	processingActivityID gid.GID,
+) error {
+	dpia := &coredata.DataProtectionImpactAssessment{}
+
+	err := dpia.LoadByProcessingActivityID(ctx, conn, scope, processingActivityID)
+	if err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
+		return fmt.Errorf("cannot load data protection impact assessment: %w", err)
+	}
+
+	if err == nil {
+		if err := coredata.DeleteSearchResource(ctx, conn, dpia.ID); err != nil {
+			return fmt.Errorf("cannot delete search resource: %w", err)
+		}
+	}
+
+	tia := &coredata.TransferImpactAssessment{}
+
+	err = tia.LoadByProcessingActivityID(ctx, conn, scope, processingActivityID)
+	if err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
+		return fmt.Errorf("cannot load transfer impact assessment: %w", err)
+	}
+
+	if err == nil {
+		if err := coredata.DeleteSearchResource(ctx, conn, tia.ID); err != nil {
+			return fmt.Errorf("cannot delete search resource: %w", err)
+		}
+	}
+
+	if err := coredata.DeleteSearchResource(ctx, conn, processingActivityID); err != nil {
+		return fmt.Errorf("cannot delete search resource: %w", err)
+	}
+
+	return nil
 }

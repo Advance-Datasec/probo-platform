@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
@@ -18,6 +24,7 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -28,6 +35,7 @@ import (
 	"go.gearno.de/crypto/uuid"
 	"go.gearno.de/kit/pg"
 	"go.probo.inc/probo/packages/emails"
+	"go.probo.inc/probo/pkg/awsconfig"
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/html2pdf"
@@ -39,6 +47,10 @@ import (
 
 const (
 	frameworkExportEmailExpiresIn = 24 * time.Hour
+
+	// frameworkDocumentExportBatchSize bounds how many document bodies are
+	// held between the read and the PDF render.
+	frameworkDocumentExportBatchSize = 10
 )
 
 type (
@@ -160,7 +172,9 @@ func (s FrameworkService) Export(
 
 	defer func() { _ = archive.Close() }()
 
-	return s.svc.pg.WithTx(
+	var documentExports []frameworkDocumentExport
+
+	err := s.svc.pg.WithTx(
 		ctx,
 		func(ctx context.Context, conn pg.Tx) error {
 			framework := &coredata.Framework{}
@@ -196,9 +210,9 @@ func (s FrameworkService) Export(
 					return fmt.Errorf("cannot create control directory in archive: %w", err)
 				}
 
-				measures := coredata.Measures{}
+				internalControls := coredata.InternalControls{}
 
-				err = measures.LoadByControlID(
+				err = internalControls.LoadByControlID(
 					ctx,
 					conn,
 					scope,
@@ -207,30 +221,30 @@ func (s FrameworkService) Export(
 						10_000,
 						nil,
 						page.Head,
-						page.OrderBy[coredata.MeasureOrderField]{
-							Field:     coredata.MeasureOrderFieldCreatedAt,
+						page.OrderBy[coredata.InternalControlOrderField]{
+							Field:     coredata.InternalControlOrderFieldCreatedAt,
 							Direction: page.OrderDirectionAsc,
 						},
 					),
-					coredata.NewMeasureFilter(nil, nil, nil),
+					coredata.NewInternalControlFilter(nil, nil, nil, nil, nil, nil, nil),
 				)
 				if err != nil {
-					return fmt.Errorf("cannot load measures: %w", err)
+					return fmt.Errorf("cannot load internalControls: %w", err)
 				}
 
-				for _, measure := range measures {
-					_, err := archive.Create(fmt.Sprintf("%s/%s/%s/", framework.Name, control.SectionTitle, measure.Name))
+				for _, internalControl := range internalControls {
+					_, err := archive.Create(fmt.Sprintf("%s/%s/%s/", framework.Name, control.SectionTitle, internalControl.Name))
 					if err != nil {
-						return fmt.Errorf("cannot create measure directory in archive: %w", err)
+						return fmt.Errorf("cannot create internal control directory in archive: %w", err)
 					}
 
 					evidences := coredata.Evidences{}
 
-					err = evidences.LoadByMeasureID(
+					err = evidences.LoadByInternalControlID(
 						ctx,
 						conn,
 						scope,
-						measure.ID,
+						internalControl.ID,
 						page.NewCursor(
 							10_000,
 							nil,
@@ -270,7 +284,7 @@ func (s FrameworkService) Export(
 
 						defer func() { _ = object.Body.Close() }()
 
-						w, err := archive.Create(fmt.Sprintf("%s/%s/%s/%s", framework.Name, control.SectionTitle, measure.Name, evidence_file.FileName))
+						w, err := archive.Create(fmt.Sprintf("%s/%s/%s/%s", framework.Name, control.SectionTitle, internalControl.Name, evidence_file.FileName))
 						if err != nil {
 							return fmt.Errorf("cannot create evidence in archive: %w", err)
 						}
@@ -310,34 +324,114 @@ func (s FrameworkService) Export(
 						return fmt.Errorf("cannot load document version: %w", err)
 					}
 
-					exportedPDF, err := exportDocumentPDF(
-						ctx,
-						s.svc,
-						s.html2pdfConverter,
-						conn,
-						scope,
-						documentVersion.ID,
-						ExportPDFOptions{WithSignatures: true},
+					documentExports = append(
+						documentExports,
+						frameworkDocumentExport{
+							name:      fmt.Sprintf("%s/%s/%s.pdf", framework.Name, control.SectionTitle, document.Title),
+							versionID: documentVersion.ID,
+						},
 					)
-					if err != nil {
-						return fmt.Errorf("cannot export document PDF: %w", err)
-					}
-
-					w, err := archive.Create(fmt.Sprintf("%s/%s/%s.pdf", framework.Name, control.SectionTitle, document.Title))
-					if err != nil {
-						return fmt.Errorf("cannot create document in archive: %w", err)
-					}
-
-					_, err = w.Write(exportedPDF)
-					if err != nil {
-						return fmt.Errorf("cannot write document to archive: %w", err)
-					}
 				}
 			}
 
 			return nil
 		},
 	)
+	if err != nil {
+		return fmt.Errorf("cannot prepare framework export: %w", err)
+	}
+
+	return s.writeFrameworkDocumentPDFs(ctx, scope, archive, documentExports)
+}
+
+type frameworkDocumentExport struct {
+	name      string
+	versionID gid.GID
+}
+
+func (s FrameworkService) writeFrameworkDocumentPDFs(
+	ctx context.Context,
+	scope coredata.Scoper,
+	archive *zip.Writer,
+	documents []frameworkDocumentExport,
+) error {
+	for start := 0; start < len(documents); start += frameworkDocumentExportBatchSize {
+		end := min(start+frameworkDocumentExportBatchSize, len(documents))
+
+		if err := s.writeFrameworkDocumentPDFBatch(ctx, scope, archive, documents[start:end]); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s FrameworkService) writeFrameworkDocumentPDFBatch(
+	ctx context.Context,
+	scope coredata.Scoper,
+	archive *zip.Writer,
+	documents []frameworkDocumentExport,
+) error {
+	type preparedFrameworkDocument struct {
+		name     string
+		prepared *preparedDocumentExport
+	}
+
+	var prepared []preparedFrameworkDocument
+
+	err := s.svc.pg.WithTx(
+		ctx,
+		func(ctx context.Context, conn pg.Tx) error {
+			prepared = make([]preparedFrameworkDocument, 0, len(documents))
+
+			for _, document := range documents {
+				item, err := prepareDocumentExport(
+					ctx,
+					conn,
+					scope,
+					document.versionID,
+					ExportPDFOptions{WithSignatures: true},
+					s.svc.logger,
+				)
+				if err != nil {
+					return fmt.Errorf("cannot export document PDF: %w", err)
+				}
+
+				prepared = append(
+					prepared,
+					preparedFrameworkDocument{
+						name:     document.name,
+						prepared: item,
+					},
+				)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("cannot prepare framework export: %w", err)
+	}
+
+	for i := range prepared {
+		exportedPDF, err := renderPreparedDocumentExport(ctx, s.svc, s.html2pdfConverter, prepared[i].prepared)
+		if err != nil {
+			return fmt.Errorf("cannot export document PDF: %w", err)
+		}
+
+		w, err := archive.Create(prepared[i].name)
+		if err != nil {
+			return fmt.Errorf("cannot create document in archive: %w", err)
+		}
+
+		if _, err := w.Write(exportedPDF); err != nil {
+			return fmt.Errorf("cannot write document to archive: %w", err)
+		}
+
+		prepared[i].prepared = nil
+	}
+
+	return nil
 }
 
 func (s FrameworkService) Create(
@@ -369,6 +463,17 @@ func (s FrameworkService) Create(
 
 		if err := framework.Insert(ctx, conn, scope); err != nil {
 			return fmt.Errorf("cannot insert framework: %w", err)
+		}
+
+		if err := coredata.UpsertSearchResource(
+			ctx,
+			conn,
+			framework.ID,
+			framework.OrganizationID,
+			framework.Name,
+			framework.SearchText(),
+		); err != nil {
+			return fmt.Errorf("cannot sync search: %w", err)
 		}
 
 		return nil
@@ -467,7 +572,7 @@ func (s FrameworkService) GetByIDs(
 				conn,
 				scope,
 				frameworkIDs,
-			); err != nil {
+			); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 				return fmt.Errorf("cannot load frameworks by ids: %w", err)
 			}
 
@@ -504,7 +609,22 @@ func (s FrameworkService) Update(
 			framework.Description = *req.Description
 		}
 
-		return framework.Update(ctx, conn, scope)
+		if err := framework.Update(ctx, conn, scope); err != nil {
+			return err
+		}
+
+		if err := coredata.UpsertSearchResource(
+			ctx,
+			conn,
+			framework.ID,
+			framework.OrganizationID,
+			framework.Name,
+			framework.SearchText(),
+		); err != nil {
+			return fmt.Errorf("cannot sync search: %w", err)
+		}
+
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -520,6 +640,21 @@ func (s FrameworkService) Delete(
 	framework := &coredata.Framework{}
 
 	return s.svc.pg.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
+		var controls coredata.Controls
+
+		controlIDs, err := controls.LoadIDsByFrameworkID(ctx, tx, scope, frameworkID)
+		if err != nil {
+			return fmt.Errorf("cannot list framework controls: %w", err)
+		}
+
+		if err := coredata.DeleteSearchResources(ctx, tx, controlIDs); err != nil {
+			return fmt.Errorf("cannot sync search: %w", err)
+		}
+
+		if err := coredata.DeleteSearchResource(ctx, tx, frameworkID); err != nil {
+			return fmt.Errorf("cannot sync search: %w", err)
+		}
+
 		return framework.Delete(ctx, tx, scope, frameworkID)
 	})
 }
@@ -604,6 +739,17 @@ func (s FrameworkService) Import(
 			return fmt.Errorf("cannot insert framework: %w", err)
 		}
 
+		if err := coredata.UpsertSearchResource(
+			ctx,
+			tx,
+			framework.ID,
+			framework.OrganizationID,
+			framework.Name,
+			framework.SearchText(),
+		); err != nil {
+			return fmt.Errorf("cannot sync search: %w", err)
+		}
+
 		for _, control := range req.Framework.Controls {
 			controlID := gid.New(organization.ID.TenantID(), coredata.ControlEntityType)
 
@@ -645,6 +791,17 @@ func (s FrameworkService) Import(
 
 			if err := control.Insert(ctx, tx, scope); err != nil {
 				return fmt.Errorf("cannot insert control: %w", err)
+			}
+
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				tx,
+				control.ID,
+				control.OrganizationID,
+				control.Name,
+				control.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
 			}
 		}
 
@@ -719,6 +876,7 @@ func (s FrameworkService) GenerateFrameworkExportDownloadURL(
 			ResponseContentType:        new(file.MimeType),
 			ResponseContentDisposition: new(fmt.Sprintf("attachment; filename=\"%s\"", file.FileName)),
 		},
+		awsconfig.UnsignedChecksumMode,
 		func(opts *s3.PresignOptions) {
 			opts.Expires = frameworkExportEmailExpiresIn
 		},

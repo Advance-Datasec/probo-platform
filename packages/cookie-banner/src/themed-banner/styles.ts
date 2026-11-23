@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 export const THEMED_STYLES = `
   :host {
@@ -104,7 +110,16 @@ export const THEMED_STYLES = `
     flex-direction: column;
   }
 
-  probo-preference-panel probo-category-list {
+  probo-privacy-choices .card {
+    max-width: 540px;
+    max-height: 75vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  probo-preference-panel .panel-body,
+  probo-preference-panel probo-category-list,
+  probo-privacy-choices .privacy-choices-body {
     overflow-y: auto;
     overscroll-behavior: contain;
     flex: 1;
@@ -197,18 +212,65 @@ export const THEMED_STYLES = `
     color: var(--_text);
   }
 
-  probo-category-list {
+  probo-category-list,
+  .panel-body {
     display: flex;
     flex-direction: column;
   }
 
-  probo-preference-panel .footer {
+  .panel-body .section-title {
+    font-size: var(--_font-size);
+    font-weight: 600;
+    padding: 16px 24px 8px;
+  }
+
+  .panel-body .category-header {
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--_border);
+  }
+
+  .toggle-group {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  probo-preference-panel .footer,
+  probo-privacy-choices .footer {
     border-top: 1px solid var(--_border);
     padding: 10px 24px;
   }
 
   probo-preference-panel .buttons {
     padding: 10px 0;
+  }
+
+  .privacy-choices-body {
+    padding: 8px 24px 16px;
+  }
+
+  .privacy-choices-section {
+    padding: 16px 0;
+    border-bottom: 1px solid var(--_border);
+  }
+
+  .privacy-choices-section:last-child {
+    border-bottom: none;
+  }
+
+  .privacy-choices-section-title {
+    font-size: var(--_font-size);
+    font-weight: 600;
+    margin: 0 0 8px;
+  }
+
+  .privacy-choices-section .description {
+    margin: 0 0 16px;
+  }
+
+  .privacy-choices-section-spi .description {
+    margin-bottom: 0;
   }
 
   probo-category {

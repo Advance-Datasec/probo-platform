@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -151,7 +157,7 @@ func (i *Invitation) AuthorizationAttributes(
 	q := `
 SELECT
     id,
-    email,
+    user_id,
     organization_id
 FROM
     iam_invitations
@@ -169,28 +175,59 @@ WHERE
 	}
 	defer rows.Close()
 
-	attrsByID := make(policy.AttributesByID, len(resourceIDs))
+	type invitationAttr struct {
+		id             gid.GID
+		userID         gid.GID
+		organizationID gid.GID
+	}
+
+	found := make([]invitationAttr, 0, len(resourceIDs))
 
 	for rows.Next() {
-		var (
-			id             gid.GID
-			email          string
-			organizationID gid.GID
-		)
+		var row invitationAttr
 
-		err = rows.Scan(&id, &email, &organizationID)
+		err = rows.Scan(&row.id, &row.userID, &row.organizationID)
 		if err != nil {
 			return nil, fmt.Errorf("cannot scan invitation authorization attributes: %w", err)
 		}
 
-		attrsByID[id] = policy.Attributes{
-			"email":           email,
-			"organization_id": organizationID.String(),
-		}
+		found = append(found, row)
 	}
 
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("cannot iterate invitation authorization attributes: %w", err)
+	}
+
+	attrsByID := make(policy.AttributesByID, len(found))
+	if len(found) == 0 {
+		return attrsByID, nil
+	}
+
+	profileIDsByTenant := make(map[gid.TenantID][]gid.GID)
+
+	for _, row := range found {
+		tenantID := row.userID.TenantID()
+		profileIDsByTenant[tenantID] = append(profileIDsByTenant[tenantID], row.userID)
+	}
+
+	emailByProfileID := make(map[gid.GID]string, len(found))
+
+	for tenantID, profileIDs := range profileIDsByTenant {
+		var profiles MembershipProfiles
+		if err := profiles.LoadExistingByIDs(ctx, conn, NewScope(tenantID, gid.Nil), profileIDs); err != nil {
+			return nil, fmt.Errorf("cannot load invitation profile attributes: %w", err)
+		}
+
+		for _, profile := range profiles {
+			emailByProfileID[profile.ID] = profile.EmailAddress.String()
+		}
+	}
+
+	for _, row := range found {
+		attrsByID[row.id] = policy.Attributes{
+			"email":           emailByProfileID[row.userID],
+			"organization_id": row.organizationID.String(),
+		}
 	}
 
 	return attrsByID, nil

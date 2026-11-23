@@ -1,0 +1,966 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+package collaboration_v1
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.probo.inc/probo/pkg/automerge"
+	collabpkg "go.probo.inc/probo/pkg/automerge/collaboration"
+	"go.probo.inc/probo/pkg/collaboration"
+	"go.probo.inc/probo/pkg/coredata"
+	"go.probo.inc/probo/pkg/gid"
+	"go.probo.inc/probo/pkg/realtime"
+)
+
+type fakeDocuments struct {
+	opened         *collaboration.DocumentCollaboration
+	persisted      atomic.Int64
+	attempts       atomic.Int64
+	failAttempts   atomic.Int64
+	persistedCh    chan struct{}
+	persistStarted chan struct{}
+	persistGate    chan struct{}
+	attemptsMu     sync.Mutex
+	attemptTimes   []time.Time
+	fetches        atomic.Int64
+	fetchStarted   chan struct{}
+	fetchGate      chan struct{}
+	delta          *collaboration.RefreshDelta
+}
+
+func (f *fakeDocuments) FetchChanges(
+	ctx context.Context,
+	_ coredata.Scoper,
+	_ gid.GID,
+	_ collaboration.Position,
+) (*collaboration.RefreshDelta, error) {
+	if f.fetches.Add(1) == 1 && f.fetchGate != nil {
+		close(f.fetchStarted)
+
+		select {
+		case <-f.fetchGate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	return f.delta, nil
+}
+
+func (f *fakeDocuments) attemptedAt() []time.Time {
+	f.attemptsMu.Lock()
+	defer f.attemptsMu.Unlock()
+
+	return append([]time.Time(nil), f.attemptTimes...)
+}
+
+func (f *fakeDocuments) Open(
+	context.Context,
+	coredata.Scoper,
+	gid.GID,
+) (*collaboration.DocumentCollaboration, error) {
+	return f.opened, nil
+}
+
+func (f *fakeDocuments) Persist(
+	context.Context,
+	coredata.Scoper,
+	gid.GID,
+	*automerge.Document,
+) (int64, error) {
+	f.attemptsMu.Lock()
+	f.attemptTimes = append(f.attemptTimes, time.Now())
+	f.attemptsMu.Unlock()
+
+	call := f.attempts.Add(1)
+	if f.persistGate != nil && call == 1 {
+		close(f.persistStarted)
+		<-f.persistGate
+	}
+
+	if call <= f.failAttempts.Load() {
+		return 0, errors.New("transient persist failure")
+	}
+
+	revision := f.persisted.Add(1) + 1
+	if f.persistedCh != nil {
+		select {
+		case f.persistedCh <- struct{}{}:
+		default:
+		}
+	}
+
+	return revision, nil
+}
+
+func TestRoom_NotifiesOtherPeers(t *testing.T) {
+	t.Parallel()
+
+	tenantID := gid.NewTenantID()
+	documentID := gid.New(tenantID, coredata.DocumentEntityType)
+	document, err := automerge.New(automerge.ActorID{1})
+	require.NoError(t, err)
+
+	room := &Room{
+		collaboration: &collaboration.DocumentCollaboration{
+			Document: document,
+			Revision: 1,
+		},
+		peers:   make(map[uint64]RoomPeer),
+		refresh: make(chan struct{}, 1),
+	}
+	room.position = collaboration.Position{Revision: 1}
+	hub := &Hub{
+		rooms: map[gid.GID]*Room{
+			documentID: room,
+		},
+	}
+
+	hub.mu.Lock()
+	first := hub.addPeerLocked(documentID, room, "first")
+	second := hub.addPeerLocked(documentID, room, "second")
+	hub.mu.Unlock()
+
+	first.NotifyPeers()
+
+	select {
+	case <-second.WakeCh:
+	default:
+		require.Fail(t, "second peer was not notified")
+	}
+
+	select {
+	case <-first.WakeCh:
+		require.Fail(t, "originating peer must not notify itself")
+	default:
+	}
+
+	// An external change asks the room to refresh once for every peer. The
+	// peers are woken only by the refresh, once it moved the document, and a
+	// second notification coalesces with the pending one.
+	hub.notifyExternal(documentID.String())
+	hub.notifyExternal(documentID.String())
+
+	assert.Len(t, room.refresh, 1)
+
+	for _, wakeChannel := range []<-chan Wake{
+		first.WakeCh,
+		second.WakeCh,
+	} {
+		select {
+		case <-wakeChannel:
+			require.Fail(t, "external notification must not wake peers directly")
+		default:
+		}
+	}
+
+	first.Close()
+	assert.Contains(t, hub.rooms, documentID)
+	second.Close()
+	assert.NotContains(t, hub.rooms, documentID)
+}
+
+func TestRoom_RefreshWakesPeersWhenDocumentMoves(t *testing.T) {
+	t.Parallel()
+
+	tenantID := gid.NewTenantID()
+	documentID := gid.New(tenantID, coredata.DocumentEntityType)
+	document, err := automerge.New(automerge.ActorID{3})
+	require.NoError(t, err)
+
+	defer func() { _ = document.Close() }()
+
+	// Another writer persisted a change the room document lacks.
+	writer, err := document.Fork(automerge.ActorID{4})
+	require.NoError(t, err)
+
+	defer func() { _ = writer.Close() }()
+
+	require.NoError(
+		t,
+		writer.Root().PutScalar(
+			"title",
+			automerge.Scalar{Type: automerge.ScalarTypeString, String: "external"},
+		),
+	)
+	_, err = writer.Commit("external edit", time.Now())
+	require.NoError(t, err)
+
+	heads, err := writer.Heads()
+	require.NoError(t, err)
+
+	changes, err := writer.ChangesSince(nil)
+	require.NoError(t, err)
+
+	position := collaboration.Position{Revision: 2, ChangeRevision: 2}
+	documents := &fakeDocuments{
+		delta: collaboration.NewRefreshDelta(position, heads, changes),
+	}
+	room := &Room{
+		collaboration: &collaboration.DocumentCollaboration{
+			Document: document,
+			Revision: 1,
+		},
+		documents:  documents,
+		scope:      coredata.NewScope(tenantID, gid.Nil),
+		documentID: documentID,
+		peers:      make(map[uint64]RoomPeer),
+		refresh:    make(chan struct{}, 1),
+	}
+	room.position = collaboration.Position{Revision: 1, ChangeRevision: 1}
+	hub := &Hub{
+		rooms: map[gid.GID]*Room{
+			documentID: room,
+		},
+	}
+
+	hub.mu.Lock()
+	first := hub.addPeerLocked(documentID, room, "first")
+	second := hub.addPeerLocked(documentID, room, "second")
+	hub.mu.Unlock()
+
+	room.refreshOnce()
+
+	assert.Equal(t, position, room.position)
+
+	for name, wakeChannel := range map[string]<-chan Wake{
+		"first":  first.WakeCh,
+		"second": second.WakeCh,
+	} {
+		select {
+		case <-wakeChannel:
+		default:
+			assert.Failf(t, "peer was not woken", "peer %s", name)
+		}
+	}
+}
+
+func TestRoom_RefreshesWithoutHoldingDocumentLock(t *testing.T) {
+	t.Parallel()
+
+	tenantID := gid.NewTenantID()
+	documentID := gid.New(tenantID, coredata.DocumentEntityType)
+	document, err := automerge.New(automerge.ActorID{9})
+	require.NoError(t, err)
+
+	documents := &fakeDocuments{
+		opened: &collaboration.DocumentCollaboration{
+			Document: document,
+			Revision: 1,
+		},
+		fetchStarted: make(chan struct{}),
+		fetchGate:    make(chan struct{}),
+	}
+	room := &Room{
+		collaboration: documents.opened,
+		documents:     documents,
+		scope:         coredata.NewScope(tenantID, gid.Nil),
+		documentID:    documentID,
+		peers:         make(map[uint64]RoomPeer),
+		dirty:         make(chan struct{}, 1),
+		refresh:       make(chan struct{}, 1),
+		stop:          make(chan struct{}),
+		done:          make(chan struct{}),
+	}
+
+	room.position = collaboration.Position{Revision: 1}
+	go room.run()
+
+	room.refresh <- struct{}{}
+
+	select {
+	case <-documents.fetchStarted:
+	case <-time.After(time.Second):
+		require.Fail(t, "room did not refresh")
+	}
+
+	// The canonical read is still blocked. A joining peer's request takes the
+	// document lock, and must not wait behind that read.
+	locked := make(chan struct{})
+	lease := &RoomLease{room: room}
+
+	go func() {
+		lease.LockDocument()
+		lease.UnlockDocument()
+		close(locked)
+	}()
+
+	select {
+	case <-locked:
+	case <-time.After(time.Second):
+		require.Fail(t, "refresh held the document lock while reading")
+	}
+
+	close(documents.fetchGate)
+	close(room.stop)
+	<-room.done
+	require.NoError(t, document.Close())
+}
+
+func TestRoom_ReplaysPresenceOnJoin(t *testing.T) {
+	t.Parallel()
+
+	tenantID := gid.NewTenantID()
+	documentID := gid.New(tenantID, coredata.DocumentEntityType)
+	document, err := automerge.New(automerge.ActorID{7})
+	require.NoError(t, err)
+
+	room := &Room{
+		collaboration: &collaboration.DocumentCollaboration{
+			Document: document,
+			Revision: 1,
+		},
+		peers:    make(map[uint64]RoomPeer),
+		presence: make(map[string]presenceEntry),
+	}
+	room.position = collaboration.Position{Revision: 1}
+	hub := &Hub{
+		rooms: map[gid.GID]*Room{
+			documentID: room,
+		},
+	}
+
+	hub.mu.Lock()
+	first := hub.addPeerLocked(documentID, room, "first")
+	hub.mu.Unlock()
+	first.SetRemotePeerID("peer-a")
+
+	frame, err := collabpkg.EncodeMessage(
+		collabpkg.Message{
+			Type:       collabpkg.MessageEphemeral,
+			SenderID:   "peer-a",
+			TargetID:   "gateway",
+			DocumentID: "doc",
+			SessionID:  "session-a",
+			Count:      1,
+			Data:       []byte{0x01},
+		},
+	)
+	require.NoError(t, err)
+
+	first.BroadcastEphemeral(frame)
+
+	hub.mu.Lock()
+	second := hub.addPeerLocked(documentID, room, "second")
+	hub.mu.Unlock()
+	second.SetRemotePeerID("peer-b")
+	second.ReplayPresence()
+
+	select {
+	case got := <-second.EphemeralCh:
+		assert.Equal(t, frame, got)
+	default:
+		require.Fail(t, "joining peer did not receive the cached presence frame")
+	}
+
+	secondFrame, err := collabpkg.EncodeMessage(
+		collabpkg.Message{
+			Type:       collabpkg.MessageEphemeral,
+			SenderID:   "peer-b",
+			TargetID:   "gateway",
+			DocumentID: "doc",
+			SessionID:  "session-b",
+			Count:      1,
+			Data:       []byte{0x02},
+		},
+	)
+	require.NoError(t, err)
+
+	second.BroadcastEphemeral(secondFrame)
+
+	select {
+	case got := <-first.EphemeralCh:
+		assert.Equal(t, secondFrame, got)
+	default:
+		require.Fail(t, "existing peer did not receive the new presence frame")
+	}
+
+	first.Close()
+	assert.NotContains(t, room.presence, "peer-a")
+	assert.Contains(t, room.presence, "peer-b")
+
+	second.ReplayPresence()
+
+	select {
+	case <-second.EphemeralCh:
+		require.Fail(t, "joining peer must not receive its own cached presence")
+	default:
+	}
+
+	require.NoError(t, document.Close())
+}
+
+func TestRoom_DepartureDropsCachedPresence(t *testing.T) {
+	t.Parallel()
+
+	tenantID := gid.NewTenantID()
+	documentID := gid.New(tenantID, coredata.DocumentEntityType)
+	document, err := automerge.New(automerge.ActorID{8})
+	require.NoError(t, err)
+
+	room := &Room{
+		collaboration: &collaboration.DocumentCollaboration{
+			Document: document,
+			Revision: 1,
+		},
+		peers:    make(map[uint64]RoomPeer),
+		presence: make(map[string]presenceEntry),
+	}
+	room.position = collaboration.Position{Revision: 1}
+	hub := &Hub{
+		rooms: map[gid.GID]*Room{
+			documentID: room,
+		},
+	}
+
+	hub.mu.Lock()
+	first := hub.addPeerLocked(documentID, room, "first")
+	second := hub.addPeerLocked(documentID, room, "second")
+	hub.mu.Unlock()
+	first.SetRemotePeerID("peer-a")
+
+	selection, err := collabpkg.EncodeMessage(
+		collabpkg.Message{
+			Type:       collabpkg.MessageEphemeral,
+			SenderID:   "peer-a",
+			TargetID:   "gateway",
+			DocumentID: "doc",
+			SessionID:  "session-a",
+			Count:      1,
+			Data:       []byte{0x01},
+		},
+	)
+	require.NoError(t, err)
+
+	first.BroadcastEphemeral(selection)
+
+	select {
+	case got := <-second.EphemeralCh:
+		assert.Equal(t, selection, got)
+	default:
+		require.Fail(t, "peer did not receive the selection frame")
+	}
+
+	require.Contains(t, room.presence, "peer-a")
+
+	departure, err := collabpkg.EncodeDepartureEphemeral(
+		"peer-a",
+		"gateway",
+		"doc",
+		"departure-session",
+	)
+	require.NoError(t, err)
+
+	first.BroadcastEphemeral(departure)
+
+	select {
+	case got := <-second.EphemeralCh:
+		assert.Equal(t, departure, got)
+	default:
+		require.Fail(t, "peer did not receive the departure frame")
+	}
+
+	assert.NotContains(t, room.presence, "peer-a")
+
+	hub.mu.Lock()
+	third := hub.addPeerLocked(documentID, room, "third")
+	hub.mu.Unlock()
+	third.SetRemotePeerID("peer-c")
+	third.ReplayPresence()
+
+	select {
+	case <-third.EphemeralCh:
+		require.Fail(t, "replay must not include a departed sender")
+	default:
+	}
+
+	require.NoError(t, document.Close())
+}
+
+func TestRoom_BroadcastsEphemeralToOtherPeers(t *testing.T) {
+	t.Parallel()
+
+	tenantID := gid.NewTenantID()
+	documentID := gid.New(tenantID, coredata.DocumentEntityType)
+	document, err := automerge.New(automerge.ActorID{3})
+	require.NoError(t, err)
+
+	room := &Room{
+		collaboration: &collaboration.DocumentCollaboration{
+			Document: document,
+			Revision: 1,
+		},
+		peers: make(map[uint64]RoomPeer),
+	}
+	room.position = collaboration.Position{Revision: 1}
+	hub := &Hub{
+		rooms: map[gid.GID]*Room{
+			documentID: room,
+		},
+	}
+
+	hub.mu.Lock()
+	first := hub.addPeerLocked(documentID, room, "first")
+	second := hub.addPeerLocked(documentID, room, "second")
+	third := hub.addPeerLocked(documentID, room, "third")
+	hub.mu.Unlock()
+
+	frame := []byte{0x01, 0x02, 0x03}
+	first.BroadcastEphemeral(frame)
+
+	for _, lease := range []*RoomLease{second, third} {
+		select {
+		case got := <-lease.EphemeralCh:
+			assert.Equal(t, frame, got)
+		default:
+			require.Fail(t, "peer did not receive the ephemeral frame")
+		}
+	}
+
+	select {
+	case <-first.EphemeralCh:
+		require.Fail(t, "originating peer must not receive its own ephemeral frame")
+	default:
+	}
+
+	require.NoError(t, document.Close())
+}
+
+func TestHub_DeliversExternalEphemeral(t *testing.T) {
+	t.Parallel()
+
+	tenantID := gid.NewTenantID()
+	documentID := gid.New(tenantID, coredata.DocumentEntityType)
+	document, err := automerge.New(automerge.ActorID{5})
+	require.NoError(t, err)
+
+	room := &Room{
+		collaboration: &collaboration.DocumentCollaboration{Document: document, Revision: 1},
+		peers:         make(map[uint64]RoomPeer),
+	}
+	room.position = collaboration.Position{Revision: 1}
+	hub := &Hub{
+		rooms:      map[gid.GID]*Room{documentID: room},
+		instanceID: "local-instance",
+	}
+
+	hub.mu.Lock()
+	first := hub.addPeerLocked(documentID, room, "first")
+	second := hub.addPeerLocked(documentID, room, "second")
+	hub.mu.Unlock()
+
+	frame := []byte{0x0a, 0x0b, 0x0c}
+	remote, err := realtime.EncodeCollaborationEphemeral(realtime.CollaborationEphemeral{
+		DocumentID: documentID.String(),
+		InstanceID: "remote-instance",
+		Frame:      frame,
+	})
+	require.NoError(t, err)
+
+	hub.notifyExternal(remote)
+
+	for _, lease := range []*RoomLease{first, second} {
+		select {
+		case got := <-lease.EphemeralCh:
+			assert.Equal(t, frame, got)
+		default:
+			require.Fail(t, "peer did not receive the external ephemeral frame")
+		}
+	}
+
+	own, err := realtime.EncodeCollaborationEphemeral(realtime.CollaborationEphemeral{
+		DocumentID: documentID.String(),
+		InstanceID: "local-instance",
+		Frame:      []byte{0xff},
+	})
+	require.NoError(t, err)
+
+	hub.notifyExternal(own)
+
+	select {
+	case <-first.EphemeralCh:
+		require.Fail(t, "the hub must ignore its own ephemeral echo")
+	default:
+	}
+
+	require.NoError(t, document.Close())
+}
+
+func TestRoom_DropsEphemeralWhenBufferFull(t *testing.T) {
+	t.Parallel()
+
+	tenantID := gid.NewTenantID()
+	documentID := gid.New(tenantID, coredata.DocumentEntityType)
+	document, err := automerge.New(automerge.ActorID{4})
+	require.NoError(t, err)
+
+	room := &Room{
+		collaboration: &collaboration.DocumentCollaboration{Document: document, Revision: 1},
+		peers:         make(map[uint64]RoomPeer),
+	}
+	room.position = collaboration.Position{Revision: 1}
+	hub := &Hub{
+		rooms: map[gid.GID]*Room{documentID: room},
+	}
+
+	hub.mu.Lock()
+	sender := hub.addPeerLocked(documentID, room, "sender")
+	slow := hub.addPeerLocked(documentID, room, "slow")
+	hub.mu.Unlock()
+
+	for range EphemeralBuffer + 10 {
+		sender.BroadcastEphemeral([]byte{0xff})
+	}
+
+	assert.Len(t, slow.EphemeralCh, EphemeralBuffer)
+
+	require.NoError(t, document.Close())
+}
+
+func TestRoom_DebouncesPersistence(t *testing.T) {
+	t.Parallel()
+
+	tenantID := gid.NewTenantID()
+	documentID := gid.New(tenantID, coredata.DocumentEntityType)
+	document, err := automerge.New(automerge.ActorID{2})
+	require.NoError(t, err)
+
+	documents := &fakeDocuments{
+		opened: &collaboration.DocumentCollaboration{
+			Document: document,
+			Revision: 1,
+		},
+		persistedCh: make(chan struct{}, 1),
+	}
+	room := &Room{
+		collaboration: documents.opened,
+		documents:     documents,
+		scope:         coredata.NewScope(tenantID, gid.Nil),
+		documentID:    documentID,
+		peers:         make(map[uint64]RoomPeer),
+		dirty:         make(chan struct{}, 1),
+		stop:          make(chan struct{}),
+		done:          make(chan struct{}),
+	}
+
+	room.position = collaboration.Position{Revision: 1}
+	go room.run()
+
+	lease := &RoomLease{room: room}
+	for range 20 {
+		lease.SchedulePersist()
+	}
+
+	require.Eventually(
+		t,
+		func() bool {
+			return documents.persisted.Load() == 1
+		},
+		time.Second,
+		5*time.Millisecond,
+	)
+	assert.Equal(t, int64(1), documents.persisted.Load())
+
+	close(room.stop)
+	<-room.done
+	require.NoError(t, document.Close())
+}
+
+func TestRoom_RetriesPersistAfterError(t *testing.T) {
+	t.Parallel()
+
+	tenantID := gid.NewTenantID()
+	documentID := gid.New(tenantID, coredata.DocumentEntityType)
+	document, err := automerge.New(automerge.ActorID{6})
+	require.NoError(t, err)
+
+	documents := &fakeDocuments{
+		opened: &collaboration.DocumentCollaboration{
+			Document: document,
+			Revision: 1,
+		},
+	}
+	documents.failAttempts.Store(1)
+	room := &Room{
+		collaboration: documents.opened,
+		documents:     documents,
+		scope:         coredata.NewScope(tenantID, gid.Nil),
+		documentID:    documentID,
+		peers:         make(map[uint64]RoomPeer),
+		dirty:         make(chan struct{}, 1),
+		stop:          make(chan struct{}),
+		done:          make(chan struct{}),
+	}
+
+	room.position = collaboration.Position{Revision: 1}
+	go room.run()
+
+	lease := &RoomLease{room: room}
+	lease.SchedulePersist()
+
+	started := time.Now()
+
+	require.Eventually(
+		t,
+		func() bool {
+			return documents.persisted.Load() == 1
+		},
+		time.Second,
+		5*time.Millisecond,
+	)
+	assert.GreaterOrEqual(t, time.Since(started), PersistDebounce/2)
+	assert.Equal(t, int64(2), documents.attempts.Load())
+	assert.Equal(t, int64(1), documents.persisted.Load())
+
+	close(room.stop)
+	<-room.done
+	require.NoError(t, document.Close())
+}
+
+func TestRoom_BacksOffPersistRetries(t *testing.T) {
+	t.Parallel()
+
+	tenantID := gid.NewTenantID()
+	documentID := gid.New(tenantID, coredata.DocumentEntityType)
+	document, err := automerge.New(automerge.ActorID{9})
+	require.NoError(t, err)
+
+	documents := &fakeDocuments{
+		opened: &collaboration.DocumentCollaboration{
+			Document: document,
+			Revision: 1,
+		},
+	}
+	documents.failAttempts.Store(3)
+	room := &Room{
+		collaboration: documents.opened,
+		documents:     documents,
+		scope:         coredata.NewScope(tenantID, gid.Nil),
+		documentID:    documentID,
+		peers:         make(map[uint64]RoomPeer),
+		dirty:         make(chan struct{}, 1),
+		stop:          make(chan struct{}),
+		done:          make(chan struct{}),
+	}
+
+	room.position = collaboration.Position{Revision: 1}
+
+	go room.run()
+
+	lease := &RoomLease{room: room}
+	lease.SchedulePersist()
+
+	// Edits arriving while a retry is pending must not shorten the backoff.
+	require.Eventually(
+		t,
+		func() bool {
+			if documents.attempts.Load() > 0 {
+				lease.SchedulePersist()
+			}
+
+			return documents.persisted.Load() >= 1
+		},
+		5*time.Second,
+		5*time.Millisecond,
+	)
+
+	// One debounce, then retries after 2x, 4x and 8x the debounce. Each gap
+	// is checked on its own so a fixed retry delay cannot pass.
+	attempts := documents.attemptedAt()
+	require.GreaterOrEqual(t, len(attempts), 4)
+	assert.GreaterOrEqual(t, attempts[1].Sub(attempts[0]), 2*PersistDebounce)
+	assert.GreaterOrEqual(t, attempts[2].Sub(attempts[1]), 4*PersistDebounce)
+	assert.GreaterOrEqual(t, attempts[3].Sub(attempts[2]), 8*PersistDebounce)
+
+	close(room.stop)
+	<-room.done
+	require.NoError(t, document.Close())
+}
+
+func TestPersistRetryDelay(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 2*PersistDebounce, persistRetryDelay(1))
+	assert.Equal(t, 4*PersistDebounce, persistRetryDelay(2))
+	assert.Equal(t, PersistRetryMax, persistRetryDelay(20))
+	assert.Equal(t, PersistRetryMax, persistRetryDelay(1000))
+}
+
+func TestRoom_PersistsDirtyOnCloseAfterError(t *testing.T) {
+	t.Parallel()
+
+	tenantID := gid.NewTenantID()
+	documentID := gid.New(tenantID, coredata.DocumentEntityType)
+	document, err := automerge.New(automerge.ActorID{9})
+	require.NoError(t, err)
+
+	documents := &fakeDocuments{
+		opened: &collaboration.DocumentCollaboration{
+			Document: document,
+			Revision: 1,
+		},
+		persistStarted: make(chan struct{}),
+		persistGate:    make(chan struct{}),
+	}
+	documents.failAttempts.Store(10)
+	room := &Room{
+		collaboration: documents.opened,
+		documents:     documents,
+		scope:         coredata.NewScope(tenantID, gid.Nil),
+		documentID:    documentID,
+		peers:         make(map[uint64]RoomPeer),
+		dirty:         make(chan struct{}, 1),
+		stop:          make(chan struct{}),
+		done:          make(chan struct{}),
+	}
+
+	room.position = collaboration.Position{Revision: 1}
+	go room.run()
+
+	var releaseGate sync.Once
+
+	release := func() {
+		releaseGate.Do(func() {
+			close(documents.persistGate)
+		})
+	}
+	defer release()
+
+	lease := &RoomLease{room: room}
+	lease.SchedulePersist()
+
+	select {
+	case <-documents.persistStarted:
+	case <-time.After(time.Second):
+		require.Fail(t, "collaboration room did not attempt to persist")
+	}
+
+	close(room.stop)
+	release()
+	<-room.done
+
+	assert.GreaterOrEqual(t, documents.attempts.Load(), int64(2))
+	require.NoError(t, document.Close())
+}
+
+type cancelProbeDocuments struct {
+	started chan struct{}
+	release chan struct{}
+	openCtx context.Context
+}
+
+func (d *cancelProbeDocuments) Open(
+	ctx context.Context,
+	_ coredata.Scoper,
+	_ gid.GID,
+) (*collaboration.DocumentCollaboration, error) {
+	d.openCtx = ctx
+	close(d.started)
+
+	select {
+	case <-d.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	document, err := automerge.New(automerge.ActorID{1})
+	if err != nil {
+		return nil, err
+	}
+
+	return &collaboration.DocumentCollaboration{
+		Document: document,
+		Revision: 1,
+	}, nil
+}
+
+func (d *cancelProbeDocuments) Persist(
+	context.Context,
+	coredata.Scoper,
+	gid.GID,
+	*automerge.Document,
+) (int64, error) {
+	return 1, nil
+}
+
+func (d *cancelProbeDocuments) FetchChanges(
+	context.Context,
+	coredata.Scoper,
+	gid.GID,
+	collaboration.Position,
+) (*collaboration.RefreshDelta, error) {
+	return nil, nil
+}
+
+func TestAcquire_OpenFollowsCallerContext(t *testing.T) {
+	t.Parallel()
+
+	tenantID := gid.NewTenantID()
+	documentID := gid.New(tenantID, coredata.DocumentEntityType)
+	documents := &cancelProbeDocuments{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	hub := NewHub(documents, nil)
+	scope := coredata.NewScope(tenantID, gid.Nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+
+	go func() {
+		_, err := hub.Acquire(ctx, scope, documentID, "conn")
+		errCh <- err
+	}()
+
+	select {
+	case <-documents.started:
+	case <-time.After(time.Second):
+		require.Fail(t, "open did not start")
+	}
+
+	deadline, ok := documents.openCtx.Deadline()
+	require.True(t, ok)
+	assert.WithinDuration(t, time.Now().Add(RoomOpenTimeout), deadline, time.Second)
+
+	cancel()
+	close(documents.release)
+
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		require.Fail(t, "acquire did not return")
+	}
+}

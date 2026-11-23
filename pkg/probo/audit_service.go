@@ -1,25 +1,33 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"go.gearno.de/kit/pg"
+	"go.gearno.de/x/ref"
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/filevalidation"
 	"go.probo.inc/probo/pkg/gid"
@@ -33,22 +41,31 @@ type AuditService struct {
 
 type (
 	CreateAuditRequest struct {
-		OrganizationID        gid.GID
-		FrameworkID           gid.GID
-		Name                  *string
-		ValidFrom             *time.Time
-		ValidUntil            *time.Time
-		State                 *coredata.AuditState
-		TrustCenterVisibility *coredata.TrustCenterVisibility
+		OrganizationID gid.GID
+		FrameworkIDs   []gid.GID
+		Name           *string
+		Firm           *string
+		ValidFrom      *time.Time
+		ValidUntil     *time.Time
+		AuditStartDate *time.Time
+		AuditEndDate   *time.Time
+		State          *coredata.AuditState
+	}
+
+	LinkAuditFrameworkRequest struct {
+		AuditID     gid.GID
+		FrameworkID gid.GID
 	}
 
 	UpdateAuditRequest struct {
-		ID                    gid.GID
-		Name                  **string
-		ValidFrom             *time.Time
-		ValidUntil            *time.Time
-		State                 *coredata.AuditState
-		TrustCenterVisibility *coredata.TrustCenterVisibility
+		ID             gid.GID
+		Name           **string
+		Firm           **string
+		ValidFrom      *time.Time
+		ValidUntil     *time.Time
+		AuditStartDate *time.Time
+		AuditEndDate   *time.Time
+		State          *coredata.AuditState
 	}
 
 	UploadAuditReportRequest struct {
@@ -61,11 +78,15 @@ func (car *CreateAuditRequest) Validate() error {
 	v := validator.New()
 
 	v.Check(car.OrganizationID, "organization_id", validator.Required(), validator.GID(coredata.OrganizationEntityType))
-	v.Check(car.FrameworkID, "framework_id", validator.Required(), validator.GID(coredata.FrameworkEntityType))
+	v.Check(car.FrameworkIDs, "framework_ids", validator.Required(), validator.NoDuplicates())
+	v.CheckEach(car.FrameworkIDs, "framework_ids", func(index int, item any) {
+		v.Check(item, fmt.Sprintf("framework_ids[%d]", index), validator.Required(), validator.GID(coredata.FrameworkEntityType))
+	})
 	v.Check(car.Name, "name", validator.SafeTextNoNewLine(TitleMaxLength))
+	v.Check(car.Firm, "firm", validator.SafeTextNoNewLine(TitleMaxLength))
 	v.Check(car.ValidUntil, "valid_until", validator.After(car.ValidFrom))
+	v.Check(car.AuditEndDate, "audit_end_date", validator.AfterOrEqual(car.AuditStartDate))
 	v.Check(car.State, "state", validator.OneOfSlice(coredata.AuditStates()))
-	v.Check(car.TrustCenterVisibility, "trust_center_visibility", validator.OneOfSlice(coredata.TrustCenterVisibilities()))
 
 	return v.Error()
 }
@@ -75,9 +96,35 @@ func (uar *UpdateAuditRequest) Validate() error {
 
 	v.Check(uar.ID, "id", validator.Required(), validator.GID(coredata.AuditEntityType))
 	v.Check(uar.Name, "name", validator.SafeTextNoNewLine(TitleMaxLength))
+	v.Check(uar.Firm, "firm", validator.SafeTextNoNewLine(TitleMaxLength))
 	v.Check(uar.ValidUntil, "valid_until", validator.After(uar.ValidFrom))
+	v.Check(uar.AuditEndDate, "audit_end_date", validator.AfterOrEqual(uar.AuditStartDate))
 	v.Check(uar.State, "state", validator.OneOfSlice(coredata.AuditStates()))
-	v.Check(uar.TrustCenterVisibility, "trust_center_visibility", validator.OneOfSlice(coredata.TrustCenterVisibilities()))
+
+	return v.Error()
+}
+
+// validateStoredAuditDates checks the dates Update would persist. A one-sided
+// update leaves the other request date nil, and AfterOrEqual skips that side.
+func (uar *UpdateAuditRequest) validateStoredAuditDates(storedStart, storedEnd *time.Time) error {
+	if uar.AuditStartDate == nil && uar.AuditEndDate == nil {
+		return nil
+	}
+
+	start := storedStart
+
+	if uar.AuditStartDate != nil {
+		start = uar.AuditStartDate
+	}
+
+	end := storedEnd
+
+	if uar.AuditEndDate != nil {
+		end = uar.AuditEndDate
+	}
+
+	v := validator.New()
+	v.Check(end, "audit_end_date", validator.AfterOrEqual(start))
 
 	return v.Error()
 }
@@ -102,6 +149,15 @@ func (uarr *UploadAuditReportRequest) Validate() error {
 	return nil
 }
 
+func (r *LinkAuditFrameworkRequest) Validate() error {
+	v := validator.New()
+
+	v.Check(r.AuditID, "audit_id", validator.Required(), validator.GID(coredata.AuditEntityType))
+	v.Check(r.FrameworkID, "framework_id", validator.Required(), validator.GID(coredata.FrameworkEntityType))
+
+	return v.Error()
+}
+
 func (s AuditService) Get(
 	ctx context.Context, scope coredata.Scoper,
 	auditID gid.GID,
@@ -123,6 +179,31 @@ func (s AuditService) Get(
 	}
 
 	return audit, nil
+}
+
+func (s AuditService) GetByIDs(
+	ctx context.Context,
+	scope coredata.Scoper,
+	auditIDs ...gid.GID,
+) (coredata.Audits, error) {
+	var audits coredata.Audits
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := audits.LoadByIDs(ctx, conn, scope, auditIDs); err != nil &&
+				!errors.Is(err, coredata.ErrResourceNotFound) {
+				return fmt.Errorf("cannot load audits by ids: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return audits, nil
 }
 
 func (s AuditService) GetByReportFileID(
@@ -158,24 +239,21 @@ func (s *AuditService) Create(
 
 	now := time.Now()
 	audit := &coredata.Audit{
-		ID:                    gid.New(scope.GetTenantID(), coredata.AuditEntityType),
-		Name:                  req.Name,
-		OrganizationID:        req.OrganizationID,
-		FrameworkID:           req.FrameworkID,
-		ValidFrom:             req.ValidFrom,
-		ValidUntil:            req.ValidUntil,
-		State:                 coredata.AuditStateNotStarted,
-		TrustCenterVisibility: coredata.TrustCenterVisibilityNone,
-		CreatedAt:             now,
-		UpdatedAt:             now,
+		ID:             gid.New(scope.GetTenantID(), coredata.AuditEntityType),
+		Name:           req.Name,
+		Firm:           req.Firm,
+		OrganizationID: req.OrganizationID,
+		ValidFrom:      req.ValidFrom,
+		ValidUntil:     req.ValidUntil,
+		AuditStartDate: req.AuditStartDate,
+		AuditEndDate:   req.AuditEndDate,
+		State:          coredata.AuditStateNotStarted,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 
 	if req.State != nil {
 		audit.State = *req.State
-	}
-
-	if req.TrustCenterVisibility != nil {
-		audit.TrustCenterVisibility = *req.TrustCenterVisibility
 	}
 
 	err := s.svc.pg.WithTx(
@@ -186,13 +264,42 @@ func (s *AuditService) Create(
 				return fmt.Errorf("cannot load organization: %w", err)
 			}
 
-			framework := &coredata.Framework{}
-			if err := framework.LoadByID(ctx, conn, scope, req.FrameworkID); err != nil {
-				return fmt.Errorf("cannot load framework: %w", err)
+			for _, frameworkID := range req.FrameworkIDs {
+				framework := &coredata.Framework{}
+				if err := framework.LoadByID(ctx, conn, scope, frameworkID); err != nil {
+					return fmt.Errorf("cannot load framework: %w", err)
+				}
+
+				if framework.OrganizationID != organization.ID {
+					return fmt.Errorf("framework %q: %w", frameworkID, coredata.ErrResourceNotFound)
+				}
 			}
 
 			if err := audit.Insert(ctx, conn, scope); err != nil {
 				return fmt.Errorf("cannot insert audit: %w", err)
+			}
+
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				audit.ID,
+				audit.OrganizationID,
+				ref.UnrefOrZero(audit.Name),
+				audit.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
+			for _, frameworkID := range req.FrameworkIDs {
+				link := &coredata.AuditFramework{
+					AuditID:        audit.ID,
+					FrameworkID:    frameworkID,
+					OrganizationID: organization.ID,
+					CreatedAt:      now,
+				}
+				if err := link.Insert(ctx, conn, scope); err != nil {
+					return fmt.Errorf("cannot link framework: %w", err)
+				}
 			}
 
 			return nil
@@ -203,6 +310,187 @@ func (s *AuditService) Create(
 	}
 
 	return audit, nil
+}
+
+func (s *AuditService) LinkFramework(
+	ctx context.Context,
+	scope coredata.Scoper,
+	req *LinkAuditFrameworkRequest,
+) (*coredata.Audit, *coredata.Framework, error) {
+	if err := req.Validate(); err != nil {
+		return nil, nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	audit := &coredata.Audit{}
+	framework := &coredata.Framework{}
+
+	err := s.svc.pg.WithTx(
+		ctx,
+		func(ctx context.Context, conn pg.Tx) error {
+			if err := audit.LoadByID(ctx, conn, scope, req.AuditID); err != nil {
+				return fmt.Errorf("cannot load audit: %w", err)
+			}
+
+			if err := framework.LoadByID(ctx, conn, scope, req.FrameworkID); err != nil {
+				return fmt.Errorf("cannot load framework: %w", err)
+			}
+
+			if framework.OrganizationID != audit.OrganizationID {
+				return fmt.Errorf("framework %q: %w", req.FrameworkID, coredata.ErrResourceNotFound)
+			}
+
+			link := &coredata.AuditFramework{
+				AuditID:        audit.ID,
+				FrameworkID:    framework.ID,
+				OrganizationID: audit.OrganizationID,
+				CreatedAt:      time.Now(),
+			}
+			if err := link.Insert(ctx, conn, scope); err != nil {
+				return fmt.Errorf("cannot link framework: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return audit, framework, nil
+}
+
+func (s *AuditService) UnlinkFramework(
+	ctx context.Context,
+	scope coredata.Scoper,
+	req *LinkAuditFrameworkRequest,
+) (*coredata.Audit, error) {
+	if err := req.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	audit := &coredata.Audit{}
+
+	err := s.svc.pg.WithTx(
+		ctx,
+		func(ctx context.Context, conn pg.Tx) error {
+			if err := audit.LoadByID(ctx, conn, scope, req.AuditID); err != nil {
+				return fmt.Errorf("cannot load audit: %w", err)
+			}
+
+			framework := &coredata.Framework{}
+			if err := framework.LoadByID(ctx, conn, scope, req.FrameworkID); err != nil {
+				return fmt.Errorf("cannot load framework: %w", err)
+			}
+
+			if framework.OrganizationID != audit.OrganizationID {
+				return fmt.Errorf("framework %q: %w", req.FrameworkID, coredata.ErrResourceNotFound)
+			}
+
+			link := &coredata.AuditFramework{
+				AuditID:     audit.ID,
+				FrameworkID: framework.ID,
+			}
+			if err := link.Delete(ctx, conn, scope); err != nil {
+				return fmt.Errorf("cannot unlink framework: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return audit, nil
+}
+
+func (s AuditService) ListFrameworksForAuditID(
+	ctx context.Context,
+	scope coredata.Scoper,
+	auditID gid.GID,
+	cursor *page.Cursor[coredata.FrameworkOrderField],
+) (*page.Page[*coredata.Framework, coredata.FrameworkOrderField], error) {
+	var frameworks coredata.Frameworks
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			audit := &coredata.Audit{}
+			if err := audit.LoadByID(ctx, conn, scope, auditID); err != nil {
+				return fmt.Errorf("cannot load audit: %w", err)
+			}
+
+			if err := frameworks.LoadByAuditID(ctx, conn, scope, audit.ID, cursor); err != nil {
+				return fmt.Errorf("cannot load frameworks: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return page.NewPage(frameworks, cursor), nil
+}
+
+func (s AuditService) CountFrameworksForAuditID(
+	ctx context.Context,
+	scope coredata.Scoper,
+	auditID gid.GID,
+) (int, error) {
+	var count int
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) (err error) {
+			frameworks := coredata.Frameworks{}
+
+			count, err = frameworks.CountByAuditID(ctx, conn, scope, auditID)
+			if err != nil {
+				return fmt.Errorf("cannot count frameworks: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+func (s AuditService) ListFrameworkIDsByAuditIDs(
+	ctx context.Context,
+	scope coredata.Scoper,
+	auditIDs []gid.GID,
+) (map[gid.GID][]gid.GID, error) {
+	frameworkIDs := make(map[gid.GID][]gid.GID, len(auditIDs))
+	for _, auditID := range auditIDs {
+		frameworkIDs[auditID] = []gid.GID{}
+	}
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			var links coredata.AuditFrameworks
+			if err := links.LoadByAuditIDs(ctx, conn, scope, auditIDs); err != nil {
+				return fmt.Errorf("cannot load audit frameworks: %w", err)
+			}
+
+			for _, link := range links {
+				frameworkIDs[link.AuditID] = append(frameworkIDs[link.AuditID], link.FrameworkID)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return frameworkIDs, nil
 }
 
 func (s *AuditService) Update(
@@ -222,8 +510,16 @@ func (s *AuditService) Update(
 				return fmt.Errorf("cannot load audit: %w", err)
 			}
 
+			if err := req.validateStoredAuditDates(audit.AuditStartDate, audit.AuditEndDate); err != nil {
+				return fmt.Errorf("invalid request: %w", err)
+			}
+
 			if req.Name != nil {
 				audit.Name = *req.Name
+			}
+
+			if req.Firm != nil {
+				audit.Firm = *req.Firm
 			}
 
 			if req.ValidFrom != nil {
@@ -234,18 +530,33 @@ func (s *AuditService) Update(
 				audit.ValidUntil = req.ValidUntil
 			}
 
-			if req.State != nil {
-				audit.State = *req.State
+			if req.AuditStartDate != nil {
+				audit.AuditStartDate = req.AuditStartDate
 			}
 
-			if req.TrustCenterVisibility != nil {
-				audit.TrustCenterVisibility = *req.TrustCenterVisibility
+			if req.AuditEndDate != nil {
+				audit.AuditEndDate = req.AuditEndDate
+			}
+
+			if req.State != nil {
+				audit.State = *req.State
 			}
 
 			audit.UpdatedAt = time.Now()
 
 			if err := audit.Update(ctx, conn, scope); err != nil {
 				return fmt.Errorf("cannot update audit: %w", err)
+			}
+
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				audit.ID,
+				audit.OrganizationID,
+				ref.UnrefOrZero(audit.Name),
+				audit.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
 			}
 
 			return nil
@@ -267,6 +578,10 @@ func (s AuditService) Delete(
 	return s.svc.pg.WithTx(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
+			if err := coredata.DeleteSearchResource(ctx, tx, audit.ID); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
 			err := audit.Delete(ctx, tx, scope)
 			if err != nil {
 				return fmt.Errorf("cannot delete audit: %w", err)
@@ -385,7 +700,22 @@ func (s AuditService) UploadReport(
 			audit.ReportFileID = &file.ID
 			audit.UpdatedAt = time.Now()
 
-			return audit.Update(ctx, conn, scope)
+			if err := audit.Update(ctx, conn, scope); err != nil {
+				return err
+			}
+
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				audit.ID,
+				audit.OrganizationID,
+				ref.UnrefOrZero(audit.Name),
+				audit.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
+			return nil
 		},
 	)
 	if err != nil {
@@ -442,6 +772,17 @@ func (s AuditService) DeleteReport(
 
 				if err := audit.Update(ctx, conn, scope); err != nil {
 					return fmt.Errorf("cannot update audit: %w", err)
+				}
+
+				if err := coredata.UpsertSearchResource(
+					ctx,
+					conn,
+					audit.ID,
+					audit.OrganizationID,
+					ref.UnrefOrZero(audit.Name),
+					audit.SearchText(),
+				); err != nil {
+					return fmt.Errorf("cannot sync search: %w", err)
 				}
 			}
 
@@ -562,4 +903,61 @@ func (s AuditService) ListForFindingID(
 	}
 
 	return page.NewPage(audits, cursor), nil
+}
+
+func (s AuditService) ListForFrameworkID(
+	ctx context.Context,
+	scope coredata.Scoper,
+	frameworkID gid.GID,
+	cursor *page.Cursor[coredata.AuditOrderField],
+) (*page.Page[*coredata.Audit, coredata.AuditOrderField], error) {
+	var audits coredata.Audits
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			framework := &coredata.Framework{}
+			if err := framework.LoadByID(ctx, conn, scope, frameworkID); err != nil {
+				return fmt.Errorf("cannot load framework: %w", err)
+			}
+
+			if err := audits.LoadByFrameworkID(ctx, conn, scope, framework.ID, cursor); err != nil {
+				return fmt.Errorf("cannot load audits: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return page.NewPage(audits, cursor), nil
+}
+
+func (s AuditService) CountForFrameworkID(
+	ctx context.Context,
+	scope coredata.Scoper,
+	frameworkID gid.GID,
+) (int, error) {
+	var count int
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) (err error) {
+			audits := coredata.Audits{}
+
+			count, err = audits.CountByFrameworkID(ctx, conn, scope, frameworkID)
+			if err != nil {
+				return fmt.Errorf("cannot count audits: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
 }

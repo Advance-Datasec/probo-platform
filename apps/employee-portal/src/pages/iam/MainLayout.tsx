@@ -1,0 +1,119 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import type { PreloadedQuery } from "react-relay";
+import { graphql, useFragment, usePreloadedQuery } from "react-relay";
+import { Outlet } from "react-router";
+
+import type { ConsoleFooter_organization$key } from "#/__generated__/iam/ConsoleFooter_organization.graphql";
+import type { MainLayout_organization$key } from "#/__generated__/iam/MainLayout_organization.graphql";
+import type { MainLayoutQuery } from "#/__generated__/iam/MainLayoutQuery.graphql";
+import type { TopBar_organization$key } from "#/__generated__/iam/TopBar_organization.graphql";
+import { NotFoundError } from "#/lib/relay/errors";
+import { RelayProvider } from "#/lib/relay/RelayProvider";
+import { QueueTopBar } from "#/pages/_components/QueueTopBar";
+import { DocumentQueueProvider, useDocumentQueueActive } from "#/pages/_lib/DocumentQueueContext";
+import { ConsoleFooter } from "#/pages/iam/_components/ConsoleFooter";
+import { TopBar } from "#/pages/iam/_components/TopBar/TopBar";
+import { EmployeePortalRouteProvider } from "#/pages/iam/_lib/EmployeePortalRouteContext";
+import { ViewerIdentityProvider } from "#/pages/iam/_lib/ViewerIdentityContext";
+
+export const mainLayoutQuery = graphql`
+  query MainLayoutQuery($employeePortalId: ID!) @throwOnFieldError {
+    employeePortal: node(id: $employeePortalId) {
+      __typename
+      ... on EmployeePortal {
+        id
+        capabilities {
+          deviceAgent
+        }
+        organization {
+          id
+          ...TopBar_organization
+          ...MainLayout_organization
+          ...ConsoleFooter_organization
+        }
+      }
+    }
+  }
+`;
+
+const mainLayoutFragment = graphql`
+  fragment MainLayout_organization on Organization {
+    viewer @required(action: THROW) {
+      fullName
+    }
+  }
+`;
+
+interface MainLayoutProps {
+  queryRef: PreloadedQuery<MainLayoutQuery>;
+}
+
+export function MainLayout({ queryRef }: MainLayoutProps) {
+  const data = usePreloadedQuery<MainLayoutQuery>(mainLayoutQuery, queryRef);
+
+  if (data.employeePortal == null || data.employeePortal.__typename !== "EmployeePortal") {
+    throw new NotFoundError("invalid type for employee portal node");
+  }
+
+  const organization = useFragment<MainLayout_organization$key>(
+    mainLayoutFragment,
+    data.employeePortal.organization,
+  );
+
+  return (
+    <EmployeePortalRouteProvider
+      employeePortalId={data.employeePortal.id}
+      organizationId={data.employeePortal.organization.id}
+      deviceAgent={data.employeePortal.capabilities.deviceAgent}
+    >
+      <ViewerIdentityProvider fullName={organization.viewer.fullName}>
+        <DocumentQueueProvider>
+          <MainLayoutChrome organizationKey={data.employeePortal.organization} />
+        </DocumentQueueProvider>
+      </ViewerIdentityProvider>
+    </EmployeePortalRouteProvider>
+  );
+}
+
+// Swaps the org top bar for the queue chrome when the current document is in
+// the frozen signing / approval snapshot.
+function MainLayoutChrome({
+  organizationKey,
+}: {
+  organizationKey: TopBar_organization$key & ConsoleFooter_organization$key;
+}) {
+  const queueActive = useDocumentQueueActive();
+
+  return (
+    <div className="flex h-dvh flex-col overflow-hidden bg-sand-2">
+      {queueActive
+        ? <QueueTopBar />
+        : <TopBar organizationKey={organizationKey} />}
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto overscroll-y-contain">
+        <RelayProvider>
+          <Outlet />
+        </RelayProvider>
+        {!queueActive && <ConsoleFooter organizationKey={organizationKey} />}
+      </div>
+    </div>
+  );
+}

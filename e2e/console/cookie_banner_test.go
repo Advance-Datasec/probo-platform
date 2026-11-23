@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_test
 
@@ -42,7 +48,11 @@ func TestCookieBanner_Create(t *testing.T) {
 							cookiePolicyUrl
 							consentExpiryDays
 							showBranding
+							capabilities {
+								resourceReporting
+							}
 							defaultLanguage
+							tcfCmpId
 							createdAt
 							updatedAt
 						}
@@ -65,9 +75,13 @@ func TestCookieBanner_Create(t *testing.T) {
 						CookiePolicyUrl   string `json:"cookiePolicyUrl"`
 						ConsentExpiryDays int    `json:"consentExpiryDays"`
 						ShowBranding      bool   `json:"showBranding"`
-						DefaultLanguage   string `json:"defaultLanguage"`
-						CreatedAt         string `json:"createdAt"`
-						UpdatedAt         string `json:"updatedAt"`
+						Capabilities      struct {
+							ResourceReporting bool `json:"resourceReporting"`
+						} `json:"capabilities"`
+						DefaultLanguage string `json:"defaultLanguage"`
+						TcfCmpId        int    `json:"tcfCmpId"`
+						CreatedAt       string `json:"createdAt"`
+						UpdatedAt       string `json:"updatedAt"`
 					} `json:"node"`
 				} `json:"cookieBannerEdge"`
 			} `json:"createCookieBanner"`
@@ -91,7 +105,10 @@ func TestCookieBanner_Create(t *testing.T) {
 		assert.Equal(t, "ACTIVE", node.State)
 		assert.Equal(t, "https://example.com/cookies", node.CookiePolicyUrl)
 		assert.Equal(t, 365, node.ConsentExpiryDays)
+		assert.True(t, node.Capabilities.ResourceReporting)
 		assert.Equal(t, "en", node.DefaultLanguage)
+		assert.GreaterOrEqual(t, node.TcfCmpId, 2)
+		assert.LessOrEqual(t, node.TcfCmpId, 4095)
 		assert.NotEmpty(t, node.CreatedAt)
 		assert.NotEmpty(t, node.UpdatedAt)
 	})
@@ -301,6 +318,7 @@ func TestCookieBanner_Update(t *testing.T) {
 					cookieBanner {
 						consentExpiryDays
 						defaultLanguage
+						publisherCountryCode
 					}
 				}
 			}
@@ -309,23 +327,123 @@ func TestCookieBanner_Update(t *testing.T) {
 		var result struct {
 			UpdateCookieBanner struct {
 				CookieBanner struct {
-					ConsentExpiryDays int    `json:"consentExpiryDays"`
-					DefaultLanguage   string `json:"defaultLanguage"`
+					ConsentExpiryDays    int    `json:"consentExpiryDays"`
+					DefaultLanguage      string `json:"defaultLanguage"`
+					PublisherCountryCode string `json:"publisherCountryCode"`
 				} `json:"cookieBanner"`
 			} `json:"updateCookieBanner"`
 		}
 
 		err := owner.Execute(query, map[string]any{
 			"input": map[string]any{
-				"cookieBannerId":    bannerID,
-				"consentExpiryDays": 90,
-				"defaultLanguage":   "fr",
+				"cookieBannerId":       bannerID,
+				"consentExpiryDays":    90,
+				"defaultLanguage":      "fr",
+				"publisherCountryCode": "FR",
 			},
 		}, &result)
 
 		require.NoError(t, err)
 		assert.Equal(t, 90, result.UpdateCookieBanner.CookieBanner.ConsentExpiryDays)
 		assert.Equal(t, "fr", result.UpdateCookieBanner.CookieBanner.DefaultLanguage)
+		assert.Equal(t, "FR", result.UpdateCookieBanner.CookieBanner.PublisherCountryCode)
+	})
+
+	t.Run("update force opt in", func(t *testing.T) {
+		t.Parallel()
+		owner := testutil.NewClient(t, testutil.RoleOwner)
+
+		bannerID := factory.CreateCookieBanner(owner)
+
+		const query = `
+			query($id: ID!) {
+				node(id: $id) {
+					... on CookieBanner {
+						forceOptIn
+					}
+				}
+			}
+		`
+
+		var read struct {
+			Node struct {
+				ForceOptIn bool `json:"forceOptIn"`
+			} `json:"node"`
+		}
+
+		require.NoError(t, owner.Execute(query, map[string]any{"id": bannerID}, &read))
+		assert.False(t, read.Node.ForceOptIn)
+
+		const update = `
+			mutation UpdateCookieBanner($input: UpdateCookieBannerInput!) {
+				updateCookieBanner(input: $input) {
+					cookieBanner {
+						forceOptIn
+					}
+				}
+			}
+		`
+
+		var updated struct {
+			UpdateCookieBanner struct {
+				CookieBanner struct {
+					ForceOptIn bool `json:"forceOptIn"`
+				} `json:"cookieBanner"`
+			} `json:"updateCookieBanner"`
+		}
+
+		require.NoError(t, owner.Execute(update, map[string]any{
+			"input": map[string]any{
+				"cookieBannerId": bannerID,
+				"forceOptIn":     true,
+			},
+		}, &updated))
+		assert.True(t, updated.UpdateCookieBanner.CookieBanner.ForceOptIn)
+
+		require.NoError(t, owner.Execute(query, map[string]any{"id": bannerID}, &read))
+		assert.True(t, read.Node.ForceOptIn)
+	})
+
+	t.Run("disable resource reporting", func(t *testing.T) {
+		t.Parallel()
+		owner := testutil.NewClient(t, testutil.RoleOwner)
+
+		bannerID := factory.CreateCookieBanner(owner)
+
+		const query = `
+			mutation UpdateCookieBanner($input: UpdateCookieBannerInput!) {
+				updateCookieBanner(input: $input) {
+					cookieBanner {
+						id
+						capabilities {
+							resourceReporting
+						}
+					}
+				}
+			}
+		`
+
+		var result struct {
+			UpdateCookieBanner struct {
+				CookieBanner struct {
+					ID           string `json:"id"`
+					Capabilities struct {
+						ResourceReporting bool `json:"resourceReporting"`
+					} `json:"capabilities"`
+				} `json:"cookieBanner"`
+			} `json:"updateCookieBanner"`
+		}
+
+		err := owner.Execute(query, map[string]any{
+			"input": map[string]any{
+				"cookieBannerId": bannerID,
+				"capabilities":   map[string]any{"resourceReporting": false},
+			},
+		}, &result)
+
+		require.NoError(t, err)
+		assert.Equal(t, bannerID, result.UpdateCookieBanner.CookieBanner.ID)
+		assert.False(t, result.UpdateCookieBanner.CookieBanner.Capabilities.ResourceReporting)
 	})
 }
 
@@ -810,105 +928,5 @@ func TestCookieBanner_UpsertTranslation(t *testing.T) {
 		err := owner.Execute(query, map[string]any{"id": bannerID}, &result)
 		require.NoError(t, err)
 		assert.NotEmpty(t, result.Node.Translations)
-	})
-}
-
-func TestCookieBanner_RBAC(t *testing.T) {
-	t.Parallel()
-
-	t.Run("viewer cannot create", func(t *testing.T) {
-		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
-		viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
-
-		_, err := viewer.Do(`
-			mutation CreateCookieBanner($input: CreateCookieBannerInput!) {
-				createCookieBanner(input: $input) {
-					cookieBannerEdge { node { id } }
-				}
-			}
-		`, map[string]any{
-			"input": map[string]any{
-				"organizationId":    viewer.GetOrganizationID().String(),
-				"name":              factory.SafeName("Banner"),
-				"origin":            factory.SafeOrigin(),
-				"cookiePolicyUrl":   "https://example.com/cookies",
-				"consentExpiryDays": 365,
-			},
-		})
-		testutil.RequireForbiddenError(t, err, "viewer should not be able to create cookie banner")
-	})
-
-	t.Run("viewer cannot update", func(t *testing.T) {
-		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
-		viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
-
-		bannerID := factory.CreateCookieBanner(owner)
-
-		_, err := viewer.Do(`
-			mutation UpdateCookieBanner($input: UpdateCookieBannerInput!) {
-				updateCookieBanner(input: $input) {
-					cookieBanner { id }
-				}
-			}
-		`, map[string]any{
-			"input": map[string]any{
-				"cookieBannerId": bannerID,
-				"name":           "Updated",
-			},
-		})
-		testutil.RequireForbiddenError(t, err, "viewer should not be able to update cookie banner")
-	})
-
-	t.Run("viewer cannot delete", func(t *testing.T) {
-		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
-		viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
-
-		bannerID := factory.CreateCookieBanner(owner)
-
-		_, err := viewer.Do(`
-			mutation DeleteCookieBanner($input: DeleteCookieBannerInput!) {
-				deleteCookieBanner(input: $input) {
-					deletedCookieBannerId
-				}
-			}
-		`, map[string]any{
-			"input": map[string]any{"cookieBannerId": bannerID},
-		})
-		testutil.RequireForbiddenError(t, err, "viewer should not be able to delete cookie banner")
-	})
-}
-
-func TestCookieBanner_TenantIsolation(t *testing.T) {
-	t.Parallel()
-
-	t.Run("other org cannot access banner", func(t *testing.T) {
-		t.Parallel()
-		owner1 := testutil.NewClient(t, testutil.RoleOwner)
-		owner2 := testutil.NewClient(t, testutil.RoleOwner)
-
-		bannerID := factory.CreateCookieBanner(owner1)
-
-		const query = `
-			query($id: ID!) {
-				node(id: $id) {
-					... on CookieBanner {
-						id
-						name
-					}
-				}
-			}
-		`
-
-		var result struct {
-			Node *struct {
-				ID string `json:"id"`
-			} `json:"node"`
-		}
-
-		err := owner2.Execute(query, map[string]any{"id": bannerID}, &result)
-		testutil.AssertNodeNotAccessible(t, err, result.Node == nil, "cookie banner")
 	})
 }

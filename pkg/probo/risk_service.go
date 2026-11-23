@@ -1,21 +1,28 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -32,31 +39,19 @@ type (
 	}
 
 	CreateRiskRequest struct {
-		OrganizationID     gid.GID
-		Name               string
-		Description        *string
-		Category           string
-		Treatment          coredata.RiskTreatment
-		OwnerID            *gid.GID
-		InherentLikelihood int
-		InherentImpact     int
-		ResidualLikelihood *int
-		ResidualImpact     *int
-		Note               *string
+		OrganizationID gid.GID
+		Name           string
+		Description    *string
+		Category       string
+		Note           *string
 	}
 
 	UpdateRiskRequest struct {
-		ID                 gid.GID
-		Name               *string
-		Description        **string
-		Category           *string
-		Treatment          *coredata.RiskTreatment
-		OwnerID            **gid.GID
-		InherentLikelihood *int
-		InherentImpact     *int
-		ResidualLikelihood *int
-		ResidualImpact     *int
-		Note               *string
+		ID          gid.GID
+		Name        *string
+		Description **string
+		Category    *string
+		Note        *string
 	}
 )
 
@@ -67,12 +62,6 @@ func (crr *CreateRiskRequest) Validate() error {
 	v.Check(crr.Name, "name", validator.Required(), validator.SafeTextNoNewLine(TitleMaxLength))
 	v.Check(crr.Description, "description", validator.SafeText(ContentMaxLength))
 	v.Check(crr.Category, "category", validator.Required(), validator.SafeText(TitleMaxLength))
-	v.Check(crr.Treatment, "treatment", validator.Required(), validator.OneOfSlice(coredata.RiskTreatments()))
-	v.Check(crr.OwnerID, "owner_id", validator.GID(coredata.MembershipProfileEntityType))
-	v.Check(crr.InherentLikelihood, "inherent_likelihood", validator.Required(), validator.Min(1), validator.Max(5))
-	v.Check(crr.InherentImpact, "inherent_impact", validator.Required(), validator.Min(1), validator.Max(5))
-	v.Check(crr.ResidualLikelihood, "residual_likelihood", validator.Min(1), validator.Max(5))
-	v.Check(crr.ResidualImpact, "residual_impact", validator.Min(1), validator.Max(5))
 	v.Check(crr.Note, "note", validator.SafeText(TitleMaxLength))
 
 	return v.Error()
@@ -85,20 +74,14 @@ func (urr *UpdateRiskRequest) Validate() error {
 	v.Check(urr.Name, "name", validator.SafeTextNoNewLine(TitleMaxLength))
 	v.Check(urr.Description, "description", validator.SafeText(ContentMaxLength))
 	v.Check(urr.Category, "category", validator.SafeText(TitleMaxLength))
-	v.Check(urr.Treatment, "treatment", validator.OneOfSlice(coredata.RiskTreatments()))
-	v.Check(urr.OwnerID, "owner_id", validator.GID(coredata.MembershipProfileEntityType))
-	v.Check(urr.InherentLikelihood, "inherent_likelihood", validator.Min(1), validator.Max(5))
-	v.Check(urr.InherentImpact, "inherent_impact", validator.Min(1), validator.Max(5))
-	v.Check(urr.ResidualLikelihood, "residual_likelihood", validator.Min(1), validator.Max(5))
-	v.Check(urr.ResidualImpact, "residual_impact", validator.Min(1), validator.Max(5))
 	v.Check(urr.Note, "note", validator.SafeText(TitleMaxLength))
 
 	return v.Error()
 }
 
-func (s RiskService) CountForMeasureID(
+func (s RiskService) CountForInternalControlID(
 	ctx context.Context, scope coredata.Scoper,
-	measureID gid.GID,
+	internalControlID gid.GID,
 	filter *coredata.RiskFilter,
 ) (int, error) {
 	var count int
@@ -108,7 +91,7 @@ func (s RiskService) CountForMeasureID(
 		func(ctx context.Context, conn pg.Querier) (err error) {
 			risks := &coredata.Risks{}
 
-			count, err = risks.CountByMeasureID(ctx, conn, scope, measureID, filter)
+			count, err = risks.CountByInternalControlID(ctx, conn, scope, internalControlID, filter)
 			if err != nil {
 				return fmt.Errorf("cannot count risks: %w", err)
 			}
@@ -123,9 +106,9 @@ func (s RiskService) CountForMeasureID(
 	return count, nil
 }
 
-func (s RiskService) ListForMeasureID(
+func (s RiskService) ListForInternalControlID(
 	ctx context.Context, scope coredata.Scoper,
-	measureID gid.GID,
+	internalControlID gid.GID,
 	cursor *page.Cursor[coredata.RiskOrderField],
 	filter *coredata.RiskFilter,
 ) (*page.Page[*coredata.Risk, coredata.RiskOrderField], error) {
@@ -134,7 +117,7 @@ func (s RiskService) ListForMeasureID(
 	err := s.svc.pg.WithConn(
 		ctx,
 		func(ctx context.Context, conn pg.Querier) error {
-			return risks.LoadByMeasureID(ctx, conn, scope, measureID, cursor, filter)
+			return risks.LoadByInternalControlID(ctx, conn, scope, internalControlID, cursor, filter)
 		},
 	)
 	if err != nil {
@@ -242,7 +225,7 @@ func (s RiskService) DeleteDocumentMapping(
 ) (*coredata.Risk, *coredata.Document, error) {
 	riskDocument := &coredata.RiskDocument{}
 	risk := &coredata.Risk{}
-	document := &coredata.Document{}
+	document := &coredata.Document{ID: documentID}
 
 	err := s.svc.pg.WithTx(
 		ctx,
@@ -252,10 +235,12 @@ func (s RiskService) DeleteDocumentMapping(
 			}
 
 			if err := document.LoadByID(ctx, tx, scope, documentID); err != nil {
-				return fmt.Errorf("cannot load document: %w", err)
+				if !errors.Is(err, coredata.ErrResourceNotFound) {
+					return fmt.Errorf("cannot load document: %w", err)
+				}
 			}
 
-			return riskDocument.Delete(ctx, tx, scope, risk.ID, document.ID)
+			return riskDocument.Delete(ctx, tx, scope, risk.ID, documentID)
 		},
 	)
 	if err != nil {
@@ -265,12 +250,12 @@ func (s RiskService) DeleteDocumentMapping(
 	return risk, document, nil
 }
 
-func (s RiskService) CreateMeasureMapping(
+func (s RiskService) CreateInternalControlMapping(
 	ctx context.Context, scope coredata.Scoper,
 	riskID gid.GID,
-	measureID gid.GID,
-) (*coredata.Risk, *coredata.Measure, error) {
-	measure := &coredata.Measure{}
+	internalControlID gid.GID,
+) (*coredata.Risk, *coredata.InternalControl, error) {
+	internalControl := &coredata.InternalControl{}
 	risk := &coredata.Risk{}
 
 	err := s.svc.pg.WithTx(
@@ -280,34 +265,34 @@ func (s RiskService) CreateMeasureMapping(
 				return fmt.Errorf("cannot load risk: %w", err)
 			}
 
-			if err := measure.LoadByID(ctx, tx, scope, measureID); err != nil {
-				return fmt.Errorf("cannot load measure: %w", err)
+			if err := internalControl.LoadByID(ctx, tx, scope, internalControlID); err != nil {
+				return fmt.Errorf("cannot load internalControl: %w", err)
 			}
 
-			riskMeasure := &coredata.RiskMeasure{
-				RiskID:         risk.ID,
-				MeasureID:      measure.ID,
-				OrganizationID: risk.OrganizationID,
-				CreatedAt:      time.Now(),
+			riskInternalControl := &coredata.RiskInternalControl{
+				RiskID:            risk.ID,
+				InternalControlID: internalControl.ID,
+				OrganizationID:    risk.OrganizationID,
+				CreatedAt:         time.Now(),
 			}
 
-			return riskMeasure.Insert(ctx, tx, scope)
+			return riskInternalControl.Insert(ctx, tx, scope)
 		},
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("cannot create risk measure mapping: %w", err)
+		return nil, nil, fmt.Errorf("cannot create risk internal control mapping: %w", err)
 	}
 
-	return risk, measure, nil
+	return risk, internalControl, nil
 }
 
-func (s RiskService) DeleteMeasureMapping(
+func (s RiskService) DeleteInternalControlMapping(
 	ctx context.Context, scope coredata.Scoper,
 	riskID gid.GID,
-	measureID gid.GID,
-) (*coredata.Risk, *coredata.Measure, error) {
+	internalControlID gid.GID,
+) (*coredata.Risk, *coredata.InternalControl, error) {
 	risk := &coredata.Risk{}
-	measure := &coredata.Measure{}
+	internalControl := &coredata.InternalControl{}
 
 	err := s.svc.pg.WithTx(
 		ctx,
@@ -316,25 +301,25 @@ func (s RiskService) DeleteMeasureMapping(
 				return fmt.Errorf("cannot load risk: %w", err)
 			}
 
-			if err := measure.LoadByID(ctx, tx, scope, measureID); err != nil {
-				return fmt.Errorf("cannot load measure: %w", err)
+			if err := internalControl.LoadByID(ctx, tx, scope, internalControlID); err != nil {
+				return fmt.Errorf("cannot load internalControl: %w", err)
 			}
 
-			riskMeasure := &coredata.RiskMeasure{
-				RiskID:         riskID,
-				MeasureID:      measureID,
-				OrganizationID: risk.OrganizationID,
-				CreatedAt:      time.Now(),
+			riskInternalControl := &coredata.RiskInternalControl{
+				RiskID:            riskID,
+				InternalControlID: internalControlID,
+				OrganizationID:    risk.OrganizationID,
+				CreatedAt:         time.Now(),
 			}
 
-			return riskMeasure.Delete(ctx, tx, scope, risk.ID, measure.ID)
+			return riskInternalControl.Delete(ctx, tx, scope, risk.ID, internalControl.ID)
 		},
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("cannot delete risk measure mapping: %w", err)
+		return nil, nil, fmt.Errorf("cannot delete risk internal control mapping: %w", err)
 	}
 
-	return risk, measure, nil
+	return risk, internalControl, nil
 }
 
 func (s RiskService) CreateObligationMapping(
@@ -415,35 +400,20 @@ func (s RiskService) Create(
 	}
 
 	now := time.Now()
-	owner := coredata.MembershipProfile{}
 	organization := coredata.Organization{}
 
 	risk := &coredata.Risk{
-		ID:                 gid.New(scope.GetTenantID(), coredata.RiskEntityType),
-		OrganizationID:     req.OrganizationID,
-		Name:               req.Name,
-		Description:        req.Description,
-		Category:           req.Category,
-		OwnerID:            req.OwnerID,
-		InherentLikelihood: req.InherentLikelihood,
-		InherentImpact:     req.InherentImpact,
-		Treatment:          req.Treatment,
-		ResidualLikelihood: req.InherentLikelihood,
-		ResidualImpact:     req.InherentImpact,
-		CreatedAt:          now,
-		UpdatedAt:          now,
+		ID:             gid.New(scope.GetTenantID(), coredata.RiskEntityType),
+		OrganizationID: req.OrganizationID,
+		Name:           req.Name,
+		Description:    req.Description,
+		Category:       req.Category,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 
 	if req.Note != nil {
 		risk.Note = *req.Note
-	}
-
-	if req.ResidualLikelihood != nil {
-		risk.ResidualLikelihood = *req.ResidualLikelihood
-	}
-
-	if req.ResidualImpact != nil {
-		risk.ResidualImpact = *req.ResidualImpact
 	}
 
 	err := s.svc.pg.WithTx(
@@ -453,13 +423,22 @@ func (s RiskService) Create(
 				return fmt.Errorf("cannot load organization: %w", err)
 			}
 
-			if req.OwnerID != nil {
-				if err := owner.LoadByID(ctx, tx, scope, *req.OwnerID); err != nil {
-					return fmt.Errorf("cannot load owner profile: %w", err)
-				}
+			if err := risk.Insert(ctx, tx, scope); err != nil {
+				return err
 			}
 
-			return risk.Insert(ctx, tx, scope)
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				tx,
+				risk.ID,
+				risk.OrganizationID,
+				risk.Name,
+				risk.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
+			return nil
 		},
 	)
 	if err != nil {
@@ -502,7 +481,7 @@ func (s RiskService) GetByIDs(
 				conn,
 				scope,
 				riskIDs,
-			); err != nil {
+			); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 				return fmt.Errorf("cannot load risks by ids: %w", err)
 			}
 
@@ -541,39 +520,6 @@ func (s RiskService) Update(
 				risk.Description = *req.Description
 			}
 
-			if req.InherentLikelihood != nil {
-				risk.InherentLikelihood = *req.InherentLikelihood
-			}
-
-			if req.InherentImpact != nil {
-				risk.InherentImpact = *req.InherentImpact
-			}
-
-			if req.ResidualLikelihood != nil {
-				risk.ResidualLikelihood = *req.ResidualLikelihood
-			}
-
-			if req.ResidualImpact != nil {
-				risk.ResidualImpact = *req.ResidualImpact
-			}
-
-			if req.Treatment != nil {
-				risk.Treatment = *req.Treatment
-			}
-
-			if req.OwnerID != nil {
-				if *req.OwnerID != nil {
-					owner := coredata.MembershipProfile{}
-					if err := owner.LoadByID(ctx, conn, scope, **req.OwnerID); err != nil {
-						return fmt.Errorf("cannot load owner profile: %w", err)
-					}
-
-					risk.OwnerID = *req.OwnerID
-				} else {
-					risk.OwnerID = nil
-				}
-			}
-
 			if req.Category != nil {
 				risk.Category = *req.Category
 			}
@@ -588,6 +534,17 @@ func (s RiskService) Update(
 				return fmt.Errorf("cannot update risk: %w", err)
 			}
 
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				risk.ID,
+				risk.OrganizationID,
+				risk.Name,
+				risk.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
 			return nil
 		},
 	)
@@ -596,6 +553,32 @@ func (s RiskService) Update(
 	}
 
 	return risk, nil
+}
+
+func (s RiskService) CountRiskAnalysisHistory(
+	ctx context.Context, scope coredata.Scoper,
+	riskID gid.GID,
+) (int, error) {
+	var count int
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) (err error) {
+			events := &coredata.TreatmentPlanEvents{}
+
+			count, err = events.CountRiskAnalysisIDsByRiskID(ctx, conn, scope, riskID)
+			if err != nil {
+				return fmt.Errorf("cannot count risk analysis history: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return 0, fmt.Errorf("cannot count risk analysis history: %w", err)
+	}
+
+	return count, nil
 }
 
 func (s RiskService) Delete(
@@ -607,7 +590,28 @@ func (s RiskService) Delete(
 	return s.svc.pg.WithTx(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
+			if err := clearRiskSearch(ctx, tx, scope, riskID); err != nil {
+				return err
+			}
+
 			return risk.Delete(ctx, tx, scope, riskID)
 		},
 	)
+}
+
+func clearRiskSearch(
+	ctx context.Context,
+	conn pg.Querier,
+	scope coredata.Scoper,
+	riskID gid.GID,
+) error {
+	if err := coredata.LockID(ctx, conn, scope, "risks", riskID); err != nil {
+		return err
+	}
+
+	if err := coredata.DeleteSearchResource(ctx, conn, riskID); err != nil {
+		return fmt.Errorf("cannot delete search resource: %w", err)
+	}
+
+	return nil
 }

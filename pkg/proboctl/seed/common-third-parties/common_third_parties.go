@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package commonthirdparties
 
@@ -86,6 +92,11 @@ func NewCmdCommonThirdParties(f *cmdutil.Factory) *cobra.Command {
 					now := time.Now()
 
 					for _, tp := range thirdParties {
+						// Curated by definition, so the seed asserts it on
+						// every run: this is the one caller that should move
+						// a row's review state without a human doing it.
+						validatedReview := coredata.CommonThirdPartyReviewValidated
+
 						party := coredata.CommonThirdParty{
 							ID:                            gid.New(gid.NilTenant, coredata.CommonThirdPartyEntityType),
 							Name:                          tp.Name,
@@ -101,12 +112,17 @@ func NewCmdCommonThirdParties(f *cmdutil.Factory) *cobra.Command {
 							BusinessAssociateAgreementURL: tp.BusinessAssociateAgreementURL,
 							SubprocessorsListURL:          tp.SubprocessorsListURL,
 							Certifications:                tp.Certifications,
-							StatusPageURL:                 tp.StatusPageURL,
-							TermsOfServiceURL:             tp.TermsOfServiceURL,
-							SecurityPageURL:               tp.SecurityPageURL,
-							TrustPageURL:                  tp.TrustPageURL,
-							CreatedAt:                     now,
-							UpdatedAt:                     now,
+							// Seed entries are curated by definition, so they
+							// start where a review would put them and stay out
+							// of the unreviewed backlog. This is also why prune
+							// refuses to delete them.
+							Review:            &validatedReview,
+							StatusPageURL:     tp.StatusPageURL,
+							TermsOfServiceURL: tp.TermsOfServiceURL,
+							SecurityPageURL:   tp.SecurityPageURL,
+							TrustPageURL:      tp.TrustPageURL,
+							CreatedAt:         now,
+							UpdatedAt:         now,
 						}
 
 						wasInserted, err := party.Upsert(ctx, tx)
@@ -114,14 +130,16 @@ func NewCmdCommonThirdParties(f *cmdutil.Factory) *cobra.Command {
 							return fmt.Errorf("cannot upsert common third party %q: %w", tp.Name, err)
 						}
 
+						// Upsert returns the written row and syncs the
+						// receiver, so party.ID identifies the row the
+						// domains below belong to on both paths. Do not
+						// reload by name here: lower(name) is not unique,
+						// so a reload could return a different row and
+						// attach this entry's domains to it.
 						if wasInserted {
 							inserted++
 						} else {
 							updated++
-
-							if err := party.LoadByName(ctx, tx, tp.Name); err != nil {
-								return fmt.Errorf("cannot reload common third party %q: %w", tp.Name, err)
-							}
 						}
 
 						for _, domain := range tp.Domains {
@@ -173,6 +191,32 @@ func loadThirdParties() ([]thirdPartyData, error) {
 	}
 
 	return thirdParties, nil
+}
+
+// SeededSlugs returns the slug of every curated catalog entry.
+//
+// A seeded slug is recreated by the next seed run, which makes it decisive
+// for cleanup: merging such a row away resurrects it on the following
+// deploy. Callers use this to prefer a seeded row as a merge winner and to
+// refuse deleting one.
+//
+// Derived from the same embedded dataset the seed writes, so the two cannot
+// disagree about which slugs are curated.
+func SeededSlugs() (map[string]struct{}, error) {
+	thirdParties, err := loadThirdParties()
+	if err != nil {
+		return nil, err
+	}
+
+	slugs := make(map[string]struct{}, len(thirdParties))
+
+	for _, tp := range thirdParties {
+		if s := slug.Make(tp.Name); s != "" {
+			slugs[s] = struct{}{}
+		}
+	}
+
+	return slugs, nil
 }
 
 func parseCategory(errOut io.Writer, tp thirdPartyData) coredata.ThirdPartyCategory {

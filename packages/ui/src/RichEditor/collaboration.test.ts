@@ -1,0 +1,1233 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import * as Automerge from "@automerge/automerge";
+import {
+  type DocHandle,
+  pmDocFromSpans,
+  pmNodeToSpans,
+  type SchemaAdapter,
+} from "@automerge/prosemirror";
+import { getSchema } from "@tiptap/core";
+import { history, undo } from "@tiptap/pm/history";
+import { Fragment } from "@tiptap/pm/model";
+import { EditorState, type Transaction } from "@tiptap/pm/state";
+import { describe, expect, it } from "vitest";
+
+import {
+  createAutomergeSyncPlugin,
+  reconcileAutomergeDocument,
+} from "./AutomergeSyncPlugin";
+import {
+  createSchemaAdapter,
+  explicitBlockIdentityPlugin,
+  richEditorAutomergeContent,
+  type RichEditorAutomergeDocument,
+} from "./collaboration";
+import { createRichEditorAutomergeDocument } from "./CollaborativeRichEditor";
+import { richEditorCollaborationExtensions } from "./RichEditor";
+
+function syncPlugin({
+  adapter,
+  handle,
+  path,
+}: {
+  adapter: SchemaAdapter;
+  handle: DocHandle<RichEditorAutomergeDocument>;
+  path: Automerge.Prop[];
+}) {
+  return createAutomergeSyncPlugin(adapter, handle, path);
+}
+
+type RoundTripNode = {
+  type?: string;
+  attrs?: Record<string, unknown>;
+  content?: RoundTripNode[];
+};
+
+describe("RichEditor collaboration", () => {
+  it("includes image and file nodes in the collaborative schema", () => {
+    const schema = getSchema(richEditorCollaborationExtensions);
+
+    expect(schema.nodes.image).toBeDefined();
+    expect(schema.nodes.file).toBeDefined();
+    expect(schema.nodes.contentUpload).toBeDefined();
+    expect(schema.nodes.image.spec.attrs?.isAmgBlock?.default).toBe(true);
+    expect(schema.nodes.file.spec.attrs?.isAmgBlock?.default).toBe(true);
+    expect(schema.nodes.paragraph).toBeDefined();
+    expect(schema.nodes.horizontalRule).toBeDefined();
+  });
+
+  it("round-trips images and files through Automerge rich text", () => {
+    const content = JSON.stringify({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "Before" }],
+        },
+        {
+          type: "image",
+          attrs: { alt: "diagram", fileId: "file-1", width: 50 },
+        },
+        {
+          type: "file",
+          attrs: {
+            fileId: "file-2",
+            fileName: "report.pdf",
+            mimeType: "application/pdf",
+            size: 12,
+          },
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "After" }],
+        },
+      ],
+    });
+
+    const document = createRichEditorAutomergeDocument(content);
+    const spans = Automerge.spans(document, ["body"]);
+    expect(spanLabels(spans)).toEqual([
+      "block:paragraph",
+      "text:Before",
+      "block:image",
+      "block:file",
+      "block:paragraph",
+      "text:After",
+    ]);
+    expect(
+      spans
+        .filter(span => span.type === "block")
+        .map(span => ({
+          type: automergeString(span.value.type),
+          isEmbed: span.value.isEmbed,
+          parents: automergeStringArray(span.value.parents),
+        })),
+    ).toEqual([
+      { type: "paragraph", isEmbed: false, parents: [] },
+      { type: "image", isEmbed: false, parents: [] },
+      { type: "file", isEmbed: false, parents: [] },
+      { type: "paragraph", isEmbed: false, parents: [] },
+    ]);
+
+    const handle: DocHandle<RichEditorAutomergeDocument> = {
+      doc: () => document,
+      change: () => {},
+      on: () => {},
+      off: () => {},
+    };
+    const roundTrip = richEditorAutomergeContent(
+      handle,
+      richEditorCollaborationExtensions,
+    ) as {
+      content: Array<{
+        type: string;
+        attrs?: Record<string, unknown>;
+      }>;
+    };
+
+    expect(roundTrip.content.map(node => node.type)).toEqual([
+      "paragraph",
+      "image",
+      "file",
+      "paragraph",
+    ]);
+    expect(roundTrip.content[1]?.attrs).toMatchObject({
+      alt: "diagram",
+      fileId: "file-1",
+      width: 50,
+    });
+    expect(roundTrip.content[2]?.attrs).toMatchObject({
+      fileId: "file-2",
+      fileName: "report.pdf",
+      mimeType: "application/pdf",
+      size: 12,
+    });
+  });
+
+  it("keeps mentions collaborative mid-paragraph, in lists, and next to marks", () => {
+    const content = JSON.stringify({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "Hi " },
+            { type: "mention", attrs: { id: "profile-1", label: "Jane Doe" } },
+            { type: "text", text: " and " },
+            { type: "text", text: "Ada", marks: [{ type: "bold" }] },
+            { type: "hardBreak" },
+            { type: "mention", attrs: { id: "profile-2", label: "Ada Lovelace" } },
+          ],
+        },
+        {
+          type: "bulletList",
+          content: [{
+            type: "listItem",
+            content: [{
+              type: "paragraph",
+              content: [
+                { type: "text", text: "ping " },
+                { type: "mention", attrs: { id: "profile-1", label: "Jane Doe" } },
+              ],
+            }],
+          }],
+        },
+      ],
+    });
+
+    const document = createRichEditorAutomergeDocument(content);
+    const spans = Automerge.spans(document, ["body"]);
+    expect(
+      spans
+        .filter(span => span.type === "block")
+        .filter(span => automergeString(span.value.type) === "mention")
+        .map(span => ({
+          isEmbed: span.value.isEmbed,
+          attrs: span.value.attrs,
+          parents: automergeStringArray(span.value.parents),
+        })),
+    ).toEqual([
+      {
+        isEmbed: true,
+        attrs: { id: "profile-1", label: "Jane Doe" },
+        parents: ["paragraph"],
+      },
+      {
+        isEmbed: true,
+        attrs: { id: "profile-2", label: "Ada Lovelace" },
+        parents: ["paragraph"],
+      },
+      {
+        isEmbed: true,
+        attrs: { id: "profile-1", label: "Jane Doe" },
+        parents: ["unordered-list-item", "paragraph"],
+      },
+    ]);
+
+    const handle: DocHandle<RichEditorAutomergeDocument> = {
+      doc: () => document,
+      change: () => {},
+      on: () => {},
+      off: () => {},
+    };
+    const roundTrip = richEditorAutomergeContent(
+      handle,
+      richEditorCollaborationExtensions,
+    ) as { content: RoundTripNode[] };
+
+    expect(roundTrip.content[0]?.content?.map(node => node.type)).toEqual([
+      "text",
+      "mention",
+      "text",
+      "text",
+      "hardBreak",
+      "mention",
+    ]);
+    expect(roundTrip.content[0]?.content?.[1]?.attrs).toMatchObject({
+      id: "profile-1",
+      label: "Jane Doe",
+    });
+    expect(roundTrip.content[0]?.content?.[5]?.attrs).toMatchObject({
+      id: "profile-2",
+      label: "Ada Lovelace",
+    });
+    expect(
+      roundTrip.content[1]?.content?.[0]?.content?.[0]?.content?.map(
+        node => node.type,
+      ),
+    ).toEqual(["text", "mention"]);
+    expect(
+      roundTrip.content[1]?.content?.[0]?.content?.[0]?.content?.[1]?.attrs,
+    ).toMatchObject({
+      id: "profile-1",
+      label: "Jane Doe",
+    });
+  });
+
+  it("keeps an image when text is typed after it", () => {
+    let document = createRichEditorAutomergeDocument(JSON.stringify({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "Before" }] },
+        { type: "image", attrs: { alt: "diagram", fileId: "file-1", width: 40 } },
+      ],
+    }));
+    const targetSchema = getSchema(richEditorCollaborationExtensions);
+    const adapter = createSchemaAdapter(
+      richEditorCollaborationExtensions,
+      targetSchema,
+    );
+    const handle: DocHandle<RichEditorAutomergeDocument> = {
+      doc: () => document,
+      change: (change) => {
+        document = Automerge.change(document, change);
+      },
+      on: () => {},
+      off: () => {},
+    };
+    const initial = pmDocFromSpans(
+      createSchemaAdapter(richEditorCollaborationExtensions),
+      Automerge.spans(document, ["body"]),
+    );
+    let state = EditorState.create({
+      schema: targetSchema,
+      doc: targetSchema.nodeFromJSON(initial.toJSON()),
+      plugins: [
+        explicitBlockIdentityPlugin(),
+        createAutomergeSyncPlugin(adapter, handle, ["body"]),
+      ],
+    });
+    const paragraph = targetSchema.nodes.paragraph.create();
+    state = state.applyTransaction(
+      state.tr.insert(state.doc.content.size, paragraph),
+    ).state;
+    const position = state.doc.content.size - paragraph.nodeSize + 1;
+    state.applyTransaction(state.tr.insertText("After", position));
+
+    const remote = pmDocFromSpans(
+      createSchemaAdapter(richEditorCollaborationExtensions),
+      Automerge.spans(document, ["body"]),
+    );
+    expect(remote.childCount).toBe(3);
+    expect(remote.child(0).textContent).toBe("Before");
+    expect(remote.child(1).type.name).toBe("image");
+    expect(remote.child(1).attrs.fileId).toBe("file-1");
+    expect(remote.child(1).attrs.width).toBe(40);
+    expect(remote.child(2).textContent).toBe("After");
+  });
+
+  it("imports supported ProseMirror content into Automerge rich text", () => {
+    const document = createRichEditorAutomergeDocument(
+      JSON.stringify({
+        type: "doc",
+        content: [
+          {
+            type: "heading",
+            attrs: { level: 2 },
+            content: [{ type: "text", text: "Policy" }],
+          },
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: "Hello ", marks: [{ type: "bold" }] },
+              { type: "text", text: "world" },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(Automerge.spans(document, ["body"])).not.toHaveLength(0);
+    expect(document.body).toContain("Hello world");
+  });
+
+  it("preserves table and row boundaries", () => {
+    const content = tableDocumentJSON();
+
+    const document = createRichEditorAutomergeDocument(content);
+    const spans = Automerge.spans(document, ["body"]);
+    expect(
+      spans
+        .filter(span => span.type === "block")
+        .map(span => Automerge.isImmutableString(span.value.type)
+          ? span.value.type.val
+          : span.value.type),
+    ).toEqual([
+      "table",
+      "table-row",
+      "table-cell",
+      "table-cell",
+      "table-row",
+      "table-cell",
+      "table-cell",
+    ]);
+
+    const handle: DocHandle<RichEditorAutomergeDocument> = {
+      doc: () => document,
+      change: () => {},
+      on: () => {},
+      off: () => {},
+    };
+    const roundTrip = richEditorAutomergeContent(
+      handle,
+      richEditorCollaborationExtensions,
+    ) as {
+      content: Array<{
+        type: string;
+        content: Array<{
+          type: string;
+          content: unknown[];
+        }>;
+      }>;
+    };
+    expect(roundTrip.content[0].type).toBe("table");
+    expect(roundTrip.content[0].content).toHaveLength(2);
+    expect(roundTrip.content[0].content[0].type).toBe("tableRow");
+    expect(roundTrip.content[0].content[0].content).toHaveLength(2);
+  });
+
+  it("applies table cell edits through the Automerge sync plugin", () => {
+    let document = createRichEditorAutomergeDocument(tableDocumentJSON());
+    const handle: DocHandle<RichEditorAutomergeDocument> = {
+      doc: () => document,
+      change: (change) => {
+        document = Automerge.change(document, change);
+      },
+      on: () => {},
+      off: () => {},
+    };
+    const adapter = createSchemaAdapter(richEditorCollaborationExtensions);
+    const pmDocument = pmDocFromSpans(
+      adapter,
+      Automerge.spans(document, ["body"]),
+    );
+    const state = EditorState.create({
+      schema: adapter.schema,
+      doc: pmDocument,
+      plugins: [
+        syncPlugin({
+          adapter,
+          handle,
+          path: ["body"],
+        }),
+      ],
+    });
+    let textPosition: number | undefined;
+    state.doc.descendants((node, position) => {
+      if (node.isText && node.text === "A") {
+        textPosition = position;
+        return false;
+      }
+
+      return true;
+    });
+    expect(textPosition).toBeDefined();
+
+    state.applyTransaction(state.tr.insertText("X", textPosition! + 1));
+
+    expect(
+      Automerge.spans(document, ["body"])
+        .filter(span => span.type === "text")
+        .map(span => span.value)
+        .join(""),
+    ).toContain("AX");
+  });
+
+  it("maps live mark steps to Automerge mark names", () => {
+    let document = createRichEditorAutomergeDocument(
+      JSON.stringify({
+        type: "doc",
+        content: [{
+          type: "paragraph",
+          content: [{ type: "text", text: "Alpha Beta" }],
+        }],
+      }),
+    );
+    const handle: DocHandle<RichEditorAutomergeDocument> = {
+      doc: () => document,
+      change: (change) => {
+        document = Automerge.change(document, change);
+      },
+      on: () => {},
+      off: () => {},
+    };
+    const adapter = createSchemaAdapter(richEditorCollaborationExtensions);
+    let state = EditorState.create({
+      schema: adapter.schema,
+      doc: pmDocFromSpans(adapter, Automerge.spans(document, ["body"])),
+      plugins: [createAutomergeSyncPlugin(adapter, handle, ["body"])],
+    });
+    const position = findProseMirrorTextPosition(state, "Alpha Beta");
+
+    state = state.applyTransaction(
+      state.tr.addMark(
+        position,
+        position + 10,
+        adapter.schema.marks.bold.create(),
+      ),
+    ).state;
+    state = state.applyTransaction(
+      state.tr.addMark(
+        position + 6,
+        position + 10,
+        adapter.schema.marks.italic.create(),
+      ),
+    ).state;
+    state = state.applyTransaction(
+      state.tr.removeMark(
+        position + 2,
+        position + 7,
+        adapter.schema.marks.bold,
+      ),
+    ).state;
+
+    const spans = Automerge.spans(document, ["body"]);
+    const markNames = new Set(
+      spans.flatMap(span =>
+        span.type === "text" ? Object.keys(span.marks ?? {}) : [],
+      ),
+    );
+    expect(markNames).toContain("strong");
+    expect(markNames).toContain("em");
+    expect(markNames).not.toContain("bold");
+    expect(markNames).not.toContain("italic");
+    expect(pmDocFromSpans(adapter, spans).eq(state.doc)).toBe(true);
+  });
+
+  it("preserves rows inserted through ProseMirror transactions", () => {
+    let document = createRichEditorAutomergeDocument(tableDocumentJSON());
+    const handle: DocHandle<RichEditorAutomergeDocument> = {
+      doc: () => document,
+      change: (change) => {
+        document = Automerge.change(document, change);
+      },
+      on: () => {},
+      off: () => {},
+    };
+    const adapter = createSchemaAdapter(richEditorCollaborationExtensions);
+    const pmDocument = pmDocFromSpans(
+      adapter,
+      Automerge.spans(document, ["body"]),
+    );
+    const state = EditorState.create({
+      schema: adapter.schema,
+      doc: pmDocument,
+      plugins: [
+        syncPlugin({
+          adapter,
+          handle,
+          path: ["body"],
+        }),
+      ],
+    });
+    const paragraph = adapter.schema.nodes.paragraph.create(
+      null,
+      adapter.schema.text("E"),
+    );
+    const cell = adapter.schema.nodes.tableCell.create(
+      {
+        isAmgBlock: true,
+        colspan: 1,
+        rowspan: 1,
+        colwidth: null,
+      },
+      paragraph,
+    );
+    const row = adapter.schema.nodes.tableRow.create(
+      { isAmgBlock: true },
+      [cell, cell],
+    );
+    const table = state.doc.firstChild;
+    if (!table) throw new Error("expected table node");
+
+    state.applyTransaction(
+      state.tr.insert(table.nodeSize - 1, row),
+    );
+
+    const spans = Automerge.spans(document, ["body"]);
+    expect(
+      spans.filter(span =>
+        span.type === "block"
+        && Automerge.isImmutableString(span.value.type)
+        && span.value.type.val === "table-row",
+      ),
+    ).toHaveLength(3);
+
+    const roundTrip = pmDocFromSpans(adapter, spans);
+    expect(roundTrip.firstChild?.childCount).toBe(3);
+  });
+
+  it("converges concurrent row insertions", () => {
+    const base = createRichEditorAutomergeDocument(tableDocumentJSON());
+    const left = insertTableRow(
+      Automerge.clone(base, { actor: "01000000000000000000000000000000" }),
+      "L",
+    );
+    const right = insertTableRow(
+      Automerge.clone(base, { actor: "02000000000000000000000000000000" }),
+      "R",
+    );
+    const merged = Automerge.merge(left, right);
+    const adapter = createSchemaAdapter(richEditorCollaborationExtensions);
+    const spans = Automerge.spans(merged, ["body"]);
+    const pmDocument = pmDocFromSpans(adapter, spans);
+
+    expect(pmDocument.firstChild?.childCount).toBe(4);
+    expect(pmDocument.textContent).toContain("L");
+    expect(pmDocument.textContent).toContain("R");
+  });
+
+  it("records local table edits in collaborative undo history", () => {
+    let document = createRichEditorAutomergeDocument(tableDocumentJSON());
+    const handle: DocHandle<RichEditorAutomergeDocument> = {
+      doc: () => document,
+      change: (change) => {
+        document = Automerge.change(document, change);
+      },
+      on: () => {},
+      off: () => {},
+    };
+    const adapter = createSchemaAdapter(richEditorCollaborationExtensions);
+    let state = EditorState.create({
+      schema: adapter.schema,
+      doc: pmDocFromSpans(adapter, Automerge.spans(document, ["body"])),
+      plugins: [
+        history(),
+        syncPlugin({
+          adapter,
+          handle,
+          path: ["body"],
+        }),
+      ],
+    });
+    let textPosition: number | undefined;
+    state.doc.descendants((node, position) => {
+      if (node.isText && node.text === "A") {
+        textPosition = position;
+        return false;
+      }
+
+      return true;
+    });
+    if (textPosition === undefined) throw new Error("expected cell text");
+
+    state = state.applyTransaction(
+      state.tr.insertText("X", textPosition + 1),
+    ).state;
+    expect(document.body).toContain("AX");
+
+    let undoTransaction: Transaction | undefined;
+    expect(
+      undo(state, (transaction) => {
+        undoTransaction = transaction;
+      }),
+    ).toBe(true);
+    if (!undoTransaction) throw new Error("expected undo transaction");
+
+    state.applyTransaction(undoTransaction);
+    expect(document.body).not.toContain("AX");
+  });
+
+  it("inserts a divider as a structural block", () => {
+    let document = createRichEditorAutomergeDocument(
+      JSON.stringify({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "A" }],
+          },
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "B" }],
+          },
+        ],
+      }),
+    );
+    const handle: DocHandle<RichEditorAutomergeDocument> = {
+      doc: () => document,
+      change: (change) => {
+        document = Automerge.change(document, change);
+      },
+      on: () => {},
+      off: () => {},
+    };
+    const adapter = createSchemaAdapter(richEditorCollaborationExtensions);
+    const pmDocument = pmDocFromSpans(
+      adapter,
+      Automerge.spans(document, ["body"]),
+    );
+    const state = EditorState.create({
+      schema: adapter.schema,
+      doc: pmDocument,
+      plugins: [
+        syncPlugin({
+          adapter,
+          handle,
+          path: ["body"],
+        }),
+      ],
+    });
+    const firstParagraph = state.doc.firstChild;
+    if (!firstParagraph) throw new Error("expected first paragraph");
+
+    state.applyTransaction(
+      state.tr.insert(
+        firstParagraph.nodeSize,
+        adapter.schema.nodes.horizontalRule.create({ isAmgBlock: true }),
+      ),
+    );
+
+    const spans = Automerge.spans(document, ["body"]);
+    expect(
+      spans.some(span =>
+        span.type === "block"
+        && Automerge.isImmutableString(span.value.type)
+        && span.value.type.val === "horizontal-rule",
+      ),
+    ).toBe(true);
+    expect(
+      pmDocFromSpans(adapter, spans).toJSON(),
+    ).toMatchObject({
+      content: [
+        { type: "paragraph" },
+        { type: "horizontalRule" },
+        { type: "paragraph" },
+      ],
+    });
+  });
+
+  it("synchronizes text typed after a newly inserted divider", () => {
+    let document = createRichEditorAutomergeDocument(
+      JSON.stringify({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "Before" }],
+          },
+        ],
+      }),
+    );
+    const targetSchema = getSchema(richEditorCollaborationExtensions);
+    const adapter = createSchemaAdapter(
+      richEditorCollaborationExtensions,
+      targetSchema,
+    );
+    const handle: DocHandle<RichEditorAutomergeDocument> = {
+      doc: () => document,
+      change: (change) => {
+        document = Automerge.change(document, change);
+      },
+      on: () => {},
+      off: () => {},
+    };
+    const initialAdapter = createSchemaAdapter(
+      richEditorCollaborationExtensions,
+    );
+    const pmDocument = targetSchema.nodeFromJSON(
+      pmDocFromSpans(
+        initialAdapter,
+        Automerge.spans(document, ["body"]),
+      ).toJSON(),
+    );
+    let state = EditorState.create({
+      schema: targetSchema,
+      doc: pmDocument,
+      plugins: [
+        explicitBlockIdentityPlugin(),
+        createAutomergeSyncPlugin(adapter, handle, ["body"]),
+      ],
+    });
+    const divider = targetSchema.nodes.horizontalRule.create();
+    const paragraph = targetSchema.nodes.paragraph.create();
+    state = state.applyTransaction(
+      state.tr.insert(
+        state.doc.content.size,
+        Fragment.fromArray([divider, paragraph]),
+      ),
+    ).state;
+    expect(
+      Automerge.spans(document, ["body"])
+        .filter(span => span.type === "block")
+        .map(span => Automerge.isImmutableString(span.value.type)
+          ? span.value.type.val
+          : span.value.type),
+    ).toEqual([
+      "paragraph",
+      "horizontal-rule",
+      "paragraph",
+    ]);
+    expect(state.doc.lastChild?.attrs.isAmgBlock).toBe(true);
+
+    const lastParagraphPosition = state.doc.content.size - paragraph.nodeSize;
+    let insertionError: unknown;
+    try {
+      state = state.applyTransaction(
+        state.tr.insertText("After", lastParagraphPosition + 1),
+      ).state;
+    } catch (error) {
+      insertionError = error;
+    }
+
+    const spans = Automerge.spans(document, ["body"]);
+    expect(
+      spans
+        .filter(span => span.type === "block")
+        .map(span => Automerge.isImmutableString(span.value.type)
+          ? span.value.type.val
+          : span.value.type),
+    ).toEqual([
+      "paragraph",
+      "horizontal-rule",
+      "paragraph",
+    ]);
+    expect(
+      spans
+        .filter(span => span.type === "block")
+        .map(span => ({
+          type: automergeString(span.value.type),
+          isEmbed: span.value.isEmbed,
+          parents: automergeStringArray(span.value.parents),
+        })),
+    ).toEqual([
+      { type: "paragraph", isEmbed: false, parents: [] },
+      { type: "horizontal-rule", isEmbed: false, parents: [] },
+      { type: "paragraph", isEmbed: false, parents: [] },
+    ]);
+    expect(
+      spans
+        .filter(span => span.type === "text")
+        .map(span => span.value)
+        .join(""),
+    ).toBe("BeforeAfter");
+    expect(
+      spans.map(span => span.type === "text"
+        ? `text:${span.value}`
+        : `block:${automergeString(span.value.type)}`),
+    ).toEqual([
+      "block:paragraph",
+      "text:Before",
+      "block:horizontal-rule",
+      "block:paragraph",
+      "text:After",
+    ]);
+    expect(insertionError).toBeUndefined();
+
+    const remoteDocument = pmDocFromSpans(initialAdapter, spans);
+    expect(remoteDocument.textContent).toBe("BeforeAfter");
+    expect(remoteDocument.child(1).type.name).toBe("horizontalRule");
+    expect(remoteDocument.child(2).textContent).toBe("After");
+
+    const nextParagraph = targetSchema.nodes.paragraph.create();
+    state = state.applyTransaction(
+      state.tr.insert(state.doc.content.size, nextParagraph),
+    ).state;
+    const nextPosition = state.doc.content.size - nextParagraph.nodeSize + 1;
+    state.applyTransaction(state.tr.insertText("Later", nextPosition));
+
+    const laterSpans = Automerge.spans(document, ["body"]);
+    expect(
+      laterSpans.map(span => span.type === "text"
+        ? `text:${span.value}`
+        : `block:${automergeString(span.value.type)}`),
+    ).toEqual([
+      "block:paragraph",
+      "text:Before",
+      "block:horizontal-rule",
+      "block:paragraph",
+      "text:After",
+      "block:paragraph",
+      "text:Later",
+    ]);
+    const laterRemote = pmDocFromSpans(initialAdapter, laterSpans);
+    expect(laterRemote.textContent).toBe("BeforeAfterLater");
+    expect(laterRemote.child(3).textContent).toBe("Later");
+  });
+
+  it("synchronizes text typed into a newly inserted task item", () => {
+    let document = createRichEditorAutomergeDocument(
+      JSON.stringify({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "Before" }],
+          },
+        ],
+      }),
+    );
+    const targetSchema = getSchema(richEditorCollaborationExtensions);
+    const adapter = createSchemaAdapter(
+      richEditorCollaborationExtensions,
+      targetSchema,
+    );
+    const handle: DocHandle<RichEditorAutomergeDocument> = {
+      doc: () => document,
+      change: (change) => {
+        document = Automerge.change(document, change);
+      },
+      on: () => {},
+      off: () => {},
+    };
+    const initialAdapter = createSchemaAdapter(
+      richEditorCollaborationExtensions,
+    );
+    const pmDocument = targetSchema.nodeFromJSON(
+      pmDocFromSpans(
+        initialAdapter,
+        Automerge.spans(document, ["body"]),
+      ).toJSON(),
+    );
+    let state = EditorState.create({
+      schema: targetSchema,
+      doc: pmDocument,
+      plugins: [
+        explicitBlockIdentityPlugin(),
+        createAutomergeSyncPlugin(adapter, handle, ["body"]),
+      ],
+    });
+    const taskItem = targetSchema.nodes.taskItem.create(
+      { checked: false },
+      targetSchema.nodes.paragraph.create(),
+    );
+    const taskList = targetSchema.nodes.taskList.create(null, taskItem);
+    state = state.applyTransaction(
+      state.tr.insert(state.doc.content.size, taskList),
+    ).state;
+    expect(state.doc.lastChild?.firstChild?.attrs.isAmgBlock).toBe(true);
+
+    let taskItemPosition = -1;
+    state.doc.descendants((node, position) => {
+      if (node.type.name === "taskItem") taskItemPosition = position;
+      return taskItemPosition === -1;
+    });
+    expect(taskItemPosition).toBeGreaterThanOrEqual(0);
+
+    let insertionError: unknown;
+    try {
+      state.applyTransaction(
+        state.tr.insertText("Buy milk", taskItemPosition + 2),
+      );
+    } catch (error) {
+      insertionError = error;
+    }
+    expect(insertionError).toBeUndefined();
+
+    const spans = Automerge.spans(document, ["body"]);
+    expect(
+      spans
+        .filter(span => span.type === "block")
+        .map(span => automergeString(span.value.type)),
+    ).toEqual(["paragraph", "task-list-item"]);
+    expect(
+      spans
+        .filter(span => span.type === "text")
+        .map(span => span.value)
+        .join(""),
+    ).toBe("BeforeBuy milk");
+  });
+
+  it("reconciles remote text between empty structural blocks", () => {
+    const adapter = createSchemaAdapter(richEditorCollaborationExtensions);
+    let document = createRichEditorAutomergeDocument(
+      JSON.stringify({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "Before" }],
+          },
+          { type: "horizontalRule" },
+          { type: "paragraph" },
+          { type: "paragraph" },
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "After" }],
+          },
+        ],
+      }),
+    );
+    const initialDocument = pmDocFromSpans(
+      adapter,
+      Automerge.spans(document, ["body"]),
+    );
+    const state = EditorState.create({
+      schema: adapter.schema,
+      doc: initialDocument,
+    });
+    const emptyParagraphPositions: number[] = [];
+    state.doc.descendants((node, position) => {
+      if (node.type.name === "paragraph" && node.content.size === 0) {
+        emptyParagraphPositions.push(position);
+      }
+    });
+    expect(emptyParagraphPositions).toHaveLength(2);
+
+    const changedDocument = state.tr.insertText(
+      "X",
+      emptyParagraphPositions[0] + 1,
+    ).doc;
+    document = Automerge.change(document, (draft) => {
+      Automerge.updateSpans(
+        draft,
+        ["body"],
+        pmNodeToSpans(adapter, changedDocument),
+        adapter.updateSpansConfig(),
+      );
+    });
+
+    const transaction = reconcileAutomergeDocument(
+      adapter,
+      ["body"],
+      document,
+      state,
+    );
+    const reconciled = state.apply(transaction);
+    expect(reconciled.doc.eq(changedDocument)).toBe(true);
+  });
+
+  it("preserves Mermaid code-block language", () => {
+    const document = createRichEditorAutomergeDocument(
+      JSON.stringify({
+        type: "doc",
+        content: [
+          {
+            type: "codeBlock",
+            attrs: { language: "mermaid" },
+            content: [{ type: "text", text: "graph TD; A-->B" }],
+          },
+        ],
+      }),
+    );
+    const spans = Automerge.spans(document, ["body"]);
+    const block = spans.find(span => span.type === "block");
+    if (block?.type !== "block") throw new Error("expected block span");
+    const attrs = block.value.attrs;
+    if (
+      attrs === null
+      || typeof attrs !== "object"
+      || !("language" in attrs)
+    ) {
+      throw new Error("expected code-block language");
+    }
+    expect(attrs.language).toBe("mermaid");
+
+    const handle: DocHandle<RichEditorAutomergeDocument> = {
+      doc: () => document,
+      change: () => {},
+      on: () => {},
+      off: () => {},
+    };
+    const roundTrip = richEditorAutomergeContent(
+      handle,
+      richEditorCollaborationExtensions,
+    ) as {
+      content: Array<{
+        type: string;
+        attrs: { language: string | null };
+      }>;
+    };
+    expect(roundTrip.content[0]).toMatchObject({
+      type: "codeBlock",
+      attrs: { language: "mermaid" },
+    });
+  });
+
+  it("preserves task list checked state", () => {
+    const content = JSON.stringify({
+      type: "doc",
+      content: [{
+        type: "taskList",
+        content: [
+          {
+            type: "taskItem",
+            attrs: { checked: false },
+            content: [{
+              type: "paragraph",
+              content: [{ type: "text", text: "open" }],
+            }],
+          },
+          {
+            type: "taskItem",
+            attrs: { checked: true },
+            content: [{
+              type: "paragraph",
+              content: [{ type: "text", text: "done" }],
+            }],
+          },
+        ],
+      }],
+    });
+
+    const document = createRichEditorAutomergeDocument(content);
+    const blocks = Automerge.spans(document, ["body"])
+      .filter(span => span.type === "block");
+
+    expect(blocks.map(span => automergeString(span.value.type))).toEqual([
+      "task-list-item",
+      "task-list-item",
+    ]);
+    expect(blocks.map(span => span.value.attrs)).toEqual([
+      { checked: false },
+      { checked: true },
+    ]);
+
+    const handle: DocHandle<RichEditorAutomergeDocument> = {
+      doc: () => document,
+      change: () => {},
+      on: () => {},
+      off: () => {},
+    };
+    const roundTrip = richEditorAutomergeContent(
+      handle,
+      richEditorCollaborationExtensions,
+    ) as {
+      content: Array<{
+        type: string;
+        content: Array<{
+          type: string;
+          attrs: { checked: boolean };
+        }>;
+      }>;
+    };
+
+    expect(roundTrip.content[0]?.type).toBe("taskList");
+    expect(roundTrip.content[0]?.content.map(item => item.attrs.checked)).toEqual([
+      false,
+      true,
+    ]);
+  });
+});
+
+function findProseMirrorTextPosition(
+  state: EditorState,
+  text: string,
+): number {
+  let position: number | undefined;
+  state.doc.descendants((node, at) => {
+    if (node.isText && node.text === text) {
+      position = at;
+      return false;
+    }
+
+    return true;
+  });
+  if (position === undefined) throw new Error(`expected text ${text}`);
+
+  return position;
+}
+
+function tableDocumentJSON(): string {
+  return JSON.stringify({
+    type: "doc",
+    content: [
+      {
+        type: "table",
+        content: [
+          {
+            type: "tableRow",
+            content: [
+              tableCell("A"),
+              tableCell("B"),
+            ],
+          },
+          {
+            type: "tableRow",
+            content: [
+              tableCell("C"),
+              tableCell("D"),
+            ],
+          },
+        ],
+      },
+    ],
+  });
+}
+
+function spanLabels(spans: ReturnType<typeof Automerge.spans>): string[] {
+  return spans.map(span => span.type === "text"
+    ? `text:${span.value}`
+    : `block:${automergeString(span.value.type)}`);
+}
+
+function automergeString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Automerge.isImmutableString(value)) return value.val;
+  throw new Error("expected Automerge string");
+}
+
+function automergeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error("expected Automerge string array");
+  return value.map(automergeString);
+}
+
+function tableCell(text: string) {
+  return {
+    type: "tableCell",
+    attrs: {
+      colspan: 1,
+      rowspan: 1,
+      colwidth: null,
+    },
+    content: [
+      {
+        type: "paragraph",
+        content: [{ type: "text", text }],
+      },
+    ],
+  };
+}
+
+function insertTableRow(
+  initial: Automerge.Doc<RichEditorAutomergeDocument>,
+  text: string,
+): Automerge.Doc<RichEditorAutomergeDocument> {
+  let document = initial;
+  const handle: DocHandle<RichEditorAutomergeDocument> = {
+    doc: () => document,
+    change: (change) => {
+      document = Automerge.change(document, change);
+    },
+    on: () => {},
+    off: () => {},
+  };
+  const adapter = createSchemaAdapter(richEditorCollaborationExtensions);
+  const pmDocument = pmDocFromSpans(
+    adapter,
+    Automerge.spans(document, ["body"]),
+  );
+  const state = EditorState.create({
+    schema: adapter.schema,
+    doc: pmDocument,
+    plugins: [
+      syncPlugin({
+        adapter,
+        handle,
+        path: ["body"],
+      }),
+    ],
+  });
+  const paragraph = adapter.schema.nodes.paragraph.create(
+    null,
+    adapter.schema.text(text),
+  );
+  const cell = adapter.schema.nodes.tableCell.create(
+    {
+      isAmgBlock: true,
+      colspan: 1,
+      rowspan: 1,
+      colwidth: null,
+    },
+    paragraph,
+  );
+  const row = adapter.schema.nodes.tableRow.create(
+    { isAmgBlock: true },
+    [cell],
+  );
+  const table = state.doc.firstChild;
+  if (!table) throw new Error("expected table node");
+
+  state.applyTransaction(state.tr.insert(table.nodeSize - 1, row));
+
+  return document;
+}

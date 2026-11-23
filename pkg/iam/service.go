@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package iam
 
@@ -27,9 +33,11 @@ import (
 	"go.gearno.de/kit/pg"
 	"go.opentelemetry.io/otel/trace"
 	"go.probo.inc/probo/pkg/baseurl"
-	"go.probo.inc/probo/pkg/connector"
+	"go.probo.inc/probo/pkg/certmanager"
+	"go.probo.inc/probo/pkg/connectorprotocol"
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/crypto/cipher"
+	"go.probo.inc/probo/pkg/crypto/jose"
 	"go.probo.inc/probo/pkg/crypto/passwdhash"
 	"go.probo.inc/probo/pkg/filemanager"
 	"go.probo.inc/probo/pkg/gid"
@@ -43,36 +51,38 @@ import (
 
 type (
 	Service struct {
-		pg                         *pg.Client
-		fm                         *filemanager.Service
-		hp                         *passwdhash.Profile
-		dummyHash                  []byte
-		baseURL                    string
-		tokenSecret                string
-		disableSignup              bool
-		invitationTokenValidity    time.Duration
-		passwordResetTokenValidity time.Duration
-		magicLinkTokenValidity     time.Duration
-		sessionDuration            time.Duration
-		bucket                     string
-		certificate                *x509.Certificate
-		privateKey                 *rsa.PrivateKey
-		logger                     *log.Logger
+		pg                             *pg.Client
+		fm                             *filemanager.Service
+		hp                             *passwdhash.Profile
+		dummyHash                      []byte
+		baseURL                        string
+		tokenSecret                    string
+		disableSignup                  bool
+		invitationTokenValidity        time.Duration
+		passwordResetTokenValidity     time.Duration
+		magicLinkTokenValidity         time.Duration
+		emailConfirmationTokenValidity time.Duration
+		sessionDuration                time.Duration
+		bucket                         string
+		compliancePortalBaseDomain     string
+		certManager                    *certmanager.Service
+		certificate                    *x509.Certificate
+		privateKey                     *rsa.PrivateKey
+		logger                         *log.Logger
 
-		AccountService        *AccountService
-		OrganizationService   *OrganizationService
-		CompliancePageService *CompliancePageService
-		SessionService        *SessionService
-		AuthService           *AuthService
-		SAMLService           *saml.Service
-		OIDCService           *oidc.Service
-		SCIMService           *scim.Service
-		APIKeyService         *APIKeyService
-		OAuth2ServerService   *oauth2.Service
-		Authorizer            *Authorizer
-		OAuth2ScopeRegistry   *oauth2scope.Registry
+		AccountService      *AccountService
+		OrganizationService *OrganizationService
+		SessionService      *SessionService
+		AuthService         *AuthService
+		SAMLService         *saml.Service
+		OIDCService         *oidc.Service
+		SCIMService         *scim.Service
+		OAuth2ServerService *oauth2.Service
+		Authorizer          *Authorizer
+		OAuth2ScopeRegistry *oauth2scope.Registry
 
 		samlDomainVerifier *SAMLDomainVerifier
+		LogExports         *LogExportService
 	}
 
 	Config struct {
@@ -80,24 +90,27 @@ type (
 		InvitationTokenValidity        time.Duration
 		PasswordResetTokenValidity     time.Duration
 		MagicLinkTokenValidity         time.Duration
+		EmailConfirmationTokenValidity time.Duration
 		SessionDuration                time.Duration
 		Bucket                         string
 		TokenSecret                    string
 		BaseURL                        *baseurl.BaseURL
+		CompliancePortalBaseDomain     string
+		CertManager                    *certmanager.Service
 		EncryptionKey                  cipher.EncryptionKey
 		Certificate                    *x509.Certificate
 		PrivateKey                     *rsa.PrivateKey
 		Logger                         *log.Logger
 		TracerProvider                 trace.TracerProvider
 		Registerer                     prometheus.Registerer
-		ConnectorRegistry              *connector.ConnectorRegistry
+		ConnectorRegistry              *connectorprotocol.Registry
 		DomainVerificationInterval     time.Duration
 		DomainVerificationResolverAddr string
 		SCIMBridgeSyncInterval         time.Duration
 		SCIMBridgePollInterval         time.Duration
 		GoogleOIDC                     oidc.ProviderConfig
 		MicrosoftOIDC                  oidc.ProviderConfig
-		OAuth2ServerSigningKeys        oauth2.SigningKeys
+		OAuth2ServerKeyRing            *jose.KeyRing
 		OAuth2ServerOptions            []oauth2.Option
 		OAuth2ScopeRegistry            *oauth2scope.Registry
 	}
@@ -139,30 +152,35 @@ func NewService(
 		return nil, fmt.Errorf("oauth2 scope registry is required")
 	}
 
+	if cfg.CertManager == nil {
+		return nil, fmt.Errorf("cert manager is required")
+	}
+
 	svc := &Service{
-		pg:                         pgClient,
-		fm:                         fm,
-		hp:                         hp,
-		dummyHash:                  mustHashDummy(hp),
-		baseURL:                    cfg.BaseURL.String(),
-		tokenSecret:                cfg.TokenSecret,
-		disableSignup:              cfg.DisableSignup,
-		invitationTokenValidity:    cfg.InvitationTokenValidity,
-		passwordResetTokenValidity: cfg.PasswordResetTokenValidity,
-		magicLinkTokenValidity:     cfg.MagicLinkTokenValidity,
-		sessionDuration:            cfg.SessionDuration,
-		bucket:                     cfg.Bucket,
-		certificate:                cfg.Certificate,
-		privateKey:                 cfg.PrivateKey,
-		logger:                     cfg.Logger,
+		pg:                             pgClient,
+		fm:                             fm,
+		hp:                             hp,
+		dummyHash:                      mustHashDummy(hp),
+		baseURL:                        cfg.BaseURL.String(),
+		tokenSecret:                    cfg.TokenSecret,
+		disableSignup:                  cfg.DisableSignup,
+		invitationTokenValidity:        cfg.InvitationTokenValidity,
+		passwordResetTokenValidity:     cfg.PasswordResetTokenValidity,
+		magicLinkTokenValidity:         cfg.MagicLinkTokenValidity,
+		emailConfirmationTokenValidity: cfg.EmailConfirmationTokenValidity,
+		sessionDuration:                cfg.SessionDuration,
+		bucket:                         cfg.Bucket,
+		compliancePortalBaseDomain:     cfg.CompliancePortalBaseDomain,
+		certManager:                    cfg.CertManager,
+		certificate:                    cfg.Certificate,
+		privateKey:                     cfg.PrivateKey,
+		logger:                         cfg.Logger,
 	}
 
 	svc.AccountService = NewAccountService(svc)
 	svc.OrganizationService = NewOrganizationService(svc)
-	svc.CompliancePageService = NewCompliancePageService(svc)
 	svc.SessionService = NewSessionService(svc)
 	svc.AuthService = NewAuthService(svc)
-	svc.APIKeyService = NewAPIKeyService(svc)
 
 	svc.OAuth2ScopeRegistry = cfg.OAuth2ScopeRegistry
 
@@ -206,7 +224,7 @@ func NewService(
 
 	svc.OAuth2ServerService = oauth2.NewService(
 		pgClient,
-		cfg.OAuth2ServerSigningKeys,
+		cfg.OAuth2ServerKeyRing,
 		uri.URI(cfg.BaseURL.String()),
 		cfg.Logger.Named("oauth2"),
 		append(
@@ -223,6 +241,13 @@ func NewService(
 		cfg.DomainVerificationResolverAddr,
 	)
 
+	svc.LogExports = NewLogExportService(
+		pgClient,
+		fm,
+		cfg.Bucket,
+		cfg.BaseURL.String(),
+	)
+
 	return svc, nil
 }
 
@@ -233,11 +258,41 @@ func (s *Service) OAuth2ServerMetadata(endpoints oauth2.Endpoints) *oauth2.Serve
 
 // OAuth2ProtectedResourceMetadata returns the RFC 9728 protected resource metadata document.
 func (s *Service) OAuth2ProtectedResourceMetadata(resource uri.URI) *oauth2.ProtectedResourceMetadata {
-	return oauth2.NewProtectedResourceMetadata(resource, resource, s.OAuth2ScopeRegistry.AllWriteScopes())
+	return oauth2.NewProtectedResourceMetadata(
+		resource,
+		s.OAuth2ServerService.Issuer(),
+		s.OAuth2ScopeRegistry.AllWriteScopes(),
+	)
+}
+
+// OAuth2MCPResource returns the MCP protected-resource identifier.
+func (s *Service) OAuth2MCPResource() (uri.URI, error) {
+	return oauth2.MCPResource(uri.URI(s.baseURL))
 }
 
 func (s *Service) IsSignUpEnabled() bool {
 	return !s.disableSignup
+}
+
+func (s *Service) IdentityHasMembership(
+	ctx context.Context,
+	identityID gid.GID,
+	role *coredata.MembershipRole,
+) (bool, error) {
+	filter := coredata.NewMembershipProfileFilter(nil).
+		WithMembership().
+		WithStates(coredata.ProfileStateActive)
+
+	if role != nil {
+		filter = filter.WithRole(*role)
+	}
+
+	count, err := s.AccountService.CountProfiles(ctx, identityID, filter)
+	if err != nil {
+		return false, fmt.Errorf("cannot count memberships: %w", err)
+	}
+
+	return count > 0, nil
 }
 
 func (s *Service) Run(ctx context.Context) error {
@@ -416,31 +471,6 @@ func (s *Service) GetSAMLconfiguration(ctx context.Context, samlConfigurationID 
 	}
 
 	return samlConfiguration, nil
-}
-
-func (s *Service) GetPersonalAPIKey(ctx context.Context, personalAPIKeyID gid.GID) (*coredata.PersonalAPIKey, error) {
-	personalAPIKey := &coredata.PersonalAPIKey{}
-
-	err := s.pg.WithConn(
-		ctx,
-		func(ctx context.Context, conn pg.Querier) error {
-			err := personalAPIKey.LoadByID(ctx, conn, personalAPIKeyID)
-			if err != nil {
-				if err == coredata.ErrResourceNotFound {
-					return NewPersonalAPIKeyNotFoundError(personalAPIKeyID)
-				}
-
-				return fmt.Errorf("cannot load personal API key: %w", err)
-			}
-
-			return nil
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return personalAPIKey, nil
 }
 
 func (s *Service) GetSCIMConfiguration(ctx context.Context, scimConfigurationID gid.GID) (*coredata.SCIMConfiguration, error) {

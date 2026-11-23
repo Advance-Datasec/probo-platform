@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata_test
 
@@ -25,6 +31,7 @@ import (
 	"go.probo.inc/probo/internal/test"
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/gid"
+	"go.probo.inc/probo/pkg/page"
 )
 
 // trackerPatternFixture bootstraps the parent rows that a tracker
@@ -41,7 +48,7 @@ func seedTrackerPatternFixture(t *testing.T, ctx context.Context, client *pg.Cli
 	t.Helper()
 
 	tenantID := gid.NewTenantID()
-	scope := coredata.NewScope(tenantID)
+	scope := coredata.NewScope(tenantID, gid.Nil)
 	organizationID := gid.New(tenantID, coredata.OrganizationEntityType)
 	cookieBannerID := gid.New(tenantID, coredata.CookieBannerEntityType)
 	cookieCategoryID := gid.New(tenantID, coredata.CookieCategoryEntityType)
@@ -60,17 +67,19 @@ func seedTrackerPatternFixture(t *testing.T, ctx context.Context, client *pg.Cli
 		}
 
 		banner := &coredata.CookieBanner{
-			ID:                cookieBannerID,
-			OrganizationID:    organizationID,
-			Name:              "TrackerPattern Test Banner",
-			Origin:            "https://tracker-pattern-test.example.com",
-			State:             coredata.CookieBannerStateActive,
-			CookiePolicyURL:   "https://tracker-pattern-test.example.com/cookies",
-			ConsentExpiryDays: 180,
-			ShowBranding:      false,
-			DefaultLanguage:   "en",
-			CreatedAt:         now,
-			UpdatedAt:         now,
+			ID:                   cookieBannerID,
+			OrganizationID:       organizationID,
+			Name:                 "TrackerPattern Test Banner",
+			Origin:               "https://tracker-pattern-test.example.com",
+			State:                coredata.CookieBannerStateActive,
+			CookiePolicyURL:      "https://tracker-pattern-test.example.com/cookies",
+			ConsentExpiryDays:    180,
+			ShowBranding:         false,
+			Capabilities:         coredata.DefaultCookieBannerCapabilities(),
+			DefaultLanguage:      "en",
+			PublisherCountryCode: "AA",
+			CreatedAt:            now,
+			UpdatedAt:            now,
 		}
 		if err := banner.Insert(ctx, tx, scope); err != nil {
 			return err
@@ -86,6 +95,7 @@ func seedTrackerPatternFixture(t *testing.T, ctx context.Context, client *pg.Cli
 			Kind:            coredata.CookieCategoryKindNormal,
 			Rank:            1,
 			GCMConsentTypes: []string{},
+			TCFPurposeIDs:   []int{},
 			PostHogConsent:  false,
 			CreatedAt:       now,
 			UpdatedAt:       now,
@@ -148,7 +158,6 @@ func seedTrackerPattern(
 		TrackerType:      coredata.TrackerTypeCookie,
 		Pattern:          pattern,
 		MatchType:        matchType,
-		DisplayName:      pattern,
 		Description:      "",
 		MaxAgeSeconds:    &maxAge,
 		Source:           &source,
@@ -237,7 +246,6 @@ func TestTrackerPattern_Update_NotFoundForMissingRow(t *testing.T) {
 		TrackerType:      coredata.TrackerTypeCookie,
 		Pattern:          "*_ghost",
 		MatchType:        coredata.TrackerPatternMatchTypeGlob,
-		DisplayName:      "*_ghost",
 		MaxAgeSeconds:    &maxAge,
 		Source:           &source,
 		CreatedAt:        now,
@@ -279,7 +287,6 @@ func TestResetStaleMappings(t *testing.T) {
 			TrackerType:            coredata.TrackerTypeCookie,
 			Pattern:                pattern,
 			MatchType:              coredata.TrackerPatternMatchTypeExact,
-			DisplayName:            pattern,
 			MaxAgeSeconds:          &maxAge,
 			Source:                 &source,
 			CreatedAt:              old,
@@ -308,6 +315,25 @@ func TestResetStaleMappings(t *testing.T) {
 	fresh := newPattern("fresh_unfinished", now, nil)
 	completed := newPattern("completed_mapping", old, &commonPattern.ID)
 
+	extSource := coredata.CookieSourceExtension
+	staleExtension := &coredata.TrackerPattern{
+		ID:               gid.New(fx.scope.GetTenantID(), coredata.TrackerPatternEntityType),
+		OrganizationID:   fx.organizationID,
+		CookieBannerID:   fx.cookieBannerID,
+		CookieCategoryID: fx.cookieCategoryID,
+		TrackerType:      coredata.TrackerTypeCookie,
+		Pattern:          "stale_extension",
+		MatchType:        coredata.TrackerPatternMatchTypeExact,
+		MaxAgeSeconds:    &maxAge,
+		Source:           &extSource,
+		CreatedAt:        old,
+		UpdatedAt:        old,
+	}
+
+	require.NoError(t, client.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
+		return staleExtension.Insert(ctx, tx, fx.scope)
+	}))
+
 	require.NoError(t, client.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
 		return coredata.ResetStaleMappings(ctx, conn, 10*time.Minute)
 	}))
@@ -325,16 +351,16 @@ func TestResetStaleMappings(t *testing.T) {
 	assert.NotNil(t, load(stale.ID).MappingRequestedAt, "claimed-but-unfinished idle row must be re-armed")
 	assert.Nil(t, load(fresh.ID).MappingRequestedAt, "recently claimed row must not be re-armed before the window elapses")
 	assert.Nil(t, load(completed.ID).MappingRequestedAt, "completed mapping (catalog row assigned) must never be re-armed")
+	assert.Nil(t, load(staleExtension.ID).MappingRequestedAt, "unlinked EXTENSION must not be re-armed")
 }
 
 // TestRequestMappingForUnmappedByInitiatorDomains pins the new-domain
 // re-map cascade: when a vendor gains owned domains, only still-unmapped
 // org patterns whose detected trackers share one of those domains are
-// re-armed. A pattern already linked to a vendor (via a catalog row that
-// carries a common_third_party_id, or via third_party_id), an
-// extension-sourced pattern, and a pattern whose trackers were seen on a
-// different domain are all left untouched. An empty domain set is a
-// no-op.
+// re-armed. A pattern already linked to a vendor via a catalog row that
+// carries a common_third_party_id, an extension-sourced pattern, and a
+// pattern whose trackers were seen on a different domain are all left
+// untouched. An empty domain set is a no-op.
 func TestRequestMappingForUnmappedByInitiatorDomains(t *testing.T) {
 	t.Parallel()
 
@@ -382,29 +408,10 @@ func TestRequestMappingForUnmappedByInitiatorDomains(t *testing.T) {
 	}
 	insertCommonTrackerPattern(t, ctx, client, linkedCommon)
 
-	// An org third party for the third_party_id-linked pattern.
-	orgThirdPartyID := gid.New(fx.scope.GetTenantID(), coredata.ThirdPartyEntityType)
-	orgThirdParty := coredata.ThirdParty{
-		ID:             orgThirdPartyID,
-		OrganizationID: fx.organizationID,
-		Name:           "Org Vendor",
-		Category:       coredata.ThirdPartyCategoryAnalytics,
-		Certifications: []string{},
-		Countries:      coredata.CountryCodes{},
-		Level:          1,
-		CreatedAt:      now,
-		UpdatedAt:      now,
-	}
-
-	require.NoError(t, client.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
-		return orgThirdParty.Insert(ctx, tx, fx.scope)
-	}))
-
 	newPattern := func(
 		pattern string,
 		source coredata.CookieSource,
 		commonID *gid.GID,
-		thirdPartyID *gid.GID,
 	) *coredata.TrackerPattern {
 		src := source
 		tp := &coredata.TrackerPattern{
@@ -413,11 +420,9 @@ func TestRequestMappingForUnmappedByInitiatorDomains(t *testing.T) {
 			CookieBannerID:         fx.cookieBannerID,
 			CookieCategoryID:       fx.cookieCategoryID,
 			CommonTrackerPatternID: commonID,
-			ThirdPartyID:           thirdPartyID,
 			TrackerType:            coredata.TrackerTypeCookie,
 			Pattern:                pattern,
 			MatchType:              coredata.TrackerPatternMatchTypeExact,
-			DisplayName:            pattern,
 			MaxAgeSeconds:          &maxAge,
 			Source:                 &src,
 			CreatedAt:              now,
@@ -438,9 +443,9 @@ func TestRequestMappingForUnmappedByInitiatorDomains(t *testing.T) {
 			CookieBannerID:   fx.cookieBannerID,
 			TrackerPatternID: &patternID,
 			TrackerType:      coredata.TrackerTypeCookie,
+			ObservedBy:       coredata.DetectedTrackerObserverSDK,
 			Identifier:       identifier,
 			InitiatorDomain:  &d,
-			LastDetectedAt:   now,
 			CreatedAt:        now,
 			UpdatedAt:        now,
 		}
@@ -452,15 +457,13 @@ func TestRequestMappingForUnmappedByInitiatorDomains(t *testing.T) {
 		}))
 	}
 
-	unmapped := newPattern("unmapped", coredata.CookieSourceScript, nil, nil)
-	catalogLinked := newPattern("catalog_linked", coredata.CookieSourceScript, &linkedCommon.ID, nil)
-	thirdPartyLinked := newPattern("third_party_linked", coredata.CookieSourceScript, nil, &orgThirdPartyID)
-	extension := newPattern("extension", coredata.CookieSourceExtension, nil, nil)
-	otherDomainPattern := newPattern("other_domain", coredata.CookieSourceScript, nil, nil)
+	unmapped := newPattern("unmapped", coredata.CookieSourceScript, nil)
+	catalogLinked := newPattern("catalog_linked", coredata.CookieSourceScript, &linkedCommon.ID)
+	extension := newPattern("extension", coredata.CookieSourceExtension, nil)
+	otherDomainPattern := newPattern("other_domain", coredata.CookieSourceScript, nil)
 
 	seedDetectedTracker(unmapped.ID, "unmapped_id", vendorDomain)
 	seedDetectedTracker(catalogLinked.ID, "catalog_linked_id", vendorDomain)
-	seedDetectedTracker(thirdPartyLinked.ID, "third_party_linked_id", vendorDomain)
 	seedDetectedTracker(extension.ID, "extension_id", vendorDomain)
 	seedDetectedTracker(otherDomainPattern.ID, "other_domain_id", otherDomain)
 
@@ -490,7 +493,6 @@ func TestRequestMappingForUnmappedByInitiatorDomains(t *testing.T) {
 
 	assert.NotNil(t, load(unmapped.ID).MappingRequestedAt, "unmapped pattern sharing the domain must be re-armed")
 	assert.Nil(t, load(catalogLinked.ID).MappingRequestedAt, "pattern linked to a vendor via the catalog must be left alone")
-	assert.Nil(t, load(thirdPartyLinked.ID).MappingRequestedAt, "pattern linked to an org third party must be left alone")
 	assert.Nil(t, load(extension.ID).MappingRequestedAt, "extension-sourced pattern must be skipped")
 	assert.Nil(t, load(otherDomainPattern.ID).MappingRequestedAt, "pattern seen on a different domain must not be re-armed")
 
@@ -508,4 +510,73 @@ func TestRequestMappingForUnmappedByInitiatorDomains(t *testing.T) {
 	}))
 
 	assert.Equal(t, int64(0), emptyCount, "empty domain set must be a no-op")
+}
+
+// TestTrackerPatterns_LoadByCookieBannerID_SourceOrder pins SOURCE
+// sort: cookie_source is an enum, so ORDER BY COALESCE(source, ”)
+// fails with SQLSTATE 22P02. The column expression must cast to text
+// first so NULL sources sort as empty and come first in ASC.
+func TestTrackerPatterns_LoadByCookieBannerID_SourceOrder(t *testing.T) {
+	t.Parallel()
+
+	client := test.PGClient(t)
+	ctx := context.Background()
+	fx := seedTrackerPatternFixture(t, ctx, client)
+
+	seedTrackerPattern(
+		t,
+		ctx,
+		client,
+		fx,
+		"*_session",
+		coredata.TrackerPatternMatchTypeGlob,
+		coredata.CookieSourceScript,
+	)
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	maxAge := 3600
+	unsourced := &coredata.TrackerPattern{
+		ID:               gid.New(fx.scope.GetTenantID(), coredata.TrackerPatternEntityType),
+		OrganizationID:   fx.organizationID,
+		CookieBannerID:   fx.cookieBannerID,
+		CookieCategoryID: fx.cookieCategoryID,
+		TrackerType:      coredata.TrackerTypeCookie,
+		Pattern:          "unsourced",
+		MatchType:        coredata.TrackerPatternMatchTypeExact,
+		MaxAgeSeconds:    &maxAge,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+
+	require.NoError(t, client.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
+		return unsourced.Insert(ctx, tx, fx.scope)
+	}))
+
+	cursor := page.NewCursor(
+		10,
+		nil,
+		page.Head,
+		page.OrderBy[coredata.TrackerPatternOrderField]{
+			Field:     coredata.TrackerPatternOrderFieldSource,
+			Direction: page.OrderDirectionAsc,
+		},
+	)
+
+	var patterns coredata.TrackerPatterns
+
+	require.NoError(t, client.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
+		return patterns.LoadByCookieBannerID(
+			ctx,
+			conn,
+			fx.scope,
+			fx.cookieBannerID,
+			cursor,
+			coredata.NewTrackerPatternFilter(nil, nil, nil),
+		)
+	}))
+
+	require.Len(t, patterns, 2)
+	assert.Nil(t, patterns[0].Source)
+	require.NotNil(t, patterns[1].Source)
+	assert.Equal(t, coredata.CookieSourceScript, *patterns[1].Source)
 }

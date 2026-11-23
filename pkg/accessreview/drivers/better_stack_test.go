@@ -1,21 +1,28 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -39,7 +46,7 @@ func TestBetterStackDriver(t *testing.T) {
 
 	client := newVCRClient(rec, bearerAuth(os.Getenv("BETTER_STACK_TOKEN")))
 
-	records, err := NewBetterStackDriver(client, teamName).ListAccounts(context.Background())
+	records, err := NewBetterStackDriver(client, teamName, "https://betterstack.com/api/v2").ListAccounts(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, records, 1)
 
@@ -47,7 +54,7 @@ func TestBetterStackDriver(t *testing.T) {
 	assert.Equal(t, "alice@example.com", r.Email)
 	assert.Equal(t, "Alice Smith", r.FullName)
 	assert.Equal(t, []string{"Admin"}, r.Roles)
-	assert.True(t, r.IsAdmin)
+	assert.Equal(t, new(true), r.IsAdmin)
 	assert.Equal(t, "101", r.ExternalID)
 	require.NotNil(t, r.Active)
 	assert.True(t, *r.Active)
@@ -77,7 +84,7 @@ func TestBetterStackDriverPagination(t *testing.T) {
 
 	client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
 
-	records, err := NewBetterStackDriver(client, "acme").ListAccounts(context.Background())
+	records, err := NewBetterStackDriver(client, "acme", "https://betterstack.com/api/v2").ListAccounts(context.Background())
 	require.NoError(t, err)
 	require.Len(t, records, 3)
 
@@ -102,9 +109,25 @@ func TestBetterStackDriverListAccountsError(t *testing.T) {
 
 	client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
 
-	_, err := NewBetterStackDriver(client, "acme").ListAccounts(context.Background())
+	_, err := NewBetterStackDriver(client, "acme", "https://betterstack.com/api/v2").ListAccounts(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unexpected status 401")
+}
+
+func TestBetterStackDriverUnknownTeam(t *testing.T) {
+	t.Parallel()
+
+	// Record with a global token: a team token ignores team_name.
+	rec := newRecorder(t, "testdata/better_stack_unknown_team", "BETTER_STACK_TOKEN", dropResponseHeaders("Set-Cookie", "Reporting-Endpoints", "Report-To", "Nel"))
+	client := newVCRClient(rec, bearerAuth(os.Getenv("BETTER_STACK_TOKEN")))
+
+	_, err := NewBetterStackDriver(client, "Acme", "https://betterstack.com/api/v2").ListAccounts(context.Background())
+
+	rejected, ok := errors.AsType[*SettingRejectedError](err)
+	require.Truef(t, ok, "expected a rejected team name, got %v", err)
+	assert.Equal(t, BetterStackTeamNotFound, rejected.Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, rejected.StatusCode)
+	assert.NotContains(t, err.Error(), "Available teams", "provider text must stay out of the error")
 }
 
 func TestBetterStackRoles(t *testing.T) {

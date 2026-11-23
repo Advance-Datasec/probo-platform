@@ -1,21 +1,30 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
@@ -31,7 +40,7 @@ func TestApolloDriver(t *testing.T) {
 	// Apollo authenticates via the x-api-key header, not Authorization.
 	client := newVCRClientWithHeader(rec, "x-api-key", os.Getenv("APOLLO_API_KEY"))
 
-	driver := NewApolloDriver(client)
+	driver := NewApolloDriver(client, "https://api.apollo.io/api/v1")
 	records, err := driver.ListAccounts(context.Background())
 	require.NoError(t, err)
 	require.Len(t, records, 4)
@@ -41,16 +50,16 @@ func TestApolloDriver(t *testing.T) {
 	assert.Equal(t, "alice@example.com", admin.Email)
 	assert.Equal(t, "Alice Admin", admin.FullName)
 	assert.Equal(t, []string{"Admin"}, admin.Roles)
-	assert.True(t, admin.IsAdmin)
+	assert.Equal(t, new(true), admin.IsAdmin)
 	assert.Equal(t, coredata.AccessReviewEntryAccountTypeUser, admin.AccountType)
 
 	rep := records[1]
 	assert.Equal(t, []string{"Sales Rep"}, rep.Roles)
-	assert.False(t, rep.IsAdmin)
+	assert.Equal(t, new(false), rep.IsAdmin)
 
 	manager := records[2]
 	assert.Equal(t, []string{"Billing and Seat Manager"}, manager.Roles)
-	assert.False(t, manager.IsAdmin)
+	assert.Equal(t, new(false), manager.IsAdmin)
 
 	// No name and no first/last: the display name falls back to the email.
 	noName := records[3]
@@ -61,10 +70,63 @@ func TestApolloDriver(t *testing.T) {
 func TestApolloIsAdmin(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, apolloIsAdmin("Admin"))
-	assert.True(t, apolloIsAdmin("admin"))
+	assert.Equal(t, new(true), apolloIsAdmin("Admin"))
+	assert.Equal(t, new(true), apolloIsAdmin("admin"))
 	// Exact match only: profiles that merely contain "admin" are not admins.
-	assert.False(t, apolloIsAdmin("Master Admin"))
-	assert.False(t, apolloIsAdmin("Billing Admin"))
-	assert.False(t, apolloIsAdmin("Sales Rep"))
+	assert.Equal(t, new(false), apolloIsAdmin("Master Admin"))
+	assert.Equal(t, new(false), apolloIsAdmin("Billing Admin"))
+	assert.Equal(t, new(false), apolloIsAdmin("Sales Rep"))
+	assert.Nil(t, apolloIsAdmin(""))
+}
+
+func TestApolloIsAdmin_UnreadableRoleIsUnknown(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{name: "absent"},
+		{name: "null", raw: json.RawMessage(`null`)},
+		{name: "unparseable", raw: json.RawMessage(`{`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(
+			tt.name,
+			func(t *testing.T) {
+				t.Parallel()
+
+				assert.Nil(t, apolloIsAdmin(apolloRole(tt.raw)))
+			},
+		)
+	}
+}
+
+func TestApolloDriver_StringPaginationFields(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "/users/search", r.URL.Path)
+
+			w.Header().Set("Content-Type", "application/json")
+
+			if r.URL.Query().Get("page") == "2" {
+				_, _ = w.Write([]byte(`{"users":[{"id":"u2","name":"Bob Rep","email":"bob@example.com","role":"Sales Rep"}],"pagination":{"page":"2","per_page":"100","total_entries":2,"total_pages":2}}`))
+
+				return
+			}
+
+			_, _ = w.Write([]byte(`{"users":[{"id":"u1","name":"Alice Admin","email":"alice@example.com","role":"Admin"}],"pagination":{"page":"1","per_page":"100","total_entries":2,"total_pages":2}}`))
+		}),
+	)
+	defer srv.Close()
+
+	records, err := NewApolloDriver(srv.Client(), srv.URL).ListAccounts(context.Background())
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+
+	assert.Equal(t, "alice@example.com", records[0].Email)
+	assert.Equal(t, "bob@example.com", records[1].Email)
 }

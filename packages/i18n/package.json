@@ -2,15 +2,21 @@
   "name": "@probo/i18n",
   "version": "1.0.0",
   "author": "",
-  "main": "./TranslatorProvider.tsx",
+  "main": "./index.ts",
   "devDependencies": {
-    "@types/react": "^19.2.17"
+    "@types/react": "^19.2.18",
+    "vitest": "^5.0.5"
   },
   "peerDependencies": {
     "react": "^19.0"
   },
   "description": "",
   "keywords": [],
-  "license": "ISC",
-  "scripts": {}
+  "license": "MIT",
+  "scripts": {
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@probo/helpers": "1.0.0"
+  }
 }

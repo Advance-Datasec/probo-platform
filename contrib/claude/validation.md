@@ -58,8 +58,9 @@ func (req *CreateThirdPartyRequest) Validate() error {
 
 ### Time
 - `After(refTime)` — time must be after reference
+- `AfterOrEqual(refTime)` — time must be the same as or after reference
 - `Before(refTime)` — time must be before reference
-- `RangeDuration(min, max)` — duration between min and max inclusive
+- `RangeDuration(min, max)` — TimeSpan between min and max inclusive (months compared as 30-day units)
 
 ## Pointer handling
 

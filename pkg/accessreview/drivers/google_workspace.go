@@ -1,34 +1,45 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
 	"go.probo.inc/probo/pkg/coredata"
 	admin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 )
 
 // GoogleWorkspaceDriver fetches user accounts from Google Workspace
 // using the Admin Directory API via an OAuth2-authenticated HTTP client.
+//
+// It carries no baseURL, unlike its sibling drivers: the Admin Directory
+// host comes from the generated SDK's basePath, not from a literal here, so
+// there is nothing for the registration's Endpoints.APIBase to inject. See
+// the comment on googleWorkspaceRegistration.
 type GoogleWorkspaceDriver struct {
 	httpClient *http.Client
 }
@@ -42,49 +53,6 @@ func NewGoogleWorkspaceDriver(httpClient *http.Client) *GoogleWorkspaceDriver {
 			},
 		},
 	}
-}
-
-// retryRoundTripper retries requests that receive 5xx or 429 responses
-// with exponential backoff.
-type retryRoundTripper struct {
-	next       http.RoundTripper
-	maxRetries int
-}
-
-func (rt *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	transport := rt.next
-	if transport == nil {
-		transport = http.DefaultTransport
-	}
-
-	var lastResp *http.Response
-
-	for attempt := range rt.maxRetries {
-		resp, err := transport.RoundTrip(req)
-		if err != nil {
-			return nil, err
-		}
-
-		if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500 {
-			return resp, nil
-		}
-
-		// Buffer and re-attach the body so the caller can still read it
-		// if this turns out to be the final (retry-exhausted) response.
-		body, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		resp.Body = io.NopCloser(bytes.NewReader(body))
-		lastResp = resp
-
-		backoff := time.Duration(250*(1<<attempt)) * time.Millisecond
-		select {
-		case <-req.Context().Done():
-			return nil, req.Context().Err()
-		case <-time.After(backoff):
-		}
-	}
-
-	return lastResp, nil
 }
 
 func (d *GoogleWorkspaceDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error) {
@@ -117,7 +85,7 @@ func (d *GoogleWorkspaceDriver) ListAccounts(ctx context.Context) ([]AccountReco
 				Email:       u.PrimaryEmail,
 				FullName:    u.Name.FullName,
 				Active:      new(!u.Suspended && !u.Archived),
-				IsAdmin:     u.IsAdmin,
+				IsAdmin:     new(u.IsAdmin),
 				ExternalID:  u.Id,
 				MFAStatus:   coredata.MFAStatusUnknown,
 				AuthMethod:  coredata.AccessReviewEntryAuthMethodSSO,
@@ -161,4 +129,32 @@ func (d *GoogleWorkspaceDriver) ListAccounts(ctx context.Context) ([]AccountReco
 	}
 
 	return nil, fmt.Errorf("cannot list all google workspace accounts: %w", ErrPaginationLimitReached)
+}
+
+// googleWorkspaceNameResolver resolves the Google Workspace primary domain.
+type googleWorkspaceNameResolver struct {
+	httpClient *http.Client
+}
+
+func NewGoogleWorkspaceNameResolver(httpClient *http.Client) NameResolver {
+	return &googleWorkspaceNameResolver{httpClient: httpClient}
+}
+
+func (r *googleWorkspaceNameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
+	adminService, err := admin.NewService(ctx, option.WithHTTPClient(r.httpClient))
+	if err != nil {
+		return "", fmt.Errorf("cannot create google admin service: %w", err)
+	}
+
+	customer, err := adminService.Customers.Get("my_customer").Context(ctx).Do()
+	if err != nil {
+		var gerr *googleapi.Error
+		if errors.As(err, &gerr) && gerr.Code == http.StatusForbidden {
+			return "", nil
+		}
+
+		return "", fmt.Errorf("cannot fetch google workspace customer: %w", err)
+	}
+
+	return customer.CustomerDomain, nil
 }

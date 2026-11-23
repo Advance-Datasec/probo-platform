@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package mcp_test
 
@@ -38,21 +44,70 @@ func TestMCP_Audit_CRUD(t *testing.T) {
 		} `json:"audit"`
 	}
 	mc.CallToolInto("addAudit", map[string]any{
-		"frameworkId": frameworkID,
-		"name":        factory.SafeName("Audit"),
+		"organization_id": orgID,
+		"framework_ids":   []string{frameworkID},
+		"name":            factory.SafeName("Audit"),
 	}, &addResult)
 	require.NotEmpty(t, addResult.Audit.ID)
 
 	// Get
 	var getResult struct {
 		Audit struct {
-			ID string `json:"id"`
+			ID           string   `json:"id"`
+			FrameworkIDs []string `json:"framework_ids"`
 		} `json:"audit"`
 	}
 	mc.CallToolInto("getAudit", map[string]any{
 		"id": addResult.Audit.ID,
 	}, &getResult)
 	assert.Equal(t, addResult.Audit.ID, getResult.Audit.ID)
+	assert.Equal(t, []string{frameworkID}, getResult.Audit.FrameworkIDs)
+
+	frameworkID2 := factory.CreateFramework(owner)
+
+	var linkResult struct {
+		Audit struct {
+			FrameworkIDs []string `json:"framework_ids"`
+		} `json:"audit"`
+		Framework struct {
+			ID string `json:"id"`
+		} `json:"framework"`
+	}
+	mc.CallToolInto("linkAuditFramework", map[string]any{
+		"audit_id":     addResult.Audit.ID,
+		"framework_id": frameworkID2,
+	}, &linkResult)
+	assert.Equal(t, frameworkID2, linkResult.Framework.ID)
+	assert.ElementsMatch(t, []string{frameworkID, frameworkID2}, linkResult.Audit.FrameworkIDs)
+
+	var unlinkResult struct {
+		DeletedAuditID     string `json:"deleted_audit_id"`
+		DeletedFrameworkID string `json:"deleted_framework_id"`
+	}
+	mc.CallToolInto("unlinkAuditFramework", map[string]any{
+		"audit_id":     addResult.Audit.ID,
+		"framework_id": frameworkID2,
+	}, &unlinkResult)
+	assert.Equal(t, addResult.Audit.ID, unlinkResult.DeletedAuditID)
+	assert.Equal(t, frameworkID2, unlinkResult.DeletedFrameworkID)
+
+	mc.CallToolInto("getAudit", map[string]any{
+		"id": addResult.Audit.ID,
+	}, &getResult)
+	assert.ElementsMatch(t, []string{frameworkID}, getResult.Audit.FrameworkIDs)
+
+	mc.CallToolInto("unlinkAuditFramework", map[string]any{
+		"audit_id":     addResult.Audit.ID,
+		"framework_id": frameworkID,
+	}, &unlinkResult)
+	assert.Equal(t, addResult.Audit.ID, unlinkResult.DeletedAuditID)
+	assert.Equal(t, frameworkID, unlinkResult.DeletedFrameworkID)
+
+	mc.CallToolInto("getAudit", map[string]any{
+		"id": addResult.Audit.ID,
+	}, &getResult)
+	assert.Equal(t, addResult.Audit.ID, getResult.Audit.ID)
+	assert.Empty(t, getResult.Audit.FrameworkIDs)
 
 	// Update
 	var updateResult struct {
@@ -74,13 +129,13 @@ func TestMCP_Audit_CRUD(t *testing.T) {
 		} `json:"audits"`
 	}
 	mc.CallToolInto("listAudits", map[string]any{
-		"organizationId": orgID,
+		"organization_id": orgID,
 	}, &listResult)
 	assert.NotEmpty(t, listResult.Audits)
 
 	// Delete
 	var deleteResult struct {
-		DeletedAuditID string `json:"deletedAuditId"`
+		DeletedAuditID string `json:"deleted_audit_id"`
 	}
 	mc.CallToolInto("deleteAudit", map[string]any{
 		"id": addResult.Audit.ID,
@@ -100,10 +155,10 @@ func TestMCP_AuditLog(t *testing.T) {
 	var listResult struct {
 		AuditLogEntries []struct {
 			ID string `json:"id"`
-		} `json:"auditLogEntries"`
+		} `json:"audit_log_entries"`
 	}
 	mc.CallToolInto("listAuditLogEntries", map[string]any{
-		"organizationId": orgID,
+		"organization_id": orgID,
 	}, &listResult)
 	assert.NotEmpty(t, listResult.AuditLogEntries)
 }

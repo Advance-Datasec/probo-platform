@@ -1,29 +1,39 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
+	"go.gearno.de/kit/log"
 	"go.probo.inc/probo/pkg/coredata"
 )
 
@@ -32,17 +42,29 @@ import (
 // HTTP client (Bearer token).
 type Microsoft365Driver struct {
 	httpClient *http.Client
+	logger     *log.Logger
+	baseURL    string
 }
 
 var _ Driver = (*Microsoft365Driver)(nil)
 
 const (
-	microsoft365GraphBaseURL = "https://graph.microsoft.com/v1.0"
-	microsoft365UsersSelect  = "id,userPrincipalName,mail,displayName,givenName,surname,accountEnabled,jobTitle,department,createdDateTime"
-	// microsoft365UserTypeMemberFilter restricts /users to internal members
-	// so guest (B2B) accounts are not pulled into access review.
+	// Microsoft Graph path elements joined onto the driver's base URL.
+	microsoft365UsersPath                   = "users"
+	microsoft365DirectoryRolesPath          = "directoryRoles"
+	microsoft365RoleMembersPath             = "members"
+	microsoft365GroupsPath                  = "groups"
+	microsoft365TransitiveMembersPath       = "transitiveMembers"
+	microsoft365ReportsPath                 = "reports"
+	microsoft365AuthenticationMethodsPath   = "authenticationMethods"
+	microsoft365UserRegistrationDetailsPath = "userRegistrationDetails"
+	microsoft365OrganizationPath            = "organization"
+
+	microsoft365UsersSelect          = "id,userPrincipalName,mail,displayName,givenName,surname,accountEnabled,jobTitle,department,createdDateTime"
 	microsoft365UserTypeMemberFilter = "userType eq 'Member'"
 	microsoft365UsersPageSize        = 999
+	microsoft365UserODataType        = "#microsoft.graph.user"
+	microsoft365GroupODataType       = "#microsoft.graph.group"
 	microsoft365MaxPaginationOK      = maxPaginationPages
 )
 
@@ -63,7 +85,9 @@ var adminRoleDisplayNames = map[string]bool{
 	"Authentication Administrator":            true,
 }
 
-func NewMicrosoft365Driver(httpClient *http.Client) *Microsoft365Driver {
+// NewMicrosoft365Driver builds a driver against baseURL, the versioned
+// Microsoft Graph origin (e.g. https://graph.microsoft.com/v1.0).
+func NewMicrosoft365Driver(httpClient *http.Client, logger *log.Logger, baseURL string) *Microsoft365Driver {
 	return &Microsoft365Driver{
 		httpClient: &http.Client{
 			Transport: &retryRoundTripper{
@@ -71,6 +95,8 @@ func NewMicrosoft365Driver(httpClient *http.Client) *Microsoft365Driver {
 				maxRetries: 3,
 			},
 		},
+		logger:  logger,
+		baseURL: baseURL,
 	}
 }
 
@@ -102,15 +128,25 @@ type microsoft365RolesPage struct {
 	NextLink string                      `json:"@odata.nextLink"`
 }
 
-type microsoft365RoleMember struct {
-	ID          string `json:"id"`
-	ODataType   string `json:"@odata.type"`
-	DisplayName string `json:"displayName"`
+type microsoft365DirectoryObject struct {
+	ID        string `json:"id"`
+	ODataType string `json:"@odata.type"`
 }
 
 type microsoft365MembersPage struct {
-	Value    []microsoft365RoleMember `json:"value"`
-	NextLink string                   `json:"@odata.nextLink"`
+	Value    []microsoft365DirectoryObject `json:"value"`
+	NextLink string                        `json:"@odata.nextLink"`
+}
+
+type microsoft365UserRegistrationDetails struct {
+	ID                string `json:"id"`
+	UserPrincipalName string `json:"userPrincipalName"`
+	IsMFARegistered   *bool  `json:"isMfaRegistered"`
+}
+
+type microsoft365UserRegistrationDetailsPage struct {
+	Value    []microsoft365UserRegistrationDetails `json:"value"`
+	NextLink string                                `json:"@odata.nextLink"`
 }
 
 func (d *Microsoft365Driver) ListAccounts(ctx context.Context) ([]AccountRecord, error) {
@@ -120,6 +156,7 @@ func (d *Microsoft365Driver) ListAccounts(ctx context.Context) ([]AccountRecord,
 	}
 
 	rolesByUser := make(map[string][]string)
+	usersByGroup := make(map[string][]string)
 
 	for _, role := range roles {
 		members, err := d.listRoleMembers(ctx, role.ID)
@@ -128,17 +165,52 @@ func (d *Microsoft365Driver) ListAccounts(ctx context.Context) ([]AccountRecord,
 		}
 
 		for _, m := range members {
-			if m.ODataType != "" && m.ODataType != "#microsoft.graph.user" {
+			userIDs := []string{m.ID}
+
+			switch m.ODataType {
+			case "", microsoft365UserODataType:
+			case microsoft365GroupODataType:
+				groupUserIDs, ok := usersByGroup[m.ID]
+				if !ok {
+					groupUserIDs, err = d.listGroupUserIDs(ctx, m.ID)
+					if err != nil {
+						return nil, fmt.Errorf("cannot list members of group %q in role %q: %w", m.ID, role.DisplayName, err)
+					}
+
+					usersByGroup[m.ID] = groupUserIDs
+				}
+
+				userIDs = groupUserIDs
+			default:
 				continue
 			}
 
-			rolesByUser[m.ID] = append(rolesByUser[m.ID], role.DisplayName)
+			for _, id := range userIDs {
+				if !slices.Contains(rolesByUser[id], role.DisplayName) {
+					rolesByUser[id] = append(rolesByUser[id], role.DisplayName)
+				}
+			}
 		}
 	}
 
 	users, err := d.listUsers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("cannot list users: %w", err)
+	}
+
+	// MFA registration details require AuditLog.Read.All. A failure here
+	// must not abort the account fetch — leave MFA unknown so the campaign
+	// can still proceed. Context cancel/deadline still fail the fetch so a
+	// timed-out source does not commit an incomplete result as success.
+	mfaStatuses, err := d.listMFAStatuses(ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("cannot list MFA statuses: %w", err)
+		}
+
+		d.logger.ErrorCtx(ctx, "cannot list microsoft 365 MFA statuses, reporting MFA unknown", log.Error(err))
+
+		mfaStatuses = map[string]coredata.MFAStatus{}
 	}
 
 	records := make([]AccountRecord, 0, len(users))
@@ -155,14 +227,6 @@ func (d *Microsoft365Driver) ListAccounts(ctx context.Context) ([]AccountRecord,
 		}
 
 		userRoles := rolesByUser[u.ID]
-		isAdmin := false
-
-		for _, r := range userRoles {
-			if adminRoleDisplayNames[r] {
-				isAdmin = true
-				break
-			}
-		}
 
 		roles := userRoles
 		if len(roles) == 0 {
@@ -176,8 +240,8 @@ func (d *Microsoft365Driver) ListAccounts(ctx context.Context) ([]AccountRecord,
 			Roles:       roles,
 			JobTitle:    u.JobTitle,
 			Active:      &active,
-			IsAdmin:     isAdmin,
-			MFAStatus:   coredata.MFAStatusUnknown,
+			IsAdmin:     microsoft365IsAdmin(userRoles),
+			MFAStatus:   microsoft365MFAStatus(u, mfaStatuses),
 			AuthMethod:  coredata.AccessReviewEntryAuthMethodSSO,
 			AccountType: coredata.AccessReviewEntryAccountTypeUser,
 			ExternalID:  u.ID,
@@ -195,8 +259,50 @@ func (d *Microsoft365Driver) ListAccounts(ctx context.Context) ([]AccountRecord,
 	return records, nil
 }
 
+// microsoft365IsAdmin leaves roles outside adminRoleDisplayNames unknown:
+// the allowlist is not an exhaustive map of privileged roles.
+func microsoft365IsAdmin(roles []string) *bool {
+	if len(roles) == 0 {
+		return new(false)
+	}
+
+	for _, r := range roles {
+		if adminRoleDisplayNames[r] {
+			return new(true)
+		}
+	}
+
+	return nil
+}
+
+func microsoft365MFAStatus(u microsoft365User, statuses map[string]coredata.MFAStatus) coredata.MFAStatus {
+	if status, ok := statuses[u.ID]; ok {
+		return status
+	}
+
+	if status, ok := statuses[strings.ToLower(u.UserPrincipalName)]; ok {
+		return status
+	}
+
+	return coredata.MFAStatusUnknown
+}
+
+func microsoft365RegistrationMFAStatus(
+	details microsoft365UserRegistrationDetails,
+) coredata.MFAStatus {
+	if details.IsMFARegistered == nil {
+		return coredata.MFAStatusUnknown
+	}
+
+	if *details.IsMFARegistered {
+		return coredata.MFAStatusEnabled
+	}
+
+	return coredata.MFAStatusDisabled
+}
+
 func (d *Microsoft365Driver) listUsers(ctx context.Context) ([]microsoft365User, error) {
-	pageURL, err := buildMicrosoft365UsersURL()
+	pageURL, err := buildMicrosoft365UsersURL(d.baseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -214,14 +320,24 @@ func (d *Microsoft365Driver) listUsers(ctx context.Context) ([]microsoft365User,
 			return all, nil
 		}
 
-		pageURL = page.NextLink
+		pageURL, err = d.nextPageURL(page.NextLink)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return nil, fmt.Errorf("cannot list all microsoft 365 users: %w", ErrPaginationLimitReached)
 }
 
-func buildMicrosoft365UsersURL() (string, error) {
-	endpoint, err := url.JoinPath(microsoft365GraphBaseURL, "users")
+// nextPageURL guards the @odata.nextLink Graph hands back: every Graph
+// collection the driver reads pages through an absolute URL, and the tenant's
+// bearer token rides along on each one.
+func (d *Microsoft365Driver) nextPageURL(next string) (string, error) {
+	return sameHostNextPageURL("microsoft 365", d.baseURL, next)
+}
+
+func buildMicrosoft365UsersURL(baseURL string) (string, error) {
+	endpoint, err := url.JoinPath(baseURL, microsoft365UsersPath)
 	if err != nil {
 		return "", fmt.Errorf("cannot build graph users URL: %w", err)
 	}
@@ -233,15 +349,72 @@ func buildMicrosoft365UsersURL() (string, error) {
 
 	q := u.Query()
 	q.Set("$select", microsoft365UsersSelect)
-	q.Set("$filter", microsoft365UserTypeMemberFilter)
 	q.Set("$top", strconv.Itoa(microsoft365UsersPageSize))
+	q.Set("$filter", microsoft365UserTypeMemberFilter)
 	u.RawQuery = q.Encode()
 
 	return u.String(), nil
 }
 
+func (d *Microsoft365Driver) listMFAStatuses(ctx context.Context) (map[string]coredata.MFAStatus, error) {
+	pageURL, err := buildMicrosoft365UserRegistrationDetailsURL(d.baseURL)
+	if err != nil {
+		return nil, err
+	}
+
+	statuses := make(map[string]coredata.MFAStatus)
+
+	for range microsoft365MaxPaginationOK {
+		var page microsoft365UserRegistrationDetailsPage
+		if err := d.fetchJSON(ctx, pageURL, &page); err != nil {
+			return nil, err
+		}
+
+		for _, details := range page.Value {
+			status := microsoft365RegistrationMFAStatus(details)
+			if details.ID != "" {
+				statuses[details.ID] = status
+			}
+
+			if details.UserPrincipalName != "" {
+				statuses[strings.ToLower(details.UserPrincipalName)] = status
+			}
+		}
+
+		if page.NextLink == "" {
+			return statuses, nil
+		}
+
+		pageURL, err = d.nextPageURL(page.NextLink)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return nil, fmt.Errorf("cannot list all microsoft 365 MFA statuses: %w", ErrPaginationLimitReached)
+}
+
+func buildMicrosoft365UserRegistrationDetailsURL(baseURL string) (string, error) {
+	endpoint, err := url.JoinPath(
+		baseURL,
+		microsoft365ReportsPath,
+		microsoft365AuthenticationMethodsPath,
+		microsoft365UserRegistrationDetailsPath,
+	)
+	if err != nil {
+		return "", fmt.Errorf("cannot build graph user registration details URL: %w", err)
+	}
+
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("cannot parse graph user registration details URL: %w", err)
+	}
+
+	return u.String(), nil
+}
+
 func (d *Microsoft365Driver) listDirectoryRoles(ctx context.Context) ([]microsoft365DirectoryRole, error) {
-	endpoint, err := url.JoinPath(microsoft365GraphBaseURL, "directoryRoles")
+	endpoint, err := url.JoinPath(d.baseURL, microsoft365DirectoryRolesPath)
 	if err != nil {
 		return nil, fmt.Errorf("cannot build graph directory roles URL: %w", err)
 	}
@@ -259,19 +432,55 @@ func (d *Microsoft365Driver) listDirectoryRoles(ctx context.Context) ([]microsof
 			return all, nil
 		}
 
-		endpoint = page.NextLink
+		endpoint, err = d.nextPageURL(page.NextLink)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return nil, fmt.Errorf("cannot list all microsoft 365 directory roles: %w", ErrPaginationLimitReached)
 }
 
-func (d *Microsoft365Driver) listRoleMembers(ctx context.Context, roleID string) ([]microsoft365RoleMember, error) {
-	endpoint, err := url.JoinPath(microsoft365GraphBaseURL, "directoryRoles", url.PathEscape(roleID), "members")
+func (d *Microsoft365Driver) listRoleMembers(ctx context.Context, roleID string) ([]microsoft365DirectoryObject, error) {
+	endpoint, err := url.JoinPath(d.baseURL, microsoft365DirectoryRolesPath, url.PathEscape(roleID), microsoft365RoleMembersPath)
 	if err != nil {
 		return nil, fmt.Errorf("cannot build graph role members URL: %w", err)
 	}
 
-	var all []microsoft365RoleMember
+	members, err := d.listMembers(ctx, endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("cannot list role members: %w", err)
+	}
+
+	return members, nil
+}
+
+// listGroupUserIDs returns the users of a role-assignable group so they
+// inherit the group's role.
+func (d *Microsoft365Driver) listGroupUserIDs(ctx context.Context, groupID string) ([]string, error) {
+	endpoint, err := url.JoinPath(d.baseURL, microsoft365GroupsPath, url.PathEscape(groupID), microsoft365TransitiveMembersPath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build graph group transitive members URL: %w", err)
+	}
+
+	members, err := d.listMembers(ctx, endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("cannot list group transitive members: %w", err)
+	}
+
+	var userIDs []string
+
+	for _, m := range members {
+		if m.ODataType == microsoft365UserODataType {
+			userIDs = append(userIDs, m.ID)
+		}
+	}
+
+	return userIDs, nil
+}
+
+func (d *Microsoft365Driver) listMembers(ctx context.Context, endpoint string) ([]microsoft365DirectoryObject, error) {
+	var all []microsoft365DirectoryObject
 
 	for range microsoft365MaxPaginationOK {
 		var page microsoft365MembersPage
@@ -284,10 +493,15 @@ func (d *Microsoft365Driver) listRoleMembers(ctx context.Context, roleID string)
 			return all, nil
 		}
 
-		endpoint = page.NextLink
+		next, err := d.nextPageURL(page.NextLink)
+		if err != nil {
+			return nil, err
+		}
+
+		endpoint = next
 	}
 
-	return nil, fmt.Errorf("cannot list all members of role %q: %w", roleID, ErrPaginationLimitReached)
+	return nil, fmt.Errorf("cannot list all members: %w", ErrPaginationLimitReached)
 }
 
 func (d *Microsoft365Driver) fetchJSON(ctx context.Context, url string, dst any) error {
@@ -315,4 +529,85 @@ func (d *Microsoft365Driver) fetchJSON(ctx context.Context, url string, dst any)
 	}
 
 	return nil
+}
+
+// microsoft365NameResolver resolves the Microsoft 365 tenant display name
+// via the Microsoft Graph organization endpoint.
+type microsoft365NameResolver struct {
+	httpClient *http.Client
+	baseURL    string
+}
+
+// NewMicrosoft365NameResolver resolves the tenant name against baseURL, the
+// versioned Microsoft Graph origin (e.g. https://graph.microsoft.com/v1.0).
+func NewMicrosoft365NameResolver(httpClient *http.Client, baseURL string) NameResolver {
+	return &microsoft365NameResolver{httpClient: httpClient, baseURL: baseURL}
+}
+
+func (r *microsoft365NameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
+	endpoint, err := url.JoinPath(r.baseURL, microsoft365OrganizationPath)
+	if err != nil {
+		return "", fmt.Errorf("cannot build microsoft 365 organization URL: %w", err)
+	}
+
+	msURL, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("cannot parse microsoft 365 organization URL: %w", err)
+	}
+
+	q := msURL.Query()
+	q.Set("$select", "displayName,verifiedDomains")
+	msURL.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, msURL.String(), nil)
+	if err != nil {
+		return "", fmt.Errorf("cannot create microsoft 365 organization request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	httpResp, err := r.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("cannot execute microsoft 365 organization request: %w", err)
+	}
+
+	defer func() { _ = httpResp.Body.Close() }()
+
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return "", nameStatusError("microsoft 365 organization", httpResp.StatusCode)
+	}
+
+	var resp struct {
+		Value []struct {
+			DisplayName     string `json:"displayName"`
+			VerifiedDomains []struct {
+				Name      string `json:"name"`
+				IsDefault bool   `json:"isDefault"`
+			} `json:"verifiedDomains"`
+		} `json:"value"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		return "", fmt.Errorf("cannot decode microsoft 365 organization response: %w", err)
+	}
+
+	if len(resp.Value) == 0 {
+		return "", nil
+	}
+
+	org := resp.Value[0]
+	if org.DisplayName != "" {
+		return org.DisplayName, nil
+	}
+
+	for _, d := range org.VerifiedDomains {
+		if d.IsDefault {
+			return d.Name, nil
+		}
+	}
+
+	if len(org.VerifiedDomains) > 0 {
+		return org.VerifiedDomains[0].Name, nil
+	}
+
+	return "", nil
 }

@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package connect_v1
 
@@ -26,9 +32,11 @@ import (
 	"go.gearno.de/kit/log"
 	"go.probo.inc/probo/pkg/baseurl"
 	"go.probo.inc/probo/pkg/bearertoken"
+	"go.probo.inc/probo/pkg/complianceportal/visitor"
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/iam"
 	"go.probo.inc/probo/pkg/iam/oauth2"
+	"go.probo.inc/probo/pkg/netx/httpx"
 	"go.probo.inc/probo/pkg/securecookie"
 	"go.probo.inc/probo/pkg/server/api/authn"
 	"go.probo.inc/probo/pkg/server/api/connect/v1/types"
@@ -96,29 +104,17 @@ func (h *OAuth2Handler) BearerTokenMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func (h *OAuth2Handler) endpoints() oauth2.Endpoints {
-	api := h.baseURL.String() + "/api/connect/v1"
-
-	return oauth2.Endpoints{
-		Authorization:       uri.URI(api + "/oauth2/authorize"),
-		Token:               uri.URI(api + "/oauth2/token"),
-		Userinfo:            uri.URI(api + "/oauth2/userinfo"),
-		JWKS:                uri.URI(api + "/oauth2/jwks"),
-		Registration:        uri.URI(api + "/oauth2/register"),
-		Introspection:       uri.URI(api + "/oauth2/introspect"),
-		Revocation:          uri.URI(api + "/oauth2/revoke"),
-		DeviceAuthorization: uri.URI(api + "/oauth2/device"),
-	}
-}
-
 // --- Handlers ---
 
 // DiscoveryHandler serves the OpenID Connect Discovery document.
 // GET /.well-known/openid-configuration
 func (h *OAuth2Handler) DiscoveryHandler(w http.ResponseWriter, r *http.Request) {
-	metadata := h.iam.OAuth2ServerMetadata(h.endpoints())
+	metadata := OAuth2ServerMetadata(
+		h.baseURL,
+		h.iam.OAuth2ScopeRegistry.RegisteredScopes(),
+	)
 
-	PublicCache(w, 1*time.Hour)
+	httpx.PublicCache(w, 1*time.Hour)
 	httpserver.RenderJSON(w, http.StatusOK, metadata)
 }
 
@@ -127,7 +123,7 @@ func (h *OAuth2Handler) DiscoveryHandler(w http.ResponseWriter, r *http.Request)
 func (h *OAuth2Handler) JWKSHandler(w http.ResponseWriter, r *http.Request) {
 	jwks := h.iam.OAuth2ServerService.JWKS()
 
-	PublicCache(w, 1*time.Hour)
+	httpx.PublicCache(w, 1*time.Hour)
 	httpserver.RenderJSON(w, http.StatusOK, jwks)
 }
 
@@ -136,20 +132,41 @@ func (h *OAuth2Handler) JWKSHandler(w http.ResponseWriter, r *http.Request) {
 func (h *OAuth2Handler) AuthorizeHandler(w http.ResponseWriter, r *http.Request) {
 	identity := authn.IdentityFromContext(r.Context())
 	if identity == nil {
-		continueURL := h.baseURL.WithPath("/api/connect/v1/oauth2/authorize").
-			WithQueryValues(r.URL.Query()).
-			MustString()
+		metadata := OAuth2ServerMetadata(
+			h.baseURL,
+			h.iam.OAuth2ScopeRegistry.RegisteredScopes(),
+		)
+
+		continueURL, err := oauth2.AuthorizationURLWithQuery(metadata.AuthorizationEndpoint, r.URL.Query())
+		if err != nil {
+			h.logger.ErrorCtx(r.Context(), "cannot build authorization continue URL", log.Error(err))
+			httpserver.RenderError(w, http.StatusInternalServerError, errors.New("internal server error"))
+
+			return
+		}
+
 		loginURL := h.baseURL.WithPath("/auth/login").
-			WithQuery("continue", continueURL).
-			MustString()
-		http.Redirect(w, r, loginURL, http.StatusFound)
+			WithQuery("continue", continueURL)
+
+		if source := r.URL.Query().Get(visitor.SignInSourceQueryKey); source == visitor.SignInSourceCompliancePortal {
+			loginURL = loginURL.WithQuery(visitor.SignInSourceQueryKey, source)
+		}
+
+		http.Redirect(w, r, loginURL.MustString(), http.StatusFound)
 
 		return
 	}
 
 	var in types.OAuth2AuthorizeInput
 	if err := in.DecodeQuery(r.URL.Query()); err != nil {
-		h.handleAuthorizeError(w, r, oauth2.NewError(oauth2.ErrInvalidRequest, oauth2.WithError(err)), "", "")
+		oauthErr := oauth2.NewError(oauth2.ErrInvalidRequest, oauth2.WithError(err))
+		if targetErr, ok := errors.AsType[*oauth2.OAuth2Error](err); ok &&
+			errors.Is(targetErr, oauth2.ErrInvalidTarget) {
+			oauthErr = targetErr
+		}
+
+		h.handleAuthorizeError(w, r, oauthErr, "", "")
+
 		return
 	}
 
@@ -160,7 +177,7 @@ func (h *OAuth2Handler) AuthorizeHandler(w http.ResponseWriter, r *http.Request)
 		authTime = session.CreatedAt
 	}
 
-	code, err := h.iam.OAuth2ServerService.Authorize(
+	code, redirectValidated, err := h.iam.OAuth2ServerService.Authorize(
 		r.Context(),
 		&oauth2.AuthorizeRequest{
 			IdentityID:          identity.ID,
@@ -168,6 +185,7 @@ func (h *OAuth2Handler) AuthorizeHandler(w http.ResponseWriter, r *http.Request)
 			ResponseType:        in.ResponseType,
 			ClientIDRaw:         in.ClientIDRaw,
 			RedirectURI:         in.RedirectURI,
+			Resources:           in.Resources,
 			Scopes:              in.Scopes,
 			CodeChallenge:       in.CodeChallenge,
 			CodeChallengeMethod: in.CodeChallengeMethod,
@@ -188,12 +206,16 @@ func (h *OAuth2Handler) AuthorizeHandler(w http.ResponseWriter, r *http.Request)
 
 	if err != nil {
 		oauthErr := toOAuth2Error(err)
-		h.handleAuthorizeError(w, r, oauthErr, in.RedirectURI, in.State)
+		if redirectValidated {
+			h.handleAuthorizeError(w, r, oauthErr, in.RedirectURI, in.State)
+		} else {
+			h.handleAuthorizeError(w, r, oauthErr, "", "")
+		}
 
 		return
 	}
 
-	redirectWithCode(w, r, in.RedirectURI, code, in.State)
+	redirectWithCode(w, r, in.RedirectURI, code, in.State, h.baseURL.String())
 }
 
 func (h *OAuth2Handler) TokenHandler(w http.ResponseWriter, r *http.Request) {
@@ -456,23 +478,36 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 
 	var in types.OAuth2AuthorizationCodeGrantInput
 	if err := in.DecodeForm(r); err != nil {
+		if errors.Is(err, oauth2.ErrInvalidTarget) {
+			h.renderOAuth2ErrorResponse(w, r, err)
+			return
+		}
+
 		h.renderOAuth2ErrorResponse(w, r, oauth2.NewError(oauth2.ErrInvalidGrant, oauth2.WithError(err)))
+
 		return
 	}
 
 	result, err := h.iam.OAuth2ServerService.ExchangeAuthorizationCode(
 		r.Context(),
-		client,
+		client.ID.String(),
 		in.Code,
 		in.RedirectURI,
+		in.Resources,
 		in.CodeVerifier,
 	)
 	if err != nil {
+		if errors.Is(err, oauth2.ErrInvalidTarget) {
+			h.renderOAuth2ErrorResponse(w, r, err)
+			return
+		}
+
 		h.renderOAuth2ErrorResponse(w, r, oauth2.NewError(oauth2.ErrInvalidGrant, oauth2.WithDescription("invalid or expired code")))
+
 		return
 	}
 
-	NoCache(w)
+	httpx.NoCache(w)
 	httpserver.RenderJSON(w, http.StatusOK, tokenResultToResponse(result))
 }
 
@@ -485,17 +520,34 @@ func (h *OAuth2Handler) handleRefreshTokenGrant(w http.ResponseWriter, r *http.R
 
 	var in types.OAuth2RefreshTokenGrantInput
 	if err := in.DecodeForm(r); err != nil {
+		if errors.Is(err, oauth2.ErrInvalidTarget) {
+			h.renderOAuth2ErrorResponse(w, r, err)
+			return
+		}
+
 		h.renderOAuth2ErrorResponse(w, r, oauth2.NewError(oauth2.ErrInvalidGrant, oauth2.WithError(err)))
+
 		return
 	}
 
-	result, err := h.iam.OAuth2ServerService.RefreshToken(r.Context(), client, in.RefreshToken)
+	result, err := h.iam.OAuth2ServerService.RefreshToken(
+		r.Context(),
+		client,
+		in.RefreshToken,
+		in.Resources,
+	)
 	if err != nil {
+		if errors.Is(err, oauth2.ErrInvalidTarget) {
+			h.renderOAuth2ErrorResponse(w, r, err)
+			return
+		}
+
 		h.renderOAuth2ErrorResponse(w, r, oauth2.NewError(oauth2.ErrInvalidGrant, oauth2.WithDescription("invalid or expired refresh token")))
+
 		return
 	}
 
-	NoCache(w)
+	httpx.NoCache(w)
 	httpserver.RenderJSON(w, http.StatusOK, tokenResultToResponse(result))
 }
 
@@ -516,7 +568,7 @@ func (h *OAuth2Handler) handleDeviceCodeGrant(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	NoCache(w)
+	httpx.NoCache(w)
 	httpserver.RenderJSON(w, http.StatusOK, tokenResultToResponse(result))
 }
 
@@ -531,10 +583,18 @@ func tokenResultToResponse(r *oauth2.TokenResult) *types.OAuth2TokenResponse {
 	}
 }
 
-func redirectWithCode(w http.ResponseWriter, r *http.Request, redirectURI, code, state string) {
+func redirectWithCode(
+	w http.ResponseWriter,
+	r *http.Request,
+	redirectURI string,
+	code string,
+	state string,
+	issuer string,
+) {
 	u, _ := url.Parse(redirectURI)
 	q := u.Query()
 	q.Set("code", code)
+	q.Set("iss", issuer)
 
 	if state != "" {
 		q.Set("state", state)

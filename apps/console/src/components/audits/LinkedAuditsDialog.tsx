@@ -1,25 +1,31 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { getAuditStateVariant } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   Badge,
   Button,
   Dialog,
   DialogContent,
   DialogFooter,
+  Field,
   IconMagnifyingGlass,
   IconPlusLarge,
   IconTrashCan,
@@ -27,10 +33,12 @@ import {
   Input,
   Spinner,
 } from "@probo/ui";
-import { type ReactNode, Suspense, useMemo, useState } from "react";
+import { type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useLazyLoadQuery, usePaginationFragment } from "react-relay";
 import { graphql } from "relay-runtime";
 
+import type { AuditFrameworkNames_audit$key } from "#/__generated__/core/AuditFrameworkNames_audit.graphql";
 import type {
   LinkedAuditsDialogFragment$data,
   LinkedAuditsDialogFragment$key,
@@ -39,6 +47,8 @@ import type { LinkedAuditsDialogQuery } from "#/__generated__/core/LinkedAuditsD
 import type { LinkedAuditsDialogQuery_fragment } from "#/__generated__/core/LinkedAuditsDialogQuery_fragment.graphql";
 import { useOrganizationId } from "#/hooks/useOrganizationId";
 import type { NodeOf } from "#/types";
+
+import { useAuditFrameworkNames } from "./AuditFrameworkNames";
 
 const auditsQuery = graphql`
   query LinkedAuditsDialogQuery($organizationId: ID!) {
@@ -73,10 +83,7 @@ const auditsFragment = graphql`
           id
           name
           state
-          framework {
-            id
-            name
-          }
+          ...AuditFrameworkNames_audit
         }
       }
     }
@@ -87,21 +94,22 @@ type Props = {
   children: ReactNode;
   disabled?: boolean;
   linkedAudits?: { id: string }[];
-  onLink: (auditId: string) => void;
-  onUnlink: (auditId: string) => void;
+  referenceIdRequired?: boolean;
+  onLink: (auditId: string, referenceId?: string) => void;
+  onUnlink?: (auditId: string) => void;
 };
 
 export function LinkedAuditsDialog({ children, ...props }: Props) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (
-    <Dialog trigger={children} title={__("Link audits")}>
+    <Dialog trigger={children} title={t("linkedAuditsDialog.title")}>
       <DialogContent>
         <Suspense fallback={<Spinner centered />}>
           <LinkedAuditsDialogContent {...props} />
         </Suspense>
       </DialogContent>
-      <DialogFooter exitLabel={__("Close")} />
+      <DialogFooter exitLabel={t("linkedAuditsDialog.actions.close")} />
     </Dialog>
   );
 }
@@ -116,8 +124,20 @@ function LinkedAuditsDialogContent(props: Omit<Props, "children">) {
       auditsFragment,
       query.organization as LinkedAuditsDialogFragment$key,
     );
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [search, setSearch] = useState("");
+  const [referenceId, setReferenceId] = useState("");
+  const [selectedAuditId, setSelectedAuditId] = useState<string | null>(null);
+  const [frameworkLabels, setFrameworkLabels] = useState<Record<string, string>>({});
+  const setFrameworkLabel = useCallback((auditId: string, label: string) => {
+    setFrameworkLabels((current) => {
+      if (current[auditId] === label) {
+        return current;
+      }
+
+      return { ...current, [auditId]: label };
+    });
+  }, []);
   const audits = useMemo(
     () => data.audits?.edges?.map(edge => edge.node) ?? [],
     [data.audits],
@@ -127,27 +147,132 @@ function LinkedAuditsDialogContent(props: Omit<Props, "children">) {
   }, [props.linkedAudits]);
 
   const filteredAudits = useMemo(() => {
-    return audits.filter(audit =>
-      (audit.name || "").toLowerCase().includes(search.toLowerCase()),
+    const normalizedSearch = search.toLowerCase();
+
+    return audits.filter((audit) => {
+      return (audit.name || "").toLowerCase().includes(normalizedSearch)
+        || (frameworkLabels[audit.id] || "")
+          .toLowerCase()
+          .includes(normalizedSearch);
+    });
+  }, [audits, frameworkLabels, search]);
+  const selectedAudit = audits.find(audit => audit.id === selectedAuditId);
+
+  function onSelectAudit(auditId: string) {
+    if (props.referenceIdRequired) {
+      setReferenceId("");
+      setSelectedAuditId(auditId);
+      return;
+    }
+
+    props.onLink(auditId);
+  }
+
+  function onLink() {
+    if (!selectedAudit) {
+      return;
+    }
+
+    props.onLink(selectedAudit.id, referenceId.trim());
+    setReferenceId("");
+    setSelectedAuditId(null);
+  }
+
+  if (selectedAudit && props.referenceIdRequired) {
+    return (
+      <div className="space-y-5 px-6 py-5">
+        <div className="hidden">
+          {audits.map(audit => (
+            <AuditFrameworkSearchIndex
+              key={audit.id}
+              audit={audit}
+              onLabel={setFrameworkLabel}
+            />
+          ))}
+        </div>
+        <div className="flex items-center gap-4 rounded-lg border border-border-low bg-subtle p-4">
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <div className="font-medium">
+              {frameworkLabels[selectedAudit.id] || selectedAudit.name}
+            </div>
+            {frameworkLabels[selectedAudit.id] && selectedAudit.name && (
+              <div className="text-sm text-txt-secondary">
+                {selectedAudit.name}
+              </div>
+            )}
+          </div>
+          <Badge color={getAuditStateVariant(selectedAudit.state)}>
+            {selectedAudit.state.replace(/_/g, " ")}
+          </Badge>
+        </div>
+        <Field
+          label={t("linkedAuditsDialog.referenceIdLabel")}
+          help={t("linkedAuditsDialog.referenceIdDescription")}
+          name="auditReference"
+        >
+          <Input
+            autoFocus
+            id="auditReference"
+            name="auditReference"
+            required
+            value={referenceId}
+            placeholder={t("linkedAuditsDialog.referenceIdPlaceholder")}
+            onValueChange={setReferenceId}
+          />
+        </Field>
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setReferenceId("");
+              setSelectedAuditId(null);
+            }}
+          >
+            {t("linkedAuditsDialog.actions.back")}
+          </Button>
+          <Button
+            disabled={props.disabled || !referenceId.trim()}
+            icon={IconPlusLarge}
+            onClick={onLink}
+          >
+            {t("linkedAuditsDialog.actions.confirmLink")}
+          </Button>
+        </div>
+      </div>
     );
-  }, [audits, search]);
+  }
 
   return (
     <>
       <div className="flex items-center gap-2 sticky top-0 relative py-4 bg-linear-to-b from-50% from-level-2 to-level-2/0 px-6">
         <Input
           icon={IconMagnifyingGlass}
-          placeholder={__("Search audits...")}
+          placeholder={t("linkedAuditsDialog.searchPlaceholder")}
           onValueChange={setSearch}
         />
       </div>
+      <div className="hidden">
+        {audits.map(audit => (
+          <AuditFrameworkSearchIndex
+            key={audit.id}
+            audit={audit}
+            onLabel={setFrameworkLabel}
+          />
+        ))}
+      </div>
       <div className="divide-y divide-border-low">
+        {filteredAudits.length === 0 && (
+          <div className="px-6 py-10 text-center text-sm text-txt-secondary">
+            {t("linkedAuditsDialog.empty")}
+          </div>
+        )}
         {filteredAudits.map(audit => (
           <AuditRow
             key={audit.id}
             audit={audit}
+            frameworkLabel={frameworkLabels[audit.id] ?? ""}
             linkedAudits={linkedIds}
-            onLink={props.onLink}
+            onLink={onSelectAudit}
             onUnlink={props.onUnlink}
             disabled={props.disabled}
           />
@@ -167,27 +292,47 @@ type Audit = NodeOf<LinkedAuditsDialogFragment$data["audits"]>;
 
 type RowProps = {
   audit: Audit;
+  frameworkLabel: string;
   linkedAudits: Set<string>;
   disabled?: boolean;
   onLink: (auditId: string) => void;
-  onUnlink: (auditId: string) => void;
+  onUnlink?: (auditId: string) => void;
 };
 
+function AuditFrameworkSearchIndex({
+  audit,
+  onLabel,
+}: {
+  audit: AuditFrameworkNames_audit$key & { id: string };
+  onLabel: (auditId: string, label: string) => void;
+}) {
+  const { label } = useAuditFrameworkNames(audit);
+
+  useEffect(() => {
+    onLabel(audit.id, label);
+  }, [audit.id, label, onLabel]);
+
+  return null;
+}
+
 function AuditRow(props: RowProps) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   const isLinked = props.linkedAudits.has(props.audit.id);
   const onClick = isLinked ? props.onUnlink : props.onLink;
   const IconComponent = isLinked ? IconTrashCan : IconPlusLarge;
+  const disabled = props.disabled || (isLinked && !props.onUnlink);
+  const frameworkLabel = props.frameworkLabel;
 
   return (
-    <button
-      className="py-4 flex items-center gap-4 hover:bg-subtle cursor-pointer px-6 w-full h-[100px]"
-      onClick={() => onClick(props.audit.id)}
+    <div
+      className="py-4 flex items-center gap-4 px-6 w-full h-[100px]"
     >
       <div className="flex flex-col items-start gap-1">
-        <div className="font-medium">{props.audit.framework?.name}</div>
-        {props.audit.name && (
+        <div className="font-medium">
+          {frameworkLabel || props.audit.name}
+        </div>
+        {frameworkLabel && props.audit.name && (
           <div className="text-sm text-txt-secondary">{props.audit.name}</div>
         )}
       </div>
@@ -195,17 +340,16 @@ function AuditRow(props: RowProps) {
         {props.audit.state.replace(/_/g, " ")}
       </Badge>
       <Button
-        disabled={props.disabled}
+        disabled={disabled}
         className="ml-auto"
         variant={isLinked ? "secondary" : "primary"}
-        asChild
+        icon={IconComponent}
+        onClick={() => onClick?.(props.audit.id)}
       >
-        <span>
-          <IconComponent size={16} />
-          {" "}
-          {isLinked ? __("Unlink") : __("Link")}
-        </span>
+        {isLinked
+          ? t("linkedAuditsDialog.actions.unlink")
+          : t("linkedAuditsDialog.actions.link")}
       </Button>
-    </button>
+    </div>
   );
 }

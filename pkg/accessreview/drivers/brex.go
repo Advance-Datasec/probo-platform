@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -19,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"go.probo.inc/probo/pkg/coredata"
@@ -28,6 +35,7 @@ import (
 // requests.
 type BrexDriver struct {
 	httpClient *http.Client
+	baseURL    string
 }
 
 var _ Driver = (*BrexDriver)(nil)
@@ -39,16 +47,17 @@ type brexUsersResponse struct {
 		LastName  string `json:"last_name"`
 		Email     string `json:"email"`
 		Status    string `json:"status"`
-		Role      string `json:"role"`
+		UserRole  string `json:"user_role"`
 	} `json:"items"`
 	NextCursor string `json:"next_cursor"`
 }
 
-const brexUsersEndpoint = "https://platform.brexapis.com/v2/users"
+const brexUsersPath = "/v2/users"
 
-func NewBrexDriver(httpClient *http.Client) *BrexDriver {
+func NewBrexDriver(httpClient *http.Client, baseURL string) *BrexDriver {
 	return &BrexDriver{
 		httpClient: httpClient,
+		baseURL:    baseURL,
 	}
 }
 
@@ -65,7 +74,7 @@ func (d *BrexDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error) 
 		}
 
 		for _, u := range resp.Items {
-			role := strings.TrimSpace(u.Role)
+			role := strings.TrimSpace(u.UserRole)
 
 			roles := []string{}
 			if role != "" {
@@ -77,7 +86,7 @@ func (d *BrexDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error) 
 				FullName:    u.FirstName + " " + u.LastName,
 				Roles:       roles,
 				Active:      new(u.Status == "ACTIVE"),
-				IsAdmin:     false,
+				IsAdmin:     brexIsAdmin(role),
 				ExternalID:  u.ID,
 				MFAStatus:   coredata.MFAStatusUnknown,
 				AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
@@ -100,8 +109,26 @@ func (d *BrexDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error) 
 	return nil, fmt.Errorf("cannot list all brex accounts: %w", ErrPaginationLimitReached)
 }
 
+// brexIsAdmin classifies only the user_role values observed on the wire: the
+// Team API spec does not document the field, so other roles stay unknown.
+func brexIsAdmin(role string) *bool {
+	switch role {
+	case "ACCOUNT_ADMIN":
+		return new(true)
+	case "EMPLOYEE", "BOOKKEEPER":
+		return new(false)
+	default:
+		return nil
+	}
+}
+
 func (d *BrexDriver) queryUsers(ctx context.Context, cursor *string) (*brexUsersResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, brexUsersEndpoint, nil)
+	endpoint, err := url.JoinPath(d.baseURL, brexUsersPath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build brex users URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create brex users request: %w", err)
 	}
@@ -134,4 +161,55 @@ func (d *BrexDriver) queryUsers(ctx context.Context, cursor *string) (*brexUsers
 	}
 
 	return &resp, nil
+}
+
+const brexCompanyPath = "/v2/company"
+
+// brexNameResolver resolves the Brex company name.
+type brexNameResolver struct {
+	httpClient *http.Client
+	baseURL    string
+}
+
+func NewBrexNameResolver(httpClient *http.Client, baseURL string) NameResolver {
+	return &brexNameResolver{httpClient: httpClient, baseURL: baseURL}
+}
+
+func (r *brexNameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
+	endpoint, err := url.JoinPath(r.baseURL, brexCompanyPath)
+	if err != nil {
+		return "", fmt.Errorf("cannot build brex company URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		endpoint,
+		nil,
+	)
+	if err != nil {
+		return "", fmt.Errorf("cannot create brex company request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	httpResp, err := r.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("cannot execute brex company request: %w", err)
+	}
+
+	defer func() { _ = httpResp.Body.Close() }()
+
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return "", nameStatusError("brex company", httpResp.StatusCode)
+	}
+
+	var resp struct {
+		LegalName string `json:"legal_name"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		return "", fmt.Errorf("cannot decode brex company response: %w", err)
+	}
+
+	return resp.LegalName, nil
 }

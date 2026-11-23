@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package slack
 
@@ -27,16 +33,33 @@ import (
 	"go.gearno.de/kit/log"
 )
 
+// Slack Web API methods, joined onto the API base the caller supplies. They
+// are paths rather than absolute URLs because the notification client talks to
+// the workspace the SLACK connector row was minted against: its access token
+// comes from that connector's Endpoints.Token, so a deployment that repoints
+// the Slack provider must move these calls with it, or a sandbox-issued token
+// would travel to the real slack.com.
 const (
-	slackAPIPostMessage      = "https://slack.com/api/chat.postMessage"
-	slackAPIUpdateMessage    = "https://slack.com/api/chat.update"
-	slackAPIConversationJoin = "https://slack.com/api/conversations.join"
-	slackWebhookHost         = "hooks.slack.com"
+	methodPostMessage      = "chat.postMessage"
+	methodUpdateMessage    = "chat.update"
+	methodConversationJoin = "conversations.join"
 )
+
+// slackWebhookHost is an inbound host CHECK, not an outbound endpoint.
+// UpdateInteractiveMessage posts to the response_url carried in the
+// interaction payload Slack sends us, so this is the guard that stops a forged
+// payload from making Probo POST to an attacker-chosen host. It is
+// deliberately NOT derived from the API base: Slack serves response URLs from
+// hooks.slack.com, a different host from the API's, and widening the check to
+// follow an endpoint override would trade an SSRF guard for configurability.
+const slackWebhookHost = "hooks.slack.com"
 
 type (
 	Client struct {
 		httpClient *http.Client
+		// apiBaseURL is the Slack Web API root (the SLACK registration's
+		// Endpoints.APIBase), scheme-ful and without a trailing slash.
+		apiBaseURL string
 	}
 
 	SlackResponse struct {
@@ -53,14 +76,35 @@ type (
 	}
 )
 
-func NewClient(logger *log.Logger) *Client {
+// NewClient returns a Slack Web API client rooted at apiBaseURL, which callers
+// take from the SLACK provider registration's Endpoints.APIBase rather than
+// pinning, so an endpoint override moves notifications along with the OAuth
+// handshake that mints the token they carry.
+func NewClient(apiBaseURL string, logger *log.Logger) *Client {
 	httpClientOpts := []httpclient.Option{
 		httpclient.WithLogger(logger),
+		// The base is deployment configuration now, not a compiled constant,
+		// and endpoint validation only requires absolute HTTPS — a host
+		// resolving into the private network would otherwise make this worker
+		// POST notification bodies and the workspace token to an internal
+		// service. Every connector client already dials with this guard.
+		httpclient.WithSSRFProtection(),
 	}
 
 	return &Client{
 		httpClient: httpclient.DefaultPooledClient(httpClientOpts...),
+		apiBaseURL: apiBaseURL,
 	}
+}
+
+// methodURL joins a Web API method onto the client's base.
+func (c *Client) methodURL(method string) (string, error) {
+	u, err := url.JoinPath(c.apiBaseURL, method)
+	if err != nil {
+		return "", fmt.Errorf("cannot build Slack %s URL: %w", method, err)
+	}
+
+	return u, nil
 }
 
 func (c *Client) CreateMessage(ctx context.Context, accessToken string, channelID string, body map[string]any) (*SlackResponse, error) {
@@ -75,7 +119,12 @@ func (c *Client) CreateMessage(ctx context.Context, accessToken string, channelI
 		return nil, fmt.Errorf("cannot marshal message: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, slackAPIPostMessage, &buf)
+	endpoint, err := c.methodURL(methodPostMessage)
+	if err != nil {
+		return nil, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &buf)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create request: %w", err)
 	}
@@ -184,7 +233,12 @@ func (c *Client) UpdateMessage(ctx context.Context, accessToken string, channelI
 		return fmt.Errorf("cannot marshal message: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, slackAPIUpdateMessage, &buf)
+	endpoint, err := c.methodURL(methodUpdateMessage)
+	if err != nil {
+		return err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &buf)
 	if err != nil {
 		return fmt.Errorf("cannot create request: %w", err)
 	}
@@ -230,7 +284,12 @@ func (c *Client) JoinChannel(ctx context.Context, accessToken string, channelID 
 		return fmt.Errorf("cannot marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, slackAPIConversationJoin, &buf)
+	endpoint, err := c.methodURL(methodConversationJoin)
+	if err != nil {
+		return err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &buf)
 	if err != nil {
 		return fmt.Errorf("cannot create request: %w", err)
 	}

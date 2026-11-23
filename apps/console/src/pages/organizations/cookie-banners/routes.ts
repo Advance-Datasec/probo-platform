@@ -1,30 +1,45 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { lazy } from "@probo/react-lazy";
 import type { AppRoute } from "@probo/routes";
-import { Fragment } from "react";
-import { redirect } from "react-router";
 
-import { LinkCardSkeleton } from "#/components/skeletons/LinkCardSkeleton";
 import { PageSkeleton } from "#/components/skeletons/PageSkeleton";
+
+import { CookieBannerConsentRecordsPageSkeleton } from "./configuration/consent-records/CookieBannerConsentRecordsPageSkeleton";
+import { CookieBannerConfigLayoutSkeleton } from "./configuration/CookieBannerConfigLayoutSkeleton";
+import { CookieBannerInstallPageSkeleton } from "./configuration/install/CookieBannerInstallPageSkeleton";
+import { CookieBannerOverviewPageSkeleton } from "./configuration/overview/CookieBannerOverviewPageSkeleton";
+import { CookieBannerResourcesPageSkeleton } from "./configuration/resources/CookieBannerResourcesPageSkeleton";
+import { CookieBannerScansPageSkeleton } from "./configuration/scans/CookieBannerScansPageSkeleton";
+import { CookieBannerSettingsPageSkeleton } from "./configuration/settings/CookieBannerSettingsPageSkeleton";
+import { CookieBannerTCFPageSkeleton } from "./configuration/tcf/CookieBannerTCFPageSkeleton";
+import { CookieBannerTrackersPageSkeleton } from "./configuration/trackers/CookieBannerTrackersPageSkeleton";
+import { NewTrackerPatternPageSkeleton } from "./configuration/trackers/NewTrackerPatternPageSkeleton";
+import { CookieBannerTranslationsPageSkeleton } from "./configuration/translations/CookieBannerTranslationsPageSkeleton";
 
 export const cookieBannerRoutes = [
   {
     path: "cookie-banners",
     Fallback: PageSkeleton,
-    Component: lazy(() => import("#/pages/organizations/cookie-banners/overview/CookieBannersOverviewPageLoader")),
+    Component: lazy(() => import("#/pages/organizations/cookie-banners/CookieBannersIndexPageLoader")),
   },
   {
     path: "cookie-banners/new",
@@ -33,46 +48,63 @@ export const cookieBannerRoutes = [
   },
   {
     path: "cookie-banners/:cookieBannerId",
-    Fallback: PageSkeleton,
+    Fallback: CookieBannerConfigLayoutSkeleton,
     Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/CookieBannerConfigLayoutLoader")),
     children: [
       {
-        path: "",
-        loader: () => {
-          // eslint-disable-next-line @typescript-eslint/only-throw-error
-          throw redirect("settings");
-        },
-        Component: Fragment,
+        index: true,
+        Fallback: CookieBannerOverviewPageSkeleton,
+        Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/overview/CookieBannerOverviewPageLoader")),
       },
       {
         path: "settings",
-        Fallback: LinkCardSkeleton,
+        Fallback: CookieBannerSettingsPageSkeleton,
         Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/settings/CookieBannerSettingsPageLoader")),
       },
       {
+        path: "install",
+        Fallback: CookieBannerInstallPageSkeleton,
+        Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/install/CookieBannerInstallPageLoader")),
+      },
+      {
         path: "translations",
-        Fallback: LinkCardSkeleton,
+        Fallback: CookieBannerTranslationsPageSkeleton,
         Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/translations/CookieBannerTranslationsPageLoader")),
       },
       {
-        path: "display",
-        Fallback: LinkCardSkeleton,
-        Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/display/CookieBannerDisplayPageLoader")),
-      },
-      {
-        path: "consent-records",
-        Fallback: LinkCardSkeleton,
-        Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/consent-records/CookieBannerConsentRecordsPageLoader")),
-      },
-      {
         path: "trackers",
-        Fallback: LinkCardSkeleton,
-        Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/trackers/CookieBannerTrackersPageLoader")),
+        children: [
+          {
+            index: true,
+            Fallback: CookieBannerTrackersPageSkeleton,
+            Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/trackers/CookieBannerTrackersPageLoader")),
+          },
+          {
+            path: "new",
+            Fallback: NewTrackerPatternPageSkeleton,
+            Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/trackers/NewTrackerPatternPageLoader")),
+          },
+        ],
       },
       {
         path: "resources",
-        Fallback: LinkCardSkeleton,
+        Fallback: CookieBannerResourcesPageSkeleton,
         Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/resources/CookieBannerResourcesPageLoader")),
+      },
+      {
+        path: "scans",
+        Fallback: CookieBannerScansPageSkeleton,
+        Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/scans/CookieBannerScansPageLoader")),
+      },
+      {
+        path: "trail",
+        Fallback: CookieBannerConsentRecordsPageSkeleton,
+        Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/consent-records/CookieBannerConsentRecordsPageLoader")),
+      },
+      {
+        path: "tcf",
+        Fallback: CookieBannerTCFPageSkeleton,
+        Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/tcf/CookieBannerTCFPageLoader")),
       },
     ],
   },
@@ -80,6 +112,11 @@ export const cookieBannerRoutes = [
     path: "cookie-banners/:cookieBannerId/consent-records/:consentRecordId",
     Fallback: PageSkeleton,
     Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/consent-records/CookieBannerConsentRecordPageLoader")),
+  },
+  {
+    path: "cookie-banners/:cookieBannerId/scans/:scanId",
+    Fallback: PageSkeleton,
+    Component: lazy(() => import("#/pages/organizations/cookie-banners/configuration/scans/CookieBannerScanPageLoader")),
   },
   {
     path: "cookie-banners/:cookieBannerId/trackers/:trackerPatternId",

@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -30,33 +36,31 @@ import (
 
 type (
 	AccessReviewEntry struct {
-		ID                           gid.GID                         `db:"id"`
-		OrganizationID               gid.GID                         `db:"organization_id"`
-		AccessReviewCampaignID       gid.GID                         `db:"access_review_campaign_id"`
-		AccessReviewCampaignSourceID gid.GID                         `db:"access_review_campaign_source_id"`
-		IdentityID                   *gid.GID                        `db:"identity_id"`
-		Email                        string                          `db:"email"`
-		FullName                     string                          `db:"full_name"`
-		Roles                        []string                        `db:"roles"`
-		JobTitle                     string                          `db:"job_title"`
-		IsAdmin                      bool                            `db:"is_admin"`
-		MFAStatus                    MFAStatus                       `db:"mfa_status"`
-		AuthMethod                   AccessReviewEntryAuthMethod     `db:"auth_method"`
-		AccountType                  AccessReviewEntryAccountType    `db:"account_type"`
-		Active                       *bool                           `db:"active"`
-		LastLogin                    *time.Time                      `db:"last_login"`
-		AccountCreatedAt             *time.Time                      `db:"account_created_at"`
-		ExternalID                   string                          `db:"external_id"`
-		AccountKey                   string                          `db:"account_key"`
-		IncrementalTag               AccessReviewEntryIncrementalTag `db:"incremental_tag"`
-		Flags                        []AccessReviewEntryFlag         `db:"flags"`
-		FlagReasons                  []string                        `db:"flag_reasons"`
-		Decision                     AccessReviewEntryDecision       `db:"decision"`
-		DecisionNote                 *string                         `db:"decision_note"`
-		DecidedBy                    *gid.GID                        `db:"decided_by"`
-		DecidedAt                    *time.Time                      `db:"decided_at"`
-		CreatedAt                    time.Time                       `db:"created_at"`
-		UpdatedAt                    time.Time                       `db:"updated_at"`
+		ID                           gid.GID                      `db:"id"`
+		OrganizationID               gid.GID                      `db:"organization_id"`
+		AccessReviewCampaignID       gid.GID                      `db:"access_review_campaign_id"`
+		AccessReviewCampaignSourceID gid.GID                      `db:"access_review_campaign_source_id"`
+		Email                        string                       `db:"email"`
+		FullName                     string                       `db:"full_name"`
+		Roles                        []string                     `db:"roles"`
+		JobTitle                     string                       `db:"job_title"`
+		IsAdmin                      *bool                        `db:"is_admin"`
+		MFAStatus                    MFAStatus                    `db:"mfa_status"`
+		AuthMethod                   AccessReviewEntryAuthMethod  `db:"auth_method"`
+		AccountType                  AccessReviewEntryAccountType `db:"account_type"`
+		Active                       *bool                        `db:"active"`
+		LastLogin                    *time.Time                   `db:"last_login"`
+		AccountCreatedAt             *time.Time                   `db:"account_created_at"`
+		ExternalID                   string                       `db:"external_id"`
+		AccountKey                   string                       `db:"account_key"`
+		Flags                        []AccessReviewEntryFlag      `db:"flags"`
+		FlagReasons                  []string                     `db:"flag_reasons"`
+		Decision                     AccessReviewEntryDecision    `db:"decision"`
+		DecisionNote                 *string                      `db:"decision_note"`
+		DecidedBy                    *gid.GID                     `db:"decided_by"`
+		DecidedAt                    *time.Time                   `db:"decided_at"`
+		CreatedAt                    time.Time                    `db:"created_at"`
+		UpdatedAt                    time.Time                    `db:"updated_at"`
 	}
 
 	AccessReviewEntries []*AccessReviewEntry
@@ -122,7 +126,6 @@ SELECT
     organization_id,
     access_review_campaign_id,
     access_review_campaign_source_id,
-    identity_id,
     email,
     full_name,
     roles,
@@ -136,7 +139,6 @@ SELECT
     account_created_at,
     external_id,
     account_key,
-    incremental_tag,
     flags,
     flag_reasons,
     decision,
@@ -176,112 +178,37 @@ LIMIT 1;
 	return nil
 }
 
-func (e *AccessReviewEntry) Insert(
+func AccessReviewCampaignIDsByEntryIDs(
 	ctx context.Context,
-	conn pg.Tx,
+	conn pg.Querier,
 	scope Scoper,
-) error {
+	entryIDs []gid.GID,
+) ([]gid.GID, error) {
 	q := `
-INSERT INTO
-    access_review_entries (
-        id,
-        tenant_id,
-        organization_id,
-        access_review_campaign_id,
-        access_review_campaign_source_id,
-        identity_id,
-        email,
-        full_name,
-        roles,
-        job_title,
-        is_admin,
-        mfa_status,
-        auth_method,
-        account_type,
-        active,
-        last_login,
-        account_created_at,
-        external_id,
-        account_key,
-        incremental_tag,
-        flags,
-        flag_reasons,
-        decision,
-        decision_note,
-        decided_by,
-        decided_at,
-        created_at,
-        updated_at
-    )
-VALUES (
-    @id,
-    @tenant_id,
-    @organization_id,
-    @access_review_campaign_id,
-    @access_review_campaign_source_id,
-    @identity_id,
-    @email,
-    @full_name,
-    COALESCE(@roles, '{}'::TEXT[]),
-    @job_title,
-    @is_admin,
-    @mfa_status,
-    @auth_method,
-    @account_type,
-    COALESCE(@active, TRUE),
-    @last_login,
-    @account_created_at,
-    @external_id,
-    @account_key,
-    @incremental_tag,
-    @flags,
-    @flag_reasons,
-    @decision,
-    @decision_note,
-    @decided_by,
-    @decided_at,
-    @created_at,
-    @updated_at
-);
+SELECT DISTINCT
+    access_review_campaign_id
+FROM
+    access_review_entries
+WHERE
+    %s
+    AND id = ANY(@ids::text[])
 `
+	q = fmt.Sprintf(q, scope.SQLFragment())
 
-	args := pgx.StrictNamedArgs{
-		"id":                               e.ID,
-		"tenant_id":                        scope.GetTenantID(),
-		"organization_id":                  e.OrganizationID,
-		"access_review_campaign_id":        e.AccessReviewCampaignID,
-		"access_review_campaign_source_id": e.AccessReviewCampaignSourceID,
-		"identity_id":                      e.IdentityID,
-		"email":                            e.Email,
-		"full_name":                        e.FullName,
-		"roles":                            e.Roles,
-		"job_title":                        e.JobTitle,
-		"is_admin":                         e.IsAdmin,
-		"mfa_status":                       e.MFAStatus,
-		"auth_method":                      e.AuthMethod,
-		"account_type":                     e.AccountType,
-		"active":                           e.Active,
-		"last_login":                       e.LastLogin,
-		"account_created_at":               e.AccountCreatedAt,
-		"external_id":                      e.ExternalID,
-		"account_key":                      e.AccountKey,
-		"incremental_tag":                  e.IncrementalTag,
-		"flags":                            e.Flags,
-		"flag_reasons":                     e.FlagReasons,
-		"decision":                         e.Decision,
-		"decision_note":                    e.DecisionNote,
-		"decided_by":                       e.DecidedBy,
-		"decided_at":                       e.DecidedAt,
-		"created_at":                       e.CreatedAt,
-		"updated_at":                       e.UpdatedAt,
-	}
+	args := pgx.StrictNamedArgs{"ids": entryIDs}
+	maps.Copy(args, scope.SQLArguments())
 
-	_, err := conn.Exec(ctx, q, args)
+	rows, err := conn.Query(ctx, q, args)
 	if err != nil {
-		return fmt.Errorf("cannot insert access_entry: %w", err)
+		return nil, fmt.Errorf("cannot query access_review_entries: %w", err)
 	}
 
-	return nil
+	campaignIDs, err := pgx.CollectRows(rows, pgx.RowTo[gid.GID])
+	if err != nil {
+		return nil, fmt.Errorf("cannot collect campaign ids: %w", err)
+	}
+
+	return campaignIDs, nil
 }
 
 func (e *AccessReviewEntry) Update(
@@ -343,7 +270,6 @@ SELECT
     organization_id,
     access_review_campaign_id,
     access_review_campaign_source_id,
-    identity_id,
     email,
     full_name,
     roles,
@@ -357,7 +283,6 @@ SELECT
     account_created_at,
     external_id,
     account_key,
-    incremental_tag,
     flags,
     flag_reasons,
     decision,
@@ -411,7 +336,6 @@ SELECT
     organization_id,
     access_review_campaign_id,
     access_review_campaign_source_id,
-    identity_id,
     email,
     full_name,
     roles,
@@ -425,7 +349,6 @@ SELECT
     account_created_at,
     external_id,
     account_key,
-    incremental_tag,
     flags,
     flag_reasons,
     decision,
@@ -525,25 +448,6 @@ WHERE
 	return count, nil
 }
 
-func (e *AccessReviewEntry) LoadOrganizationID(
-	ctx context.Context,
-	conn pg.Querier,
-	entryID gid.GID,
-) (gid.GID, error) {
-	q := `SELECT organization_id FROM access_review_entries WHERE id = $1 LIMIT 1;`
-
-	var organizationID gid.GID
-	if err := conn.QueryRow(ctx, q, entryID).Scan(&organizationID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return gid.GID{}, ErrResourceNotFound
-		}
-
-		return gid.GID{}, fmt.Errorf("cannot load organization id for access entry: %w", err)
-	}
-
-	return organizationID, nil
-}
-
 func (e *AccessReviewEntry) UpdateFlags(
 	ctx context.Context,
 	conn pg.Tx,
@@ -600,7 +504,6 @@ INSERT INTO access_review_entries (
     organization_id,
     access_review_campaign_id,
     access_review_campaign_source_id,
-    identity_id,
     email,
     full_name,
     roles,
@@ -614,7 +517,6 @@ INSERT INTO access_review_entries (
     account_created_at,
     external_id,
     account_key,
-    incremental_tag,
     flags,
     flag_reasons,
     decision,
@@ -629,7 +531,6 @@ INSERT INTO access_review_entries (
     @organization_id,
     @access_review_campaign_id,
     @access_review_campaign_source_id,
-    @identity_id,
     @email,
     @full_name,
     COALESCE(@roles, '{}'::TEXT[]),
@@ -643,7 +544,6 @@ INSERT INTO access_review_entries (
     @account_created_at,
     @external_id,
     @account_key,
-    @incremental_tag,
     @flags,
     @flag_reasons,
     @decision,
@@ -666,7 +566,6 @@ ON CONFLICT (access_review_campaign_source_id, account_key) DO UPDATE SET
     last_login         = EXCLUDED.last_login,
     account_created_at = EXCLUDED.account_created_at,
     external_id        = EXCLUDED.external_id,
-    incremental_tag    = EXCLUDED.incremental_tag,
     updated_at         = EXCLUDED.updated_at
 `
 
@@ -676,7 +575,6 @@ ON CONFLICT (access_review_campaign_source_id, account_key) DO UPDATE SET
 		"organization_id":                  e.OrganizationID,
 		"access_review_campaign_id":        e.AccessReviewCampaignID,
 		"access_review_campaign_source_id": e.AccessReviewCampaignSourceID,
-		"identity_id":                      e.IdentityID,
 		"email":                            e.Email,
 		"full_name":                        e.FullName,
 		"roles":                            e.Roles,
@@ -690,7 +588,6 @@ ON CONFLICT (access_review_campaign_source_id, account_key) DO UPDATE SET
 		"account_created_at":               e.AccountCreatedAt,
 		"external_id":                      e.ExternalID,
 		"account_key":                      e.AccountKey,
-		"incremental_tag":                  e.IncrementalTag,
 		"flags":                            e.Flags,
 		"flag_reasons":                     e.FlagReasons,
 		"decision":                         e.Decision,
@@ -706,128 +603,4 @@ ON CONFLICT (access_review_campaign_source_id, account_key) DO UPDATE SET
 	}
 
 	return nil
-}
-
-// BaselineAccountEntry holds minimal data from a previous campaign's entries
-// for incremental diffing.
-type BaselineAccountEntry struct {
-	AccountKey string
-	Email      string
-	FullName   string
-}
-
-func (entries *AccessReviewEntries) LoadBaselineBySourceID(
-	ctx context.Context,
-	conn pg.Querier,
-	scope Scoper,
-	campaignID gid.GID,
-	sourceID gid.GID,
-) ([]BaselineAccountEntry, error) {
-	q := fmt.Sprintf(`
-SELECT account_key, email, full_name
-FROM access_review_entries
-WHERE %s
-  AND access_review_campaign_source_id IN (
-    SELECT id
-    FROM access_review_campaign_sources
-    WHERE access_review_campaign_id = @campaign_id
-      AND access_review_source_id = @source_id
-  )
-`, scope.SQLFragment())
-
-	args := pgx.StrictNamedArgs{
-		"campaign_id": campaignID,
-		"source_id":   sourceID,
-	}
-	maps.Copy(args, scope.SQLArguments())
-
-	rows, err := conn.Query(ctx, q, args)
-	if err != nil {
-		return nil, fmt.Errorf("cannot load baseline entries: %w", err)
-	}
-	defer rows.Close()
-
-	var result []BaselineAccountEntry
-
-	for rows.Next() {
-		var entry BaselineAccountEntry
-		if err := rows.Scan(&entry.AccountKey, &entry.Email, &entry.FullName); err != nil {
-			return nil, fmt.Errorf("cannot scan baseline entry: %w", err)
-		}
-
-		result = append(result, entry)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("cannot iterate baseline entries: %w", err)
-	}
-
-	return result, nil
-}
-
-// LoadMembershipAccountsByOrganizationID loads IAM membership accounts for the
-// given organization.
-type MembershipAccount struct {
-	ID        gid.GID
-	Email     string
-	FullName  string
-	State     string
-	Role      string
-	CreatedAt time.Time
-}
-
-func LoadMembershipAccountsByOrganizationID(
-	ctx context.Context,
-	conn pg.Querier,
-	scope Scoper,
-	organizationID gid.GID,
-) ([]MembershipAccount, error) {
-	q := `
-SELECT
-    m.id,
-    i.email_address,
-    i.full_name,
-    m.state,
-    m.role,
-    m.created_at
-FROM
-    iam_memberships m
-JOIN
-    identities i ON i.id = m.identity_id
-WHERE
-    m.%s
-    AND m.organization_id = @organization_id
-    AND m.state = 'ACTIVE'
-ORDER BY
-    i.email_address ASC
-`
-	q = fmt.Sprintf(q, scope.SQLFragment())
-
-	args := pgx.StrictNamedArgs{
-		"organization_id": organizationID,
-	}
-	maps.Copy(args, scope.SQLArguments())
-
-	rows, err := conn.Query(ctx, q, args)
-	if err != nil {
-		return nil, fmt.Errorf("cannot query membership accounts: %w", err)
-	}
-	defer rows.Close()
-
-	var result []MembershipAccount
-
-	for rows.Next() {
-		var account MembershipAccount
-		if err := rows.Scan(&account.ID, &account.Email, &account.FullName, &account.State, &account.Role, &account.CreatedAt); err != nil {
-			return nil, fmt.Errorf("cannot scan membership account: %w", err)
-		}
-
-		result = append(result, account)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("cannot iterate membership accounts: %w", err)
-	}
-
-	return result, nil
 }

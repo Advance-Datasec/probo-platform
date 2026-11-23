@@ -1,0 +1,247 @@
+// Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+package coredata
+
+import (
+	"github.com/jackc/pgx/v5"
+
+	"go.probo.inc/probo/pkg/gid"
+)
+
+type (
+	InternalControlFilter struct {
+		query                  *string
+		state                  *InternalControlState
+		implementationStatus   *InternalControlImplementationStatus
+		category               *string
+		implementationStatuses []InternalControlImplementationStatus
+		ownerID                *gid.GID
+		needsAttention         *bool
+	}
+)
+
+func NewInternalControlFilter(
+	query *string,
+	state *InternalControlState,
+	implementationStatus *InternalControlImplementationStatus,
+	category *string,
+	implementationStatuses []InternalControlImplementationStatus,
+	ownerID *gid.GID,
+	needsAttention *bool,
+) *InternalControlFilter {
+	return &InternalControlFilter{
+		query:                  query,
+		state:                  state,
+		implementationStatus:   implementationStatus,
+		category:               category,
+		implementationStatuses: implementationStatuses,
+		ownerID:                ownerID,
+		needsAttention:         needsAttention,
+	}
+}
+
+func (f *InternalControlFilter) SQLArguments() pgx.StrictNamedArgs {
+	var ownerID *string
+	if f.ownerID != nil {
+		value := f.ownerID.String()
+		ownerID = &value
+	}
+
+	return pgx.StrictNamedArgs{
+		"query":                   f.query,
+		"state":                   f.state,
+		"implementation_status":   f.implementationStatus,
+		"category":                f.category,
+		"implementation_statuses": filterStrings(f.implementationStatuses),
+		"owner_profile_id":        ownerID,
+		"needs_attention":         f.needsAttention,
+		"not_implemented":         InternalControlImplementationStatusNotImplemented,
+	}
+}
+
+func (f *InternalControlFilter) SQLFragment() string {
+	return `
+(
+	CASE
+		WHEN to_tsvector('simple', COALESCE(@query::text, '')) <> ''::tsvector THEN
+			search_vector @@ (
+				SELECT to_tsquery('simple', string_agg(quote_literal(lexeme) || ':*', ' & '))
+				FROM unnest(to_tsvector('simple', @query::text)) AS lex(lexeme, positions)
+			)
+		ELSE TRUE
+	END
+)
+AND
+(
+	CASE
+		WHEN @state::mitigation_state IS NULL THEN
+			TRUE
+		ELSE
+			state = @state::mitigation_state
+		END
+)
+AND
+(
+	CASE
+		WHEN @implementation_status::internal_control_implementation_status IS NULL THEN
+			TRUE
+		ELSE
+			implementation_status = @implementation_status::internal_control_implementation_status
+	END
+)
+AND
+(
+	CASE
+		WHEN @category::text IS NULL OR @category::text = '' THEN
+			TRUE
+		ELSE
+			category = @category::text
+	END
+)
+AND
+(
+	CASE
+		WHEN @implementation_statuses::internal_control_implementation_status[] IS NULL THEN
+			TRUE
+		ELSE
+			implementation_status = ANY(@implementation_statuses::internal_control_implementation_status[])
+	END
+)
+AND
+(
+	CASE
+		WHEN @owner_profile_id::text IS NULL OR @owner_profile_id::text = '' THEN
+			TRUE
+		ELSE
+			owner_profile_id = @owner_profile_id::text
+	END
+)
+AND
+(
+	CASE
+		WHEN @needs_attention::boolean IS NOT TRUE THEN
+			TRUE
+		ELSE
+			implementation_status = @not_implemented::internal_control_implementation_status
+			OR (next_evidence_due IS NOT NULL AND next_evidence_due < NOW())
+			OR (next_test_due IS NOT NULL AND next_test_due < NOW())
+	END
+)
+	`
+}
+
+func (f *InternalControlFilter) EventSQLFragment() string {
+	return `
+(
+	CASE
+		WHEN to_tsvector('simple', COALESCE(@query::text, '')) <> ''::tsvector THEN
+			search_vector @@ (
+				SELECT to_tsquery('simple', string_agg(quote_literal(lexeme) || ':*', ' & '))
+				FROM unnest(to_tsvector('simple', @query::text)) AS lex(lexeme, positions)
+			)
+		ELSE TRUE
+	END
+)
+AND
+(
+	CASE
+		WHEN @state::mitigation_state IS NULL THEN
+			TRUE
+		ELSE
+			state = @state::mitigation_state::text
+		END
+)
+AND
+(
+	CASE
+		WHEN @implementation_status::internal_control_implementation_status IS NULL THEN
+			TRUE
+		ELSE
+			COALESCE(
+				implementation_status,
+				(
+					CASE state
+						WHEN 'IN_PROGRESS' THEN 'IN_PROGRESS'
+						WHEN 'IMPLEMENTED' THEN 'IMPLEMENTED'
+						ELSE 'NOT_IMPLEMENTED'
+					END
+				)::internal_control_implementation_status
+			) = @implementation_status::internal_control_implementation_status
+		END
+)
+AND
+(
+	CASE
+		WHEN @category::text IS NULL OR @category::text = '' THEN
+			TRUE
+		ELSE
+			category = @category::text
+	END
+)
+AND
+(
+	CASE
+		WHEN @implementation_statuses::internal_control_implementation_status[] IS NULL THEN
+			TRUE
+		ELSE
+			COALESCE(
+				implementation_status,
+				(
+					CASE state
+						WHEN 'IN_PROGRESS' THEN 'IN_PROGRESS'
+						WHEN 'IMPLEMENTED' THEN 'IMPLEMENTED'
+						ELSE 'NOT_IMPLEMENTED'
+					END
+				)::internal_control_implementation_status
+			) = ANY(@implementation_statuses::internal_control_implementation_status[])
+	END
+)
+AND
+(
+	CASE
+		WHEN @owner_profile_id::text IS NULL OR @owner_profile_id::text = '' THEN
+			TRUE
+		ELSE
+			owner_profile_id = @owner_profile_id::text
+	END
+)
+AND
+(
+	CASE
+		WHEN @needs_attention::boolean IS NOT TRUE THEN
+			TRUE
+		ELSE
+			COALESCE(
+				implementation_status,
+				(
+					CASE state
+						WHEN 'IN_PROGRESS' THEN 'IN_PROGRESS'
+						WHEN 'IMPLEMENTED' THEN 'IMPLEMENTED'
+						ELSE 'NOT_IMPLEMENTED'
+					END
+				)::internal_control_implementation_status
+			) = @not_implemented::internal_control_implementation_status
+			OR (next_evidence_due IS NOT NULL AND next_evidence_due < NOW())
+			OR (next_test_due IS NOT NULL AND next_test_due < NOW())
+	END
+)
+	`
+}

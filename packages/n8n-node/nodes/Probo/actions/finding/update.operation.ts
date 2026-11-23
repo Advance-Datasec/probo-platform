@@ -1,21 +1,34 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import type { INodeProperties, IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
 import { proboApiRequest } from '../../GenericFunctions';
+import { organizationLocator, personLocator, riskLocator } from '../../locators';
 
 export const description: INodeProperties[] = [
+	organizationLocator({
+		resource: ['finding'],
+		operation: ['update'],
+		required: false,
+		description: 'Organization to search in. Leave this empty when entering an ID.',
+	}),
 	{
 		displayName: 'Finding ID',
 		name: 'findingId',
@@ -78,13 +91,10 @@ export const description: INodeProperties[] = [
 				default: '',
 				description: 'The date the finding was identified (ISO 8601 format)',
 			},
-			{
-				displayName: 'Owner ID',
-				name: 'ownerId',
-				type: 'string',
-				default: '',
-				description: 'The ID of the person who owns this finding',
-			},
+			personLocator({
+				displayName: 'Owner',
+				required: false,
+			}),
 			{
 				displayName: 'Priority',
 				name: 'priority',
@@ -110,13 +120,9 @@ export const description: INodeProperties[] = [
 				default: '',
 				description: 'The priority of the finding',
 			},
-			{
-				displayName: 'Risk ID',
-				name: 'riskId',
-				type: 'string',
-				default: '',
-				description: 'The ID of the associated risk',
-			},
+			riskLocator({
+				required: false,
+			}),
 			{
 				displayName: 'Root Cause',
 				name: 'rootCause',
@@ -168,6 +174,13 @@ export const description: INodeProperties[] = [
 				default: '',
 				description: 'The status of the finding',
 			},
+			{
+				displayName: 'Title',
+				name: 'title',
+				type: 'string',
+				default: '',
+				description: 'The title of the finding',
+			},
 		],
 	},
 ];
@@ -178,6 +191,7 @@ export async function execute(
 ): Promise<INodeExecutionData> {
 	const findingId = this.getNodeParameter('findingId', itemIndex) as string;
 	const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {}) as {
+		title?: string;
 		description?: string;
 		source?: string;
 		identifiedOn?: string;
@@ -196,6 +210,7 @@ export async function execute(
 			updateFinding(input: $input) {
 				finding {
 					id
+					title
 					kind
 					description
 					source
@@ -214,16 +229,23 @@ export async function execute(
 	`;
 
 	const input: Record<string, unknown> = { id: findingId };
+	if (additionalFields.title) input.title = additionalFields.title;
 	if (additionalFields.description !== undefined) input.description = additionalFields.description === '' ? null : additionalFields.description;
 	if (additionalFields.source !== undefined) input.source = additionalFields.source === '' ? null : additionalFields.source;
 	if (additionalFields.identifiedOn !== undefined) input.identifiedOn = additionalFields.identifiedOn === '' ? null : additionalFields.identifiedOn;
 	if (additionalFields.rootCause !== undefined) input.rootCause = additionalFields.rootCause === '' ? null : additionalFields.rootCause;
 	if (additionalFields.correctiveAction !== undefined) input.correctiveAction = additionalFields.correctiveAction === '' ? null : additionalFields.correctiveAction;
-	if (additionalFields.ownerId !== undefined) input.ownerId = additionalFields.ownerId === '' ? null : additionalFields.ownerId;
+	if (additionalFields.ownerId !== undefined) {
+		const ownerId = this.getNodeParameter('additionalFields.ownerId', itemIndex, '', { extractValue: true }) as string;
+		input.ownerId = ownerId === '' ? null : ownerId;
+	}
 	if (additionalFields.dueDate !== undefined) input.dueDate = additionalFields.dueDate === '' ? null : additionalFields.dueDate;
 	if (additionalFields.status !== undefined) input.status = additionalFields.status;
 	if (additionalFields.priority !== undefined) input.priority = additionalFields.priority;
-	if (additionalFields.riskId !== undefined) input.riskId = additionalFields.riskId === '' ? null : additionalFields.riskId;
+	if (additionalFields.riskId !== undefined) {
+		const riskId = this.getNodeParameter('additionalFields.riskId', itemIndex, '', { extractValue: true }) as string;
+		input.riskId = riskId === '' ? null : riskId;
+	}
 	if (additionalFields.effectivenessCheck !== undefined) input.effectivenessCheck = additionalFields.effectivenessCheck === '' ? null : additionalFields.effectivenessCheck;
 
 	const responseData = await proboApiRequest.call(this, query, { input });

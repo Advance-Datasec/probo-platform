@@ -1,35 +1,32 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import type { INodeProperties, IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
+import { organizationLocator } from '../../locators';
 import { proboApiRequest } from '../../GenericFunctions';
 
 export const description: INodeProperties[] = [
-	{
-		displayName: 'Organization ID',
-		name: 'organizationId',
-		type: 'string',
-		displayOptions: {
-			show: {
-				resource: ['risk'],
-				operation: ['create'],
-			},
-		},
-		default: '',
-		description: 'The ID of the organization',
-		required: true,
-	},
+	organizationLocator({
+		resource: ['risk'],
+		operation: ['create'],
+	}),
 	{
 		displayName: 'Name',
 		name: 'name',
@@ -59,74 +56,6 @@ export const description: INodeProperties[] = [
 		required: true,
 	},
 	{
-		displayName: 'Treatment',
-		name: 'treatment',
-		type: 'options',
-		displayOptions: {
-			show: {
-				resource: ['risk'],
-				operation: ['create'],
-			},
-		},
-		options: [
-			{
-				name: 'Mitigated',
-				value: 'MITIGATED',
-			},
-			{
-				name: 'Accepted',
-				value: 'ACCEPTED',
-			},
-			{
-				name: 'Avoided',
-				value: 'AVOIDED',
-			},
-			{
-				name: 'Transferred',
-				value: 'TRANSFERRED',
-			},
-		],
-		default: 'MITIGATED',
-		description: 'The treatment strategy for the risk',
-		required: true,
-	},
-	{
-		displayName: 'Inherent Likelihood',
-		name: 'inherentLikelihood',
-		type: 'number',
-		displayOptions: {
-			show: {
-				resource: ['risk'],
-				operation: ['create'],
-			},
-		},
-		typeOptions: {
-			minValue: 1,
-			maxValue: 5,
-		},
-		default: 1,
-		description: 'The inherent likelihood of the risk (1-5)',
-		required: true,
-	},
-	{
-		displayName: 'Inherent Impact',
-		name: 'inherentImpact',
-		type: 'number',
-		displayOptions: {
-			show: {
-				resource: ['risk'],
-				operation: ['create'],
-			},
-		},
-		typeOptions: {
-			minValue: 1,
-			maxValue: 5,
-		},
-		default: 1,
-		description: 'The inherent impact of the risk (1-5)',
-		required: true,
-	},
-	{
 		displayName: 'Additional Fields',
 		name: 'additionalFields',
 		type: 'collection',
@@ -153,35 +82,6 @@ export const description: INodeProperties[] = [
 				default: '',
 				description: 'Additional notes about the risk',
 			},
-			{
-				displayName: 'Owner ID',
-				name: 'ownerId',
-				type: 'string',
-				default: '',
-				description: 'The ID of the person who owns this risk',
-			},
-			{
-				displayName: 'Residual Impact',
-				name: 'residualImpact',
-				type: 'number',
-				typeOptions: {
-					minValue: 1,
-					maxValue: 5,
-				},
-				default: 1,
-				description: 'The residual impact of the risk (1-5)',
-			},
-			{
-				displayName: 'Residual Likelihood',
-				name: 'residualLikelihood',
-				type: 'number',
-				typeOptions: {
-					minValue: 1,
-					maxValue: 5,
-				},
-				default: 1,
-				description: 'The residual likelihood of the risk (1-5)',
-			},
 		],
 	},
 ];
@@ -190,17 +90,11 @@ export async function execute(
 	this: IExecuteFunctions,
 	itemIndex: number,
 ): Promise<INodeExecutionData> {
-	const organizationId = this.getNodeParameter('organizationId', itemIndex) as string;
+	const organizationId = this.getNodeParameter('organizationId', itemIndex, '', { extractValue: true }) as string;
 	const name = this.getNodeParameter('name', itemIndex) as string;
 	const category = this.getNodeParameter('category', itemIndex) as string;
-	const treatment = this.getNodeParameter('treatment', itemIndex) as string;
-	const inherentLikelihood = this.getNodeParameter('inherentLikelihood', itemIndex) as number;
-	const inherentImpact = this.getNodeParameter('inherentImpact', itemIndex) as number;
 	const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {}) as {
 		description?: string;
-		ownerId?: string;
-		residualLikelihood?: number;
-		residualImpact?: number;
 		note?: string;
 	};
 
@@ -210,16 +104,10 @@ export async function execute(
 				riskEdge {
 					node {
 						id
+						referenceId
 						name
 						description
 						category
-						treatment
-						inherentLikelihood
-						inherentImpact
-						inherentRiskScore
-						residualLikelihood
-						residualImpact
-						residualRiskScore
 						note
 						createdAt
 						updatedAt
@@ -233,14 +121,8 @@ export async function execute(
 		organizationId,
 		name,
 		category,
-		treatment,
-		inherentLikelihood,
-		inherentImpact,
 	};
 	if (additionalFields.description) input.description = additionalFields.description;
-	if (additionalFields.ownerId) input.ownerId = additionalFields.ownerId;
-	if (additionalFields.residualLikelihood !== undefined) input.residualLikelihood = additionalFields.residualLikelihood;
-	if (additionalFields.residualImpact !== undefined) input.residualImpact = additionalFields.residualImpact;
 	if (additionalFields.note) input.note = additionalFields.note;
 
 	const responseData = await proboApiRequest.call(this, query, { input });

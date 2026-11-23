@@ -1,23 +1,31 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package types
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/gid"
@@ -48,10 +56,27 @@ func parseScopes(s string) (coredata.OAuth2Scopes, error) {
 	return scopes, nil
 }
 
+func parseResources(values url.Values) ([]string, error) {
+	resources := values["resource"]
+	if len(resources) == 0 {
+		return nil, nil
+	}
+
+	if slices.Contains(resources, "") {
+		return nil, oauth2.NewError(
+			oauth2.ErrInvalidTarget,
+			oauth2.WithDescription("resource must not be empty"),
+		)
+	}
+
+	return resources, nil
+}
+
 type (
 	OAuth2AuthorizeInput struct {
 		ClientIDRaw         string
 		RedirectURI         string
+		Resources           []string
 		State               string
 		ResponseType        coredata.OAuth2ResponseType
 		Scopes              coredata.OAuth2Scopes
@@ -80,6 +105,7 @@ type (
 		ClientSecret string
 		Code         string
 		RedirectURI  string
+		Resources    []string
 		CodeVerifier string
 	}
 
@@ -87,6 +113,7 @@ type (
 		ClientID     string
 		ClientSecret string
 		RefreshToken string
+		Resources    []string
 	}
 
 	OAuth2DeviceCodeGrantInput struct {
@@ -118,6 +145,7 @@ func (in *OAuth2AuthorizeInput) DecodeQuery(q url.Values) error {
 	}
 
 	in.RedirectURI = q.Get("redirect_uri")
+	in.Resources = q["resource"]
 	in.State = q.Get("state")
 	in.ResponseType = coredata.OAuth2ResponseType(q.Get("response_type"))
 	in.CodeChallenge = q.Get("code_challenge")
@@ -200,6 +228,13 @@ func (in *OAuth2AuthorizationCodeGrantInput) DecodeForm(r *http.Request) error {
 	in.ClientSecret = r.FormValue("client_secret")
 	in.Code = r.FormValue("code")
 	in.RedirectURI = r.FormValue("redirect_uri")
+
+	resources, err := parseResources(r.Form)
+	if err != nil {
+		return err
+	}
+
+	in.Resources = resources
 	in.CodeVerifier = r.FormValue("code_verifier")
 
 	if in.Code == "" {
@@ -218,6 +253,12 @@ func (in *OAuth2RefreshTokenGrantInput) DecodeForm(r *http.Request) error {
 	in.ClientSecret = r.FormValue("client_secret")
 	in.RefreshToken = r.FormValue("refresh_token")
 
+	resources, err := parseResources(r.Form)
+	if err != nil {
+		return err
+	}
+
+	in.Resources = resources
 	if in.RefreshToken == "" {
 		return fmt.Errorf("missing refresh_token")
 	}
@@ -260,6 +301,7 @@ type (
 		Scope     coredata.OAuth2Scopes `json:"scope,omitempty"`
 		ClientID  gid.GID               `json:"client_id,omitempty"`
 		Sub       gid.GID               `json:"sub,omitempty"`
+		Audiences []uri.URI             `json:"aud,omitempty"`
 		Exp       int64                 `json:"exp,omitempty"`
 		Iat       int64                 `json:"iat,omitempty"`
 		TokenType string                `json:"token_type,omitempty"`
@@ -283,7 +325,7 @@ type (
 		GrantTypes              []coredata.OAuth2GrantType                   `json:"grant_types"`
 		ResponseTypes           []coredata.OAuth2ResponseType                `json:"response_types"`
 		TokenEndpointAuthMethod coredata.OAuth2ClientTokenEndpointAuthMethod `json:"token_endpoint_auth_method"`
-		Scopes                  coredata.OAuth2Scopes                        `json:"scopes"`
+		Scopes                  coredata.OAuth2Scopes                        `json:"scope"`
 	}
 
 	OAuth2ErrorResponse struct {
@@ -291,6 +333,27 @@ type (
 		Description string `json:"error_description,omitempty"`
 	}
 )
+
+func (in *OAuth2RegisterInput) UnmarshalJSON(data []byte) error {
+	type plain OAuth2RegisterInput
+
+	decoded := struct {
+		*plain
+		Scope coredata.OAuth2Scopes `json:"scope"`
+	}{
+		plain: (*plain)(in),
+	}
+
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	if len(decoded.Scope) > 0 {
+		in.Scopes = decoded.Scope
+	}
+
+	return nil
+}
 
 func NewConsent(consent *coredata.OAuth2Consent) *Consent {
 	scopes := make([]string, len(consent.Scopes))
@@ -334,6 +397,7 @@ func ActiveIntrospectResponse(result *oauth2.IntrospectResult) *OAuth2Introspect
 		Scope:     result.Scopes,
 		ClientID:  result.ClientID,
 		Sub:       result.IdentityID,
+		Audiences: result.Resources,
 		Exp:       result.ExpiresAt.Unix(),
 		Iat:       result.IssuedAt.Unix(),
 		TokenType: result.TokenType,

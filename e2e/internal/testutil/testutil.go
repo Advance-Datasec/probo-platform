@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package testutil
 
@@ -19,6 +25,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -29,11 +36,18 @@ import (
 
 	"go.gearno.de/kit/log"
 	"go.probo.inc/probo/pkg/bootstrap"
+	"go.probo.inc/probo/pkg/crypto/keys"
+	"go.probo.inc/probo/pkg/crypto/pem"
 )
 
 var (
 	testEnv   *TestEnv
 	setupOnce sync.Once
+
+	// Every probod started by this test binary shares one database and so one
+	// certificate queue. A row claimed by one process is polled by another,
+	// and the CA rejects an order requested by a different account with 401.
+	acmeAccountKey = sync.OnceValues(generateACMEAccountKey)
 )
 
 type TestEnv struct {
@@ -43,6 +57,21 @@ type TestEnv struct {
 	done           chan error
 	outputBuf      *bytes.Buffer
 	outputWriter   *switchableWriter
+}
+
+// configOptions tunes the generated probod config. Zero values keep the
+// default shared e2e suite settings.
+type configOptions struct {
+	DisableSignup bool
+	// UseBuiltInRateLimit keeps the built-in 10/60 budget. The shared suite
+	// raises the global default because every test comes from one client address.
+	UseBuiltInRateLimit bool
+	APIAddr             string
+	BaseURL             string
+	MetricsAddr         string
+	TrustHTTPAddr       string
+	TrustHTTPSAddr      string
+	EnableOIDC          bool
 }
 
 type switchableWriter struct {
@@ -82,7 +111,15 @@ func Setup() {
 			}
 		}
 
-		configPath, err := generateConfig()
+		opts := configOptions{
+			APIAddr:        os.Getenv("PROBO_E2E_API_ADDR"),
+			BaseURL:        os.Getenv("PROBO_E2E_BASE_URL"),
+			MetricsAddr:    os.Getenv("PROBO_E2E_METRICS_ADDR"),
+			TrustHTTPAddr:  os.Getenv("PROBO_E2E_TRUST_HTTP_ADDR"),
+			TrustHTTPSAddr: os.Getenv("PROBO_E2E_TRUST_HTTPS_ADDR"),
+		}
+
+		configPath, err := generateConfig(opts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "e2etest: cannot generate config: %v\n", err)
 			os.Exit(1)
@@ -125,20 +162,29 @@ func Setup() {
 			testEnv.done <- err
 		}()
 
-		testEnv.BaseURL = "http://localhost:18080"
+		testEnv.BaseURL = opts.BaseURL
+		if testEnv.BaseURL == "" {
+			apiAddr := opts.APIAddr
+			if apiAddr == "" {
+				apiAddr = "localhost:18080"
+			}
+
+			testEnv.BaseURL = "http://" + apiAddr
+		}
+
 		testEnv.MailpitBaseURL = "http://localhost:8025"
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		if err := waitForServer(ctx, testEnv.BaseURL+"/api/console/v1/graphql", 30*time.Second); err != nil {
+		if err := waitForServer(ctx, testEnv.done, testEnv.BaseURL+"/api/console/v1/graphql", 30*time.Second); err != nil {
 			testEnv.dumpOutputOnFailure("API server failed to start", err)
 			_ = testEnv.cmd.Process.Kill()
 
 			os.Exit(1)
 		}
 
-		if err := waitForServer(ctx, testEnv.MailpitBaseURL+"/api/v1/messages", 30*time.Second); err != nil {
+		if err := waitForServer(ctx, testEnv.done, testEnv.MailpitBaseURL+"/api/v1/messages", 30*time.Second); err != nil {
 			testEnv.dumpOutputOnFailure("MailPit server failed to start", err)
 			_ = testEnv.cmd.Process.Kill()
 
@@ -180,7 +226,7 @@ func (e *TestEnv) dumpOutputOnFailure(context string, err error) {
 	}
 }
 
-func waitForServer(ctx context.Context, url string, timeout time.Duration) error {
+func waitForServer(ctx context.Context, done chan error, url string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	client := &http.Client{Timeout: 2 * time.Second}
 
@@ -188,8 +234,8 @@ func waitForServer(ctx context.Context, url string, timeout time.Duration) error
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case err := <-testEnv.done:
-			testEnv.done <- err
+		case err := <-done:
+			done <- err
 			return fmt.Errorf("process exited before becoming ready: %v", err)
 		default:
 		}
@@ -220,10 +266,16 @@ func Teardown() {
 		_ = testEnv.cmd.Process.Signal(syscall.SIGTERM)
 
 		select {
-		case <-testEnv.done:
+		case err := <-testEnv.done:
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "e2etest: probod exit: %v\n", err)
+			}
 		case <-time.After(10 * time.Second):
 			_ = testEnv.cmd.Process.Kill()
-			<-testEnv.done
+
+			if err := <-testEnv.done; err != nil {
+				fmt.Fprintf(os.Stderr, "e2etest: probod exit: %v\n", err)
+			}
 		}
 	}
 }
@@ -248,10 +300,50 @@ func GetMailpitBaseURL() string {
 // bootstrap package (which auto-generates SAML credentials) and
 // writes it to a temp file. A fresh OAuth2 signing key is minted
 // here and injected via env. Returns the path.
-func generateConfig() (string, error) {
+func generateConfig(opts configOptions) (string, error) {
 	oauth2SigningKey, err := bootstrap.GenerateOAuth2SigningKey()
 	if err != nil {
 		return "", fmt.Errorf("generate oauth2 signing key: %w", err)
+	}
+
+	acmeKey, err := acmeAccountKey()
+	if err != nil {
+		return "", fmt.Errorf("generate acme account key: %w", err)
+	}
+
+	identityFederationSigningKey, err := bootstrap.GenerateOAuth2SigningKey()
+	if err != nil {
+		return "", fmt.Errorf("generate identity federation signing key: %w", err)
+	}
+
+	apiAddr := opts.APIAddr
+	if apiAddr == "" {
+		apiAddr = "localhost:18080"
+	}
+
+	baseURL := opts.BaseURL
+	if baseURL == "" {
+		baseURL = "http://" + apiAddr
+	}
+
+	metricsAddr := opts.MetricsAddr
+	if metricsAddr == "" {
+		metricsAddr = "localhost:19081"
+	}
+
+	trustHTTPAddr := opts.TrustHTTPAddr
+	if trustHTTPAddr == "" {
+		trustHTTPAddr = ":10080"
+	}
+
+	trustHTTPSAddr := opts.TrustHTTPSAddr
+	if trustHTTPSAddr == "" {
+		trustHTTPSAddr = ":8443"
+	}
+
+	disableSignup := "false"
+	if opts.DisableSignup {
+		disableSignup = "true"
 	}
 
 	env := map[string]string{
@@ -261,25 +353,31 @@ func generateConfig() (string, error) {
 		"PROBOD_AUTH_PASSWORD_PEPPER":      "this-is-a-secure-pepper-for-password-hashing-at-least-32-bytes",
 		"PROBOD_OAUTH2_SERVER_SIGNING_KEY": oauth2SigningKey,
 
+		// Identity federation issuer. No issuer base URL is set, so the issuer is derived
+		// as {base-url}/federation.
+		"PROBOD_IDENTITY_FEDERATION_ENABLED":     "true",
+		"PROBOD_IDENTITY_FEDERATION_SIGNING_KEY": identityFederationSigningKey,
+
 		// Unit.
-		"PROBOD_METRICS_ADDR": "localhost:19081",
+		"PROBOD_METRICS_ADDR": metricsAddr,
 		"PROBOD_TRACING_ADDR": "localhost:14317",
 
 		// Probod base.
-		"PROBOD_BASE_URL": "http://localhost:18080",
+		"PROBOD_BASE_URL": baseURL,
 
 		// API.
-		"PROBOD_API_ADDR":                 "localhost:18080",
-		"PROBOD_API_CORS_ALLOWED_ORIGINS": "http://localhost:18080",
+		"PROBOD_API_ADDR":                 apiAddr,
+		"PROBOD_API_CORS_ALLOWED_ORIGINS": baseURL,
 
 		// PG.
 		"PROBOD_PG_DATABASE":      "probod_test",
-		"PROBOD_PG_POOL_SIZE":     "10",
-		"PROBOD_PG_MIN_POOL_SIZE": "1",
+		"PROBOD_PG_POOL_SIZE":     "20",
+		"PROBOD_PG_MIN_POOL_SIZE": "2",
 
 		// Auth.
 		"PROBOD_AUTH_COOKIE_SECURE":       "false",
 		"PROBOD_AUTH_PASSWORD_ITERATIONS": "600000",
+		"PROBOD_AUTH_DISABLE_SIGNUP":      disableSignup,
 
 		// OAuth2 server durations kept small for faster e2e flows.
 		"PROBOD_OAUTH2_SERVER_ACCESS_TOKEN_DURATION":       "10",
@@ -287,9 +385,36 @@ func generateConfig() (string, error) {
 		"PROBOD_OAUTH2_SERVER_AUTHORIZATION_CODE_DURATION": "5",
 		"PROBOD_OAUTH2_SERVER_DEVICE_CODE_DURATION":        "15",
 
-		// Trust center.
-		"PROBOD_TRUST_CENTER_HTTP_ADDR":  ":10080",
-		"PROBOD_TRUST_CENTER_HTTPS_ADDR": ":10443",
+		// Connector catalog. No test completes this external OAuth flow, but
+		// one deterministic configured protocol lets catalog tests assert the
+		// configuredProtocols migration rather than ambient deployment state.
+		"PROBOD_CONNECTOR_GITHUB_CLIENT_ID":           "e2e-github-client-id",
+		"PROBOD_CONNECTOR_GITHUB_CLIENT_SECRET":       "e2e-github-client-secret",
+		"PROBOD_CONNECTOR_LINEAR_CLIENT_ID":           "e2e-linear-client-id",
+		"PROBOD_CONNECTOR_LINEAR_CLIENT_SECRET":       "e2e-linear-client-secret",
+		"PROBOD_CONNECTOR_LINEAR_SYNC_CLIENT_ID":      "e2e-linear-sync-client-id",
+		"PROBOD_CONNECTOR_LINEAR_SYNC_CLIENT_SECRET":  "e2e-linear-sync-client-secret",
+		"PROBOD_CONNECTOR_LINEAR_SYNC_WEBHOOK_SECRET": "e2e-linear-webhook-secret",
+
+		// Crisp is the only app-install provider, and it stays out of the
+		// catalog entirely until BOTH of these are set. Configuring it here is
+		// what lets the catalog test assert installSupported rather than
+		// asserting that an unconfigured provider is absent.
+		"PROBOD_CONNECTOR_CRISP_PLUGIN_TOKEN": "e2e-plugin-identifier:e2e-plugin-key",
+		"PROBOD_CONNECTOR_CRISP_PLUGIN_ID":    "e2e-crisp-plugin-id",
+
+		// Trust center. Compliance pages are served exclusively over this
+		// dedicated listener, addressed by Host/SNI. The managed base domain
+		// yields {slug}.probopage.localhost subdomains for pages without a
+		// customer custom domain.
+		"PROBOD_TRUST_CENTER_HTTP_ADDR":   trustHTTPAddr,
+		"PROBOD_TRUST_CENTER_HTTPS_ADDR":  trustHTTPSAddr,
+		"PROBOD_TRUST_CENTER_BASE_DOMAIN": "probopage.localhost",
+		"PROBOD_TRUST_CENTER_TLS_MODE":    "direct",
+
+		// Keep certificate provisioning snappy so trust-center e2e flows do not
+		// wait on the default 30s poll (step-ca validates HTTP-01 via port 80).
+		"PROBOD_CUSTOM_DOMAINS_PROVISION_INTERVAL": "1",
 
 		// AWS / S3 (SeaweedFS).
 		"PROBOD_AWS_BUCKET":            "probod-test",
@@ -302,13 +427,42 @@ func generateConfig() (string, error) {
 		"PROBOD_MAILER_SENDER_EMAIL": "no-reply@test.getprobo.com",
 		"PROBOD_MAILER_INTERVAL":     "1",
 
+		// Drain webhook data promptly so event-persistence assertions do not
+		// queue behind the rest of the parallel E2E suite.
+		"PROBOD_WEBHOOK_SENDER_INTERVAL": "1",
+
+		// Clone due recurring tasks promptly so e2e does not wait on the
+		// 5 minute default.
+		"PROBOD_TASK_RECURRENCE_INTERVAL": "1",
+
 		// LLM.
 		"PROBOD_OPENAI_API_KEY": "thisisnotasecret",
 
 		// Custom domains.
 		"PROBOD_CUSTOM_DOMAINS_CNAME_TARGET": "custom.test.getprobo.com",
-		"PROBOD_ACME_DIRECTORY":              "https://localhost:14000/dir",
+		"PROBOD_ACME_DIRECTORY":              "https://localhost:9000/acme/acme/directory",
 		"PROBOD_ACME_EMAIL":                  "admin@test.getprobo.com",
+		"PROBOD_ACME_ACCOUNT_KEY":            acmeKey,
+	}
+
+	// Parallel tests share one client address, so the built-in window would
+	// reject ordinary sign-ups. The limit is the largest integer the YAML
+	// config can store: a bigger value is rounded past MaxInt and rejected.
+	// The window is the largest second count that fits in a time.Duration.
+	// A caller opts into 10/60 instead.
+	if !opts.UseBuiltInRateLimit {
+		env["PROBOD_API_GRAPHQL_RATE_LIMIT"] = fmt.Sprintf(
+			`{"default":{"limit":%d,"window":%d}}`,
+			1<<53-1,
+			math.MaxInt64/int64(time.Second),
+		)
+	}
+
+	if opts.EnableOIDC {
+		env["PROBOD_AUTH_GOOGLE_CLIENT_ID"] = "e2e-google-client-id"
+		env["PROBOD_AUTH_GOOGLE_CLIENT_SECRET"] = "e2e-google-client-secret"
+		env["PROBOD_AUTH_MICROSOFT_CLIENT_ID"] = "e2e-microsoft-client-id"
+		env["PROBOD_AUTH_MICROSOFT_CLIENT_SECRET"] = "e2e-microsoft-client-secret"
 	}
 
 	builder := bootstrap.NewBuilder(bootstrap.NewResolver(func(key string) string {
@@ -336,4 +490,18 @@ func generateConfig() (string, error) {
 	}
 
 	return path, nil
+}
+
+func generateACMEAccountKey() (string, error) {
+	key, err := keys.Generate(keys.TypeEC256)
+	if err != nil {
+		return "", fmt.Errorf("cannot generate key: %w", err)
+	}
+
+	keyPEM, err := pem.EncodePrivateKey(key)
+	if err != nil {
+		return "", fmt.Errorf("cannot encode key: %w", err)
+	}
+
+	return string(keyPEM), nil
 }

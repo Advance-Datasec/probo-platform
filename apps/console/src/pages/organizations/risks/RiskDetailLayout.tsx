@@ -1,37 +1,37 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { getTreatment, sprintf } from "@probo/helpers";
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
 import {
   ActionDropdown,
-  Avatar,
-  Badge,
-  Breadcrumb,
   Button,
-  Drawer,
   DropdownItem,
   IconPencil,
   IconTrashCan,
   PageHeader,
-  PropertyRow,
   TabBadge,
   TabLink,
   Tabs,
   useConfirm,
 } from "@probo/ui";
+import { useTranslation } from "react-i18next";
 import { graphql, type PreloadedQuery, useMutation, usePreloadedQuery } from "react-relay";
 import { Outlet, useNavigate, useParams } from "react-router";
 import { ConnectionHandler } from "relay-runtime";
@@ -48,16 +48,10 @@ export const riskDetailLayoutQuery = graphql`
     node(id: $riskId) {
       __typename
       ... on Risk {
+        referenceId
         name
         description
-        treatment
-        owner {
-          fullName
-        }
-        note
-        inherentRiskScore
-        residualRiskScore
-        measuresInfo: measures(first: 0) {
+        internalControlsInfo: internalControls(first: 0) {
           totalCount
         }
         documentsInfo: documents(first: 0) {
@@ -72,8 +66,12 @@ export const riskDetailLayoutQuery = graphql`
         scenariosInfo: scenarios(first: 0) {
           totalCount
         }
-        canUpdate: permission(action: "core:risk:update")
-        canDelete: permission(action: "core:risk:delete")
+        treatmentPlansInfo: treatmentPlans(first: 0) {
+          totalCount
+        }
+        riskAnalysisHistoryCount
+        canUpdate: permission(action: "risk-management:risk:update")
+        canDelete: permission(action: "risk-management:risk:delete")
         ...FormRiskDialog_risk
       }
     }
@@ -106,7 +104,7 @@ export default function RiskDetailLayout(props: RiskDetailLayoutProps) {
     throw new Error("Cannot load risk detail page without riskId parameter");
   }
 
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const data = usePreloadedQuery<RiskDetailLayoutQuery>(riskDetailLayoutQuery, props.queryRef);
   if (data.node?.__typename !== "Risk") {
     throw new Error("Risk not found");
@@ -115,7 +113,7 @@ export default function RiskDetailLayout(props: RiskDetailLayoutProps) {
 
   const [deleteRisk] = useMutation<RiskDetailLayoutDeleteMutation>(deleteRiskMutation);
 
-  usePageTitle(risk.name);
+  usePageTitle(`${risk.referenceId} ${risk.name}`);
   const confirm = useConfirm();
 
   const onDelete = () => {
@@ -132,7 +130,7 @@ export default function RiskDetailLayout(props: RiskDetailLayoutProps) {
               connections: [connectionId],
             },
             onCompleted() {
-              void navigate(`/organizations/${organizationId}/risks`);
+              void navigate(`/organizations/${organizationId}/risk-management/risks`);
               resolve();
             },
             onError(error) {
@@ -141,45 +139,38 @@ export default function RiskDetailLayout(props: RiskDetailLayoutProps) {
           });
         }),
       {
-        message: sprintf(
-          __(
-            "This will permanently delete the risk \"%s\". This action cannot be undone.",
-          ),
-          risk.name,
+        message: t(
+          risk.riskAnalysisHistoryCount > 0
+            ? "riskDetailLayout.deleteConfirmationWithHistory"
+            : "riskDetailLayout.deleteConfirmation",
+          {
+            name: risk.name,
+            referenceId: risk.referenceId,
+            count: risk.riskAnalysisHistoryCount,
+          },
         ),
       },
     );
   };
 
   const documentsCount = risk.documentsInfo?.totalCount ?? 0;
-  const measuresCount = risk.measuresInfo?.totalCount ?? 0;
+  const internalControlsCount = risk.internalControlsInfo?.totalCount ?? 0;
   const controlsCount = risk.controlsInfo?.totalCount ?? 0;
   const obligationsCount = risk.obligationsInfo?.totalCount ?? 0;
   const scenariosCount = risk.scenariosInfo?.totalCount ?? 0;
+  const treatmentPlansCount = risk.treatmentPlansInfo?.totalCount ?? 0;
 
-  const risksUrl = `/organizations/${organizationId}/risks`;
-  const baseTabUrl = `/organizations/${organizationId}/risks/${riskId}`;
+  const baseTabUrl = `/organizations/${organizationId}/risk-management/risks/${riskId}`;
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center mb-4">
-        <Breadcrumb
-          items={[
-            {
-              label: __("Risks"),
-              to: risksUrl,
-            },
-            {
-              label: __("Risk detail"),
-            },
-          ]}
-        />
+      <div className="flex justify-end items-center mb-4">
         <div className="flex gap-2">
           {risk.canUpdate && (
             <FormRiskDialog
               trigger={(
                 <Button icon={IconPencil} variant="secondary">
-                  {__("Edit")}
+                  {t("riskDetailLayout.actions.edit")}
                 </Button>
               )}
               risk={risk}
@@ -192,66 +183,51 @@ export default function RiskDetailLayout(props: RiskDetailLayoutProps) {
                 icon={IconTrashCan}
                 onClick={onDelete}
               >
-                {__("Delete")}
+                {t("riskDetailLayout.actions.delete")}
               </DropdownItem>
             </ActionDropdown>
           )}
         </div>
       </div>
 
-      <PageHeader title={risk.name} description={risk.description} />
+      <PageHeader
+        title={(
+          <span className="flex items-baseline gap-3">
+            <span className="font-mono text-txt-secondary">{risk.referenceId}</span>
+            <span>{risk.name}</span>
+          </span>
+        )}
+        description={risk.description}
+      />
       <Tabs>
-        <TabLink to={`${baseTabUrl}/overview`}>{__("Overview")}</TabLink>
-        <TabLink to={`${baseTabUrl}/measures`}>
-          {__("Measures")}
-          <TabBadge>{measuresCount}</TabBadge>
+        <TabLink to={`${baseTabUrl}/treatment-plans`}>
+          {t("riskDetailLayout.tabs.treatmentPlans")}
+          <TabBadge>{treatmentPlansCount}</TabBadge>
+        </TabLink>
+        <TabLink to={`${baseTabUrl}/internal-controls`}>
+          {t("riskDetailLayout.tabs.internalControls")}
+          <TabBadge>{internalControlsCount}</TabBadge>
         </TabLink>
         <TabLink to={`${baseTabUrl}/documents`}>
-          {__("Documents")}
+          {t("riskDetailLayout.tabs.documents")}
           <TabBadge>{documentsCount}</TabBadge>
         </TabLink>
         <TabLink to={`${baseTabUrl}/controls`}>
-          {__("Controls")}
+          {t("riskDetailLayout.tabs.controls")}
           <TabBadge>{controlsCount}</TabBadge>
         </TabLink>
         <TabLink to={`${baseTabUrl}/obligations`}>
-          {__("Obligations")}
+          {t("riskDetailLayout.tabs.obligations")}
           <TabBadge>{obligationsCount}</TabBadge>
         </TabLink>
         <TabLink to={`${baseTabUrl}/scenarios`}>
-          {__("Scenarios")}
+          {t("riskDetailLayout.tabs.scenarios")}
           <TabBadge>{scenariosCount}</TabBadge>
         </TabLink>
+        <TabLink to={`${baseTabUrl}/overview`}>{t("riskDetailLayout.tabs.overview")}</TabLink>
       </Tabs>
 
       <Outlet />
-
-      <Drawer>
-        <PropertyRow label={__("Owner")}>
-          <Badge variant="highlight" size="md" className="gap-2">
-            <Avatar name={risk.owner?.fullName ?? ""} />
-            {risk.owner?.fullName}
-          </Badge>
-        </PropertyRow>
-        <PropertyRow label={__("Treatment")}>
-          <Badge variant="highlight" size="md" className="gap-2">
-            {getTreatment(__, risk.treatment)}
-          </Badge>
-        </PropertyRow>
-        <PropertyRow label={__("Initial Risk Score")}>
-          <div className="text-sm text-txt-secondary">
-            {risk.inherentRiskScore}
-          </div>
-        </PropertyRow>
-        <PropertyRow label={__("Residual Risk Score")}>
-          <div className="text-sm text-txt-secondary">
-            {risk.residualRiskScore}
-          </div>
-        </PropertyRow>
-        <PropertyRow label={__("Note")}>
-          <div className="text-sm text-txt-secondary">{risk.note}</div>
-        </PropertyRow>
-      </Drawer>
     </div>
   );
 }

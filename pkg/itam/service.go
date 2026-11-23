@@ -1,0 +1,1281 @@
+// Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+package itam
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+	"time"
+
+	"go.gearno.de/kit/log"
+	"go.gearno.de/kit/pg"
+	"go.probo.inc/probo/pkg/baseurl"
+	"go.probo.inc/probo/pkg/coredata"
+	"go.probo.inc/probo/pkg/crypto/hash"
+	"go.probo.inc/probo/pkg/crypto/rand"
+	"go.probo.inc/probo/pkg/filemanager"
+	"go.probo.inc/probo/pkg/gid"
+	"go.probo.inc/probo/pkg/html2pdf"
+	"go.probo.inc/probo/pkg/iam"
+	"go.probo.inc/probo/pkg/page"
+	"go.probo.inc/probo/pkg/validator"
+)
+
+var (
+	// ErrDeviceRevoked is returned when the authenticated device has
+	// been revoked.
+	ErrDeviceRevoked = errors.New("device is revoked")
+
+	// ErrDeviceHardwareConflict is returned when activation would
+	// duplicate an existing (organization_id, hardware_uuid) pair.
+	ErrDeviceHardwareConflict = errors.New("device hardware uuid already enrolled")
+
+	// ErrEnrollmentTokenExpired is returned when an enrollment token
+	// has passed its expiry time.
+	ErrEnrollmentTokenExpired = errors.New("enrollment token expired")
+
+	// ErrEnrollmentTokenAlreadyUsed is returned when an enrollment
+	// token has already been exchanged.
+	ErrEnrollmentTokenAlreadyUsed = errors.New("enrollment token already used")
+
+	// ErrEnrollmentTokenInvalid is returned when an enrollment token
+	// cannot be exchanged for the device.
+	ErrEnrollmentTokenInvalid = errors.New("enrollment token invalid")
+
+	// ErrDeviceNotDeletable is returned when a device cannot be soft-deleted
+	// because it is not REVOKED.
+	ErrDeviceNotDeletable = errors.New("device cannot be deleted")
+
+	// ErrInvalidOwnerProfile is returned when an owner ID is not a
+	// membership profile of the device organization.
+	ErrInvalidOwnerProfile = errors.New("invalid owner profile")
+
+	// ErrCorrelationIDRequired is returned when a posture result is
+	// missing a correlation ID.
+	ErrCorrelationIDRequired = errors.New("correlation_id is required")
+
+	// ErrInvalidCorrelationIDEntityType is returned when a posture
+	// correlation ID is not a DevicePostureReport entity.
+	ErrInvalidCorrelationIDEntityType = errors.New("correlation_id entity type is invalid")
+
+	// ErrInvalidCorrelationIDTenant is returned when a posture
+	// correlation ID belongs to a different tenant than the device.
+	ErrInvalidCorrelationIDTenant = errors.New("correlation_id tenant is invalid")
+)
+
+const (
+	// APIKeyRawLength is the random byte length of a device API key
+	// secret (96 chars once hex-encoded).
+	APIKeyRawLength = 48
+
+	// EnrollmentTokenRawLength is the random byte length of a device
+	// enrollment token secret (96 chars once hex-encoded).
+	EnrollmentTokenRawLength = 48
+)
+
+type (
+	// Service is the IT Asset Management service. Admin operations are
+	// tenant-scoped via a caller-supplied scope; agent-facing operations
+	// (authenticate, heartbeat, postures, unenroll) resolve their own
+	// scope, since the agent does not know its tenant until activation.
+	Service struct {
+		pg                      *pg.Client
+		logger                  *log.Logger
+		enrollmentTokenValidity time.Duration
+		html2pdfConverter       *html2pdf.Converter
+		fileManager             *filemanager.Service
+		bucket                  string
+		baseURL                 *baseurl.BaseURL
+	}
+
+	CreateDeviceRequest struct {
+		OrganizationID gid.GID
+		OwnerID        *gid.GID
+	}
+
+	EnrollDeviceRequest struct {
+		OrganizationID gid.GID
+		IdentityID     gid.GID
+	}
+
+	// CreateDeviceResult carries the device row and the plaintext
+	// enrollment token the agent installer must exchange for an API key.
+	// Only the hash is stored, so EnrollmentToken is available only at
+	// this point.
+	CreateDeviceResult struct {
+		Device          *coredata.Device
+		EnrollmentToken string
+	}
+
+	RecordHeartbeatRequest struct {
+		HardwareUUID string
+		SerialNumber *string
+		Hostname     string
+		Platform     coredata.DevicePlatform
+		OSVersion    string
+		AgentVersion string
+	}
+
+	RecordPostureResult struct {
+		CheckKey      string
+		Status        coredata.DevicePostureStatus
+		Evidence      json.RawMessage
+		ObservedAt    time.Time
+		CorrelationID gid.GID
+	}
+
+	ServiceConfig struct {
+		EnrollmentTokenValidity time.Duration
+		PDF                     *html2pdf.Converter
+		FileManager             *filemanager.Service
+		Bucket                  string
+		BaseURL                 *baseurl.BaseURL
+	}
+)
+
+func NewService(
+	pgClient *pg.Client,
+	iamSvc *iam.Service,
+	cfg ServiceConfig,
+	logger *log.Logger,
+) *Service {
+	iamSvc.Authorizer.RegisterPolicySet(ITAMPolicySet())
+
+	validity := cfg.EnrollmentTokenValidity
+	if validity <= 0 {
+		validity = 7 * 24 * time.Hour
+	}
+
+	return &Service{
+		pg:                      pgClient,
+		logger:                  logger,
+		enrollmentTokenValidity: validity,
+		html2pdfConverter:       cfg.PDF,
+		fileManager:             cfg.FileManager,
+		bucket:                  cfg.Bucket,
+		baseURL:                 cfg.BaseURL,
+	}
+}
+
+func (s *Service) CreateDevice(
+	ctx context.Context,
+	scope coredata.Scoper,
+	req CreateDeviceRequest,
+) (*CreateDeviceResult, error) {
+	enrollmentToken, err := rand.HexString(EnrollmentTokenRawLength)
+	if err != nil {
+		return nil, err
+	}
+
+	enrollmentTokenHash := hash.SHA256String(enrollmentToken)
+	now := time.Now()
+
+	device := &coredata.Device{
+		ID:             gid.New(req.OrganizationID.TenantID(), coredata.DeviceEntityType),
+		OrganizationID: req.OrganizationID,
+		State:          coredata.DeviceStatePending,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	token := &coredata.DeviceEnrollmentToken{
+		ID:          gid.New(req.OrganizationID.TenantID(), coredata.DeviceEnrollmentTokenEntityType),
+		DeviceID:    device.ID,
+		HashedValue: enrollmentTokenHash,
+		ExpiresAt:   now.Add(s.enrollmentTokenValidity),
+		CreatedAt:   now,
+	}
+
+	err = s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, conn pg.Tx) error {
+			organization := &coredata.Organization{}
+			if err := organization.LoadByID(ctx, conn, scope, req.OrganizationID); err != nil {
+				return fmt.Errorf("cannot load organization: %w", err)
+			}
+
+			ownerID, err := s.validateOwnerProfileID(
+				ctx,
+				conn,
+				scope,
+				req.OrganizationID,
+				req.OwnerID,
+			)
+			if err != nil {
+				return err
+			}
+
+			device.OwnerID = ownerID
+
+			if err := device.Insert(ctx, conn, scope); err != nil {
+				return fmt.Errorf("cannot insert device: %w", err)
+			}
+
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				device.ID,
+				device.OrganizationID,
+				device.SearchTitle(),
+				device.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
+			if err := token.Insert(ctx, conn, scope); err != nil {
+				return fmt.Errorf("cannot insert device enrollment token: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CreateDeviceResult{
+		Device:          device,
+		EnrollmentToken: enrollmentToken,
+	}, nil
+}
+
+// EnrollDevice creates a pending device owned by the caller's membership
+// profile in the organization.
+func (s *Service) EnrollDevice(
+	ctx context.Context,
+	scope coredata.Scoper,
+	req EnrollDeviceRequest,
+) (*CreateDeviceResult, error) {
+	enrollmentToken, err := rand.HexString(EnrollmentTokenRawLength)
+	if err != nil {
+		return nil, err
+	}
+
+	enrollmentTokenHash := hash.SHA256String(enrollmentToken)
+	now := time.Now()
+
+	device := &coredata.Device{
+		ID:             gid.New(req.OrganizationID.TenantID(), coredata.DeviceEntityType),
+		OrganizationID: req.OrganizationID,
+		State:          coredata.DeviceStatePending,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	token := &coredata.DeviceEnrollmentToken{
+		ID:          gid.New(req.OrganizationID.TenantID(), coredata.DeviceEnrollmentTokenEntityType),
+		DeviceID:    device.ID,
+		HashedValue: enrollmentTokenHash,
+		ExpiresAt:   now.Add(s.enrollmentTokenValidity),
+		CreatedAt:   now,
+	}
+
+	err = s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, conn pg.Tx) error {
+			organization := &coredata.Organization{}
+			if err := organization.LoadByID(ctx, conn, scope, req.OrganizationID); err != nil {
+				return fmt.Errorf("cannot load organization: %w", err)
+			}
+
+			profile := &coredata.MembershipProfile{}
+			if err := profile.LoadByIdentityIDAndOrganizationID(
+				ctx,
+				conn,
+				scope,
+				req.IdentityID,
+				req.OrganizationID,
+			); err != nil {
+				return fmt.Errorf("cannot load owner profile for identity: %w", err)
+			}
+
+			device.OwnerID = &profile.ID
+
+			if err := device.Insert(ctx, conn, scope); err != nil {
+				return fmt.Errorf("cannot insert device: %w", err)
+			}
+
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				device.ID,
+				device.OrganizationID,
+				device.SearchTitle(),
+				device.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
+			if err := token.Insert(ctx, conn, scope); err != nil {
+				return fmt.Errorf("cannot insert device enrollment token: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CreateDeviceResult{
+		Device:          device,
+		EnrollmentToken: enrollmentToken,
+	}, nil
+}
+
+// ExchangeEnrollmentToken redeems a one-shot enrollment token and returns
+// the plaintext device API key. The token row is deleted on success.
+func (s *Service) ExchangeEnrollmentToken(
+	ctx context.Context,
+	tokenString string,
+) (string, error) {
+	hashedValue := hash.SHA256String(tokenString)
+	now := time.Now()
+
+	var apiKey string
+
+	err := s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, conn pg.Tx) error {
+			token := &coredata.DeviceEnrollmentToken{}
+			if err := token.LoadByHashedValueForUpdate(ctx, conn, hashedValue); err != nil {
+				if errors.Is(err, coredata.ErrResourceNotFound) {
+					return ErrEnrollmentTokenAlreadyUsed
+				}
+
+				return fmt.Errorf("cannot load device enrollment token: %w", err)
+			}
+
+			scope := coredata.NewScope(token.TenantID, gid.Nil)
+
+			if now.After(token.ExpiresAt) {
+				if err := token.Delete(ctx, conn, scope); err != nil {
+					return fmt.Errorf("cannot delete expired device enrollment token: %w", err)
+				}
+
+				return ErrEnrollmentTokenExpired
+			}
+
+			device := &coredata.Device{}
+			if err := device.LoadByIDForUpdate(ctx, conn, scope, token.DeviceID); err != nil {
+				return fmt.Errorf("cannot load device: %w", err)
+			}
+
+			if device.State == coredata.DeviceStateRevoked {
+				return ErrEnrollmentTokenInvalid
+			}
+
+			if len(device.APIKeyHash) > 0 {
+				return ErrEnrollmentTokenInvalid
+			}
+
+			generatedKey, err := rand.HexString(APIKeyRawLength)
+			if err != nil {
+				return err
+			}
+
+			apiKeyHash := hash.SHA256String(generatedKey)
+			if err := device.SetAPIKeyHash(ctx, conn, scope, apiKeyHash); err != nil {
+				if errors.Is(err, coredata.ErrResourceNotFound) {
+					return ErrEnrollmentTokenInvalid
+				}
+
+				return fmt.Errorf("cannot set device api key hash: %w", err)
+			}
+
+			if err := token.Delete(ctx, conn, scope); err != nil {
+				return fmt.Errorf("cannot delete device enrollment token: %w", err)
+			}
+
+			apiKey = generatedKey
+
+			return nil
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+
+	return apiKey, nil
+}
+
+func (s *Service) GetDevice(
+	ctx context.Context,
+	scope coredata.Scoper,
+	deviceID gid.GID,
+) (*coredata.Device, error) {
+	device := &coredata.Device{}
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := device.LoadByID(ctx, conn, scope, deviceID); err != nil {
+				return fmt.Errorf("cannot load device: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return device, nil
+}
+
+func (s *Service) GetDevicesByIDs(
+	ctx context.Context,
+	scope coredata.Scoper,
+	deviceIDs ...gid.GID,
+) (coredata.Devices, error) {
+	var devices coredata.Devices
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := devices.LoadByIDs(ctx, conn, scope, deviceIDs); err != nil &&
+				!errors.Is(err, coredata.ErrResourceNotFound) {
+				return fmt.Errorf("cannot load devices by ids: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return devices, nil
+}
+
+func (s *Service) ListForOrganizationID(
+	ctx context.Context,
+	scope coredata.Scoper,
+	organizationID gid.GID,
+	cursor *page.Cursor[coredata.DeviceOrderField],
+	filter *coredata.DeviceFilter,
+) (*page.Page[*coredata.Device, coredata.DeviceOrderField], error) {
+	if filter == nil {
+		filter = coredata.NewDeviceFilter(nil, nil, nil, nil, nil)
+	}
+
+	var devices coredata.Devices
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			organization := &coredata.Organization{}
+			if err := organization.LoadByID(ctx, conn, scope, organizationID); err != nil {
+				return fmt.Errorf("cannot load organization: %w", err)
+			}
+
+			if err := devices.LoadByOrganizationID(ctx, conn, scope, organizationID, cursor, filter); err != nil {
+				return fmt.Errorf("cannot load devices: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return page.NewPage(devices, cursor), nil
+}
+
+func (s *Service) ListAgentVersionsForOrganizationID(
+	ctx context.Context,
+	scope coredata.Scoper,
+	organizationID gid.GID,
+) ([]string, error) {
+	var versions []string
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			organization := &coredata.Organization{}
+			if err := organization.LoadByID(ctx, conn, scope, organizationID); err != nil {
+				return fmt.Errorf("cannot load organization: %w", err)
+			}
+
+			var devices coredata.Devices
+
+			loaded, err := devices.LoadAgentVersionsByOrganizationID(ctx, conn, scope, organizationID)
+			if err != nil {
+				return fmt.Errorf("cannot load device agent versions: %w", err)
+			}
+
+			versions = loaded
+
+			return nil
+		},
+	)
+
+	return versions, err
+}
+
+func (s *Service) ListForOrganizationIDAndOwnerID(
+	ctx context.Context,
+	scope coredata.Scoper,
+	organizationID gid.GID,
+	ownerID gid.GID,
+	cursor *page.Cursor[coredata.DeviceOrderField],
+) (*page.Page[*coredata.Device, coredata.DeviceOrderField], error) {
+	var devices coredata.Devices
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			organization := &coredata.Organization{}
+			if err := organization.LoadByID(ctx, conn, scope, organizationID); err != nil {
+				return fmt.Errorf("cannot load organization: %w", err)
+			}
+
+			if err := devices.LoadByOrganizationIDAndOwnerID(
+				ctx, conn, scope, organizationID, ownerID, cursor,
+			); err != nil {
+				return fmt.Errorf("cannot load devices by owner: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return page.NewPage(devices, cursor), nil
+}
+
+func (s *Service) CountForOrganizationID(
+	ctx context.Context,
+	scope coredata.Scoper,
+	organizationID gid.GID,
+	filter *coredata.DeviceFilter,
+) (int, error) {
+	if filter == nil {
+		filter = coredata.NewDeviceFilter(nil, nil, nil, nil, nil)
+	}
+
+	var count int
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			organization := &coredata.Organization{}
+			if err := organization.LoadByID(ctx, conn, scope, organizationID); err != nil {
+				return fmt.Errorf("cannot load organization: %w", err)
+			}
+
+			var ds coredata.Devices
+
+			c, err := ds.CountByOrganizationID(ctx, conn, scope, organizationID, filter)
+			if err != nil {
+				return fmt.Errorf("cannot count devices: %w", err)
+			}
+
+			count = c
+
+			return nil
+		},
+	)
+
+	return count, err
+}
+
+func (s *Service) CountForOrganizationIDAndOwnerID(
+	ctx context.Context,
+	scope coredata.Scoper,
+	organizationID gid.GID,
+	ownerID gid.GID,
+) (int, error) {
+	var count int
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			organization := &coredata.Organization{}
+			if err := organization.LoadByID(ctx, conn, scope, organizationID); err != nil {
+				return fmt.Errorf("cannot load organization: %w", err)
+			}
+
+			var ds coredata.Devices
+
+			c, err := ds.CountByOrganizationIDAndOwnerID(
+				ctx, conn, scope, organizationID, ownerID,
+			)
+			if err != nil {
+				return fmt.Errorf("cannot count devices by owner: %w", err)
+			}
+
+			count = c
+
+			return nil
+		},
+	)
+
+	return count, err
+}
+
+const maxDeviceBatchSize = 100
+
+func validateDeviceIDs(deviceIDs []gid.GID, max int) error {
+	v := validator.New()
+	v.Check(deviceIDs, "device_ids", validator.Required())
+	v.Check(len(deviceIDs), "device_ids", validator.Max(max))
+	v.CheckEach(deviceIDs, "device_ids", func(index int, item any) {
+		v.Check(
+			item,
+			fmt.Sprintf("device_ids[%d]", index),
+			validator.GID(coredata.DeviceEntityType),
+		)
+	})
+
+	return v.Error()
+}
+
+func sortedDeviceIDs(deviceIDs []gid.GID) []gid.GID {
+	sorted := slices.Clone(deviceIDs)
+	slices.SortFunc(sorted, func(a, b gid.GID) int {
+		return bytes.Compare(a[:], b[:])
+	})
+
+	return sorted
+}
+
+func uniqueDeviceIDs(deviceIDs []gid.GID) []gid.GID {
+	seen := make(map[gid.GID]struct{}, len(deviceIDs))
+	unique := make([]gid.GID, 0, len(deviceIDs))
+
+	for _, deviceID := range deviceIDs {
+		if _, ok := seen[deviceID]; ok {
+			continue
+		}
+
+		seen[deviceID] = struct{}{}
+		unique = append(unique, deviceID)
+	}
+
+	return unique
+}
+
+func (s *Service) RevokeDevices(
+	ctx context.Context,
+	scope coredata.Scoper,
+	deviceIDs []gid.GID,
+) ([]*coredata.Device, error) {
+	if err := validateDeviceIDs(deviceIDs, maxDeviceBatchSize); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	deviceIDs = uniqueDeviceIDs(deviceIDs)
+
+	revoked := make(map[gid.GID]*coredata.Device, len(deviceIDs))
+
+	err := s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, conn pg.Tx) error {
+			for _, deviceID := range sortedDeviceIDs(deviceIDs) {
+				device := &coredata.Device{}
+
+				if err := device.LoadByIDForUpdate(ctx, conn, scope, deviceID); err != nil {
+					return fmt.Errorf("cannot load device: %w", err)
+				}
+
+				if err := device.Revoke(ctx, conn, scope); err != nil {
+					return fmt.Errorf("cannot revoke device: %w", err)
+				}
+
+				revoked[device.ID] = device
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	devices := make([]*coredata.Device, 0, len(deviceIDs))
+	for _, deviceID := range deviceIDs {
+		devices = append(devices, revoked[deviceID])
+	}
+
+	return devices, nil
+}
+
+func (s *Service) DeleteDevices(
+	ctx context.Context,
+	scope coredata.Scoper,
+	deviceIDs []gid.GID,
+) ([]*coredata.Device, error) {
+	if err := validateDeviceIDs(deviceIDs, maxDeviceBatchSize); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	deviceIDs = uniqueDeviceIDs(deviceIDs)
+
+	deleted := make(map[gid.GID]*coredata.Device, len(deviceIDs))
+
+	err := s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, conn pg.Tx) error {
+			for _, deviceID := range sortedDeviceIDs(deviceIDs) {
+				device := &coredata.Device{}
+
+				if err := device.LoadByIDForUpdate(ctx, conn, scope, deviceID); err != nil {
+					return fmt.Errorf("cannot load device: %w", err)
+				}
+
+				if device.State != coredata.DeviceStateRevoked {
+					return ErrDeviceNotDeletable
+				}
+
+				if err := device.SoftDelete(ctx, conn, scope); err != nil {
+					return fmt.Errorf("cannot soft delete device: %w", err)
+				}
+
+				if err := coredata.DeleteSearchResource(ctx, conn, device.ID); err != nil {
+					return fmt.Errorf("cannot delete search resource: %w", err)
+				}
+
+				var token coredata.DeviceEnrollmentToken
+				if err := token.DeleteByDeviceID(ctx, conn, scope, device.ID); err != nil {
+					return fmt.Errorf("cannot delete device enrollment tokens: %w", err)
+				}
+
+				deleted[device.ID] = device
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	devices := make([]*coredata.Device, 0, len(deviceIDs))
+	for _, deviceID := range deviceIDs {
+		devices = append(devices, deleted[deviceID])
+	}
+
+	return devices, nil
+}
+
+func (s *Service) SetDeviceOwner(
+	ctx context.Context,
+	scope coredata.Scoper,
+	deviceID gid.GID,
+	ownerProfileID *gid.GID,
+) (*coredata.Device, error) {
+	device := &coredata.Device{}
+
+	err := s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, conn pg.Tx) error {
+			if err := device.LoadByID(ctx, conn, scope, deviceID); err != nil {
+				return fmt.Errorf("cannot load device: %w", err)
+			}
+
+			resolvedOwnerID, err := s.validateOwnerProfileID(
+				ctx, conn, scope, device.OrganizationID, ownerProfileID,
+			)
+			if err != nil {
+				return err
+			}
+
+			if err := device.AssignOwner(ctx, conn, scope, resolvedOwnerID); err != nil {
+				return fmt.Errorf("cannot set device owner: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return device, nil
+}
+
+func (s *Service) validateOwnerProfileID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope coredata.Scoper,
+	organizationID gid.GID,
+	ownerID *gid.GID,
+) (*gid.GID, error) {
+	if ownerID == nil {
+		return nil, nil
+	}
+
+	if ownerID.EntityType() != coredata.MembershipProfileEntityType {
+		return nil, fmt.Errorf("%w: owner_id must be a membership profile", ErrInvalidOwnerProfile)
+	}
+
+	profile := &coredata.MembershipProfile{}
+	if err := profile.LoadByID(ctx, conn, scope, *ownerID); err != nil {
+		return nil, fmt.Errorf("cannot load owner profile: %w", err)
+	}
+
+	if profile.OrganizationID != organizationID {
+		return nil, fmt.Errorf("%w: owner profile does not belong to organization", ErrInvalidOwnerProfile)
+	}
+
+	return ownerID, nil
+}
+
+func (s *Service) GetLatestPostures(
+	ctx context.Context,
+	scope coredata.Scoper,
+	deviceID gid.GID,
+) (coredata.DevicePostures, error) {
+	var postures coredata.DevicePostures
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			loaded, err := page.LoadAll(
+				ctx,
+				page.OrderBy[coredata.DevicePostureOrderField]{
+					Field:     coredata.DevicePostureOrderFieldCheckKey,
+					Direction: page.OrderDirectionAsc,
+				},
+				func(ctx context.Context, cursor *page.Cursor[coredata.DevicePostureOrderField]) ([]*coredata.DevicePosture, error) {
+					var batch coredata.DevicePostures
+					if err := batch.LoadLatestByDeviceID(ctx, conn, scope, deviceID, cursor); err != nil {
+						return nil, fmt.Errorf("cannot load latest device postures: %w", err)
+					}
+
+					return batch, nil
+				},
+			)
+			if err != nil {
+				return fmt.Errorf("cannot load latest device postures: %w", err)
+			}
+
+			postures = loaded
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return postures, nil
+}
+
+func (s *Service) GetPostureHistory(
+	ctx context.Context,
+	scope coredata.Scoper,
+	deviceID gid.GID,
+	checkKey string,
+	limit int,
+) (coredata.DevicePostures, error) {
+	var postures coredata.DevicePostures
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := postures.LoadHistoryByDeviceIDAndCheckKey(ctx, conn, scope, deviceID, checkKey, limit); err != nil {
+				return fmt.Errorf("cannot load device posture history: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return postures, nil
+}
+
+func (s *Service) ListPostureReports(
+	ctx context.Context,
+	scope coredata.Scoper,
+	deviceID gid.GID,
+	cursor *page.Cursor[coredata.DevicePostureReportOrderField],
+) (*page.Page[*coredata.DevicePostureReport, coredata.DevicePostureReportOrderField], error) {
+	var result *page.Page[*coredata.DevicePostureReport, coredata.DevicePostureReportOrderField]
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			var reports coredata.DevicePostureReports
+			if err := reports.LoadByDeviceID(ctx, conn, scope, deviceID, cursor); err != nil {
+				return fmt.Errorf("cannot load device posture reports: %w", err)
+			}
+
+			p := page.NewPage(reports, cursor)
+			if err := attachPosturesToReports(ctx, conn, scope, deviceID, p.Data); err != nil {
+				return err
+			}
+
+			result = p
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func (s *Service) CountPostureReports(
+	ctx context.Context,
+	scope coredata.Scoper,
+	deviceID gid.GID,
+) (int, error) {
+	var count int
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			var reports coredata.DevicePostureReports
+
+			n, err := reports.CountByDeviceID(ctx, conn, scope, deviceID)
+			if err != nil {
+				return fmt.Errorf("cannot count device posture reports: %w", err)
+			}
+
+			count = n
+
+			return nil
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+func attachPosturesToReports(
+	ctx context.Context,
+	conn pg.Querier,
+	scope coredata.Scoper,
+	deviceID gid.GID,
+	reports []*coredata.DevicePostureReport,
+) error {
+	if len(reports) == 0 {
+		return nil
+	}
+
+	correlationIDs := make([]gid.GID, len(reports))
+	for i, report := range reports {
+		correlationIDs[i] = report.ID
+		report.Postures = nil
+	}
+
+	var postures coredata.DevicePostures
+	if err := postures.LoadByDeviceIDAndCorrelationIDs(
+		ctx,
+		conn,
+		scope,
+		deviceID,
+		correlationIDs,
+	); err != nil {
+		return fmt.Errorf("cannot load postures for reports: %w", err)
+	}
+
+	reportsByID := make(map[gid.GID]*coredata.DevicePostureReport, len(reports))
+	for _, report := range reports {
+		reportsByID[report.ID] = report
+	}
+
+	for _, posture := range postures {
+		report, ok := reportsByID[posture.CorrelationID]
+		if !ok {
+			continue
+		}
+
+		report.Postures = append(report.Postures, posture)
+	}
+
+	return nil
+}
+
+// AuthenticateDevice resolves a device API key to its device row.
+// Returns coredata.ErrResourceNotFound when no non-revoked device
+// matches the key. Revoked devices are treated as not found.
+func (s *Service) AuthenticateDevice(
+	ctx context.Context,
+	apiKey string,
+) (*coredata.Device, error) {
+	if apiKey == "" {
+		return nil, coredata.ErrResourceNotFound
+	}
+
+	hash := hash.SHA256String(apiKey)
+
+	device := &coredata.Device{}
+
+	err := s.pg.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
+		return device.LoadByAPIKeyHash(ctx, conn, hash)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return device, nil
+}
+
+// RecordHeartbeat refreshes the device's last-seen timestamp and any
+// version fields the agent sends. On the first heartbeat for a PENDING
+// device, hardware metadata is recorded and the device is activated.
+func (s *Service) RecordHeartbeat(
+	ctx context.Context,
+	scope coredata.Scoper,
+	deviceID gid.GID,
+	req RecordHeartbeatRequest,
+) (*coredata.Device, error) {
+	if req.HardwareUUID == "" {
+		return nil, fmt.Errorf("hardware_uuid is required")
+	}
+
+	if req.Hostname == "" {
+		return nil, fmt.Errorf("hostname is required")
+	}
+
+	if !req.Platform.IsValid() {
+		return nil, fmt.Errorf("invalid platform: %q", req.Platform)
+	}
+
+	if req.OSVersion == "" {
+		return nil, fmt.Errorf("os_version is required")
+	}
+
+	if req.AgentVersion == "" {
+		return nil, fmt.Errorf("agent_version is required")
+	}
+
+	device := &coredata.Device{}
+
+	err := s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, conn pg.Tx) error {
+			if err := device.LoadByIDForUpdate(ctx, conn, scope, deviceID); err != nil {
+				return fmt.Errorf("cannot load device: %w", err)
+			}
+
+			if device.State == coredata.DeviceStateRevoked {
+				return ErrDeviceRevoked
+			}
+
+			hardwareUUID := req.HardwareUUID
+			hostname := req.Hostname
+			platform := req.Platform
+			osVersion := req.OSVersion
+			agentVersion := req.AgentVersion
+
+			device.HardwareUUID = &hardwareUUID
+			device.SerialNumber = req.SerialNumber
+			device.Hostname = &hostname
+			device.Platform = &platform
+			device.OSVersion = &osVersion
+			device.AgentVersion = &agentVersion
+
+			switch device.State {
+			case coredata.DeviceStatePending:
+				if err := device.Activate(ctx, conn, scope); err != nil {
+					if errors.Is(err, coredata.ErrResourceAlreadyExists) {
+						return ErrDeviceHardwareConflict
+					}
+
+					if errors.Is(err, coredata.ErrResourceNotFound) {
+						return ErrDeviceRevoked
+					}
+
+					return fmt.Errorf("cannot activate device: %w", err)
+				}
+			case coredata.DeviceStateActive:
+				if err := device.UpdateHeartbeat(ctx, conn, scope); err != nil {
+					if errors.Is(err, coredata.ErrResourceNotFound) {
+						return ErrDeviceRevoked
+					}
+
+					return fmt.Errorf("cannot update device heartbeat: %w", err)
+				}
+			default:
+				return ErrDeviceRevoked
+			}
+
+			if err := device.LoadByID(ctx, conn, scope, device.ID); err != nil {
+				return fmt.Errorf("cannot reload device: %w", err)
+			}
+
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				device.ID,
+				device.OrganizationID,
+				device.SearchTitle(),
+				device.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		if errors.Is(err, ErrDeviceHardwareConflict) {
+			if cleanErr := s.discardPendingHardwareConflict(ctx, scope, deviceID); cleanErr != nil {
+				return nil, fmt.Errorf("cannot discard pending device after hardware conflict: %w", cleanErr)
+			}
+		}
+
+		return nil, err
+	}
+
+	return device, nil
+}
+
+// discardPendingHardwareConflict clears the API key, then revokes and
+// soft-deletes a pending device whose activation lost the per-organization
+// hardware UUID slot. The conflicting active device is left in place. The
+// exchange transaction has already stored an API key, so this runs in its
+// own transaction after the heartbeat transaction rolls back. The key is
+// cleared because Revoke keeps it, and DeleteOrphans skips any device that
+// still has one.
+func (s *Service) discardPendingHardwareConflict(
+	ctx context.Context,
+	scope coredata.Scoper,
+	deviceID gid.GID,
+) error {
+	return s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, conn pg.Tx) error {
+			device := &coredata.Device{ID: deviceID}
+			if err := device.DiscardPending(ctx, conn, scope); err != nil {
+				if errors.Is(err, coredata.ErrResourceNotFound) {
+					return nil
+				}
+
+				return fmt.Errorf("cannot discard conflicting device: %w", err)
+			}
+
+			if err := coredata.DeleteSearchResource(ctx, conn, device.ID); err != nil {
+				return fmt.Errorf("cannot delete search resource: %w", err)
+			}
+
+			return nil
+		},
+	)
+}
+
+// RecordPostures appends posture results for a device.
+func (s *Service) RecordPostures(
+	ctx context.Context,
+	scope coredata.Scoper,
+	deviceID gid.GID,
+	agentVersion string,
+	results []RecordPostureResult,
+) error {
+	if len(results) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+
+	return s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, conn pg.Tx) error {
+			device := &coredata.Device{}
+			if err := device.LoadByIDForUpdate(ctx, conn, scope, deviceID); err != nil {
+				return fmt.Errorf("cannot load device: %w", err)
+			}
+
+			if device.State != coredata.DeviceStateActive {
+				return ErrDeviceRevoked
+			}
+
+			if agentVersion == "" {
+				agentVersion = *device.AgentVersion
+			}
+
+			for _, r := range results {
+				if r.CorrelationID == gid.Nil {
+					return ErrCorrelationIDRequired
+				}
+
+				if r.CorrelationID.EntityType() != coredata.DevicePostureReportEntityType {
+					return ErrInvalidCorrelationIDEntityType
+				}
+
+				if r.CorrelationID.TenantID() != device.ID.TenantID() {
+					return ErrInvalidCorrelationIDTenant
+				}
+
+				posture := coredata.DevicePosture{
+					ID:             gid.New(device.OrganizationID.TenantID(), coredata.DevicePostureEntityType),
+					OrganizationID: device.OrganizationID,
+					DeviceID:       device.ID,
+					CorrelationID:  r.CorrelationID,
+					CheckKey:       r.CheckKey,
+					Status:         r.Status,
+					Evidence:       r.Evidence,
+					Version:        coredata.DevicePostureVersionV1,
+					AgentVersion:   agentVersion,
+					ObservedAt:     r.ObservedAt,
+					CreatedAt:      now,
+				}
+				if err := posture.Insert(ctx, conn, scope); err != nil {
+					return fmt.Errorf("cannot insert device posture: %w", err)
+				}
+			}
+
+			return nil
+		},
+	)
+}
+
+// UnenrollDevice revokes the device. The agent invokes this from its
+// uninstaller before wiping its local API key.
+func (s *Service) UnenrollDevice(
+	ctx context.Context,
+	scope coredata.Scoper,
+	deviceID gid.GID,
+) error {
+	return s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, conn pg.Tx) error {
+			device := &coredata.Device{}
+			if err := device.LoadByID(ctx, conn, scope, deviceID); err != nil {
+				return fmt.Errorf("cannot load device: %w", err)
+			}
+
+			if err := device.Revoke(ctx, conn, scope); err != nil {
+				return fmt.Errorf("cannot revoke device: %w", err)
+			}
+
+			return nil
+		},
+	)
+}

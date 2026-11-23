@@ -1,5 +1,6 @@
 # Probo
 
+[![Docs](https://img.shields.io/badge/docs-probo.com%2Fdocs-blue)](https://www.probo.com/docs)
 [![License](https://img.shields.io/github/license/getprobo/probo)](LICENSE)
 [![Build](https://img.shields.io/github/actions/workflow/status/getprobo/probo/make.yaml)](https://github.com/getprobo/probo/actions)
 [![Discord](https://img.shields.io/discord/1326589224811757568?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/8qfdJYfvpY)
@@ -8,12 +9,14 @@
 
 Probo is a self-hostable governance, risk, and compliance (GRC) platform built for engineering and security teams. It covers the full GRC lifecycle: risk identification, control tracking, vendor risk, data privacy, access reviews, audit programs, and document approval workflows. Every entity is accessible through a web console, a CLI, a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) API, and a GraphQL API, so you can automate compliance work from code, scripts, or any LLM agent.
 
+📖 **Documentation: [probo.com/docs](https://www.probo.com/docs)**
+
 ## Why Probo?
 
 - **AI-native by design.** 270+ MCP tools expose every entity and operation. Any MCP-compatible LLM agent can read and write your GRC data, draft policies, run risk assessments, and generate evidence packs.
 - **Full GRC coverage.** Risk management, controls, vendor risk, data privacy (DPIA/TIA), access reviews, audit programs.
 - **Multiple interfaces.** Web console, `prb` CLI (44+ command groups), MCP API, GraphQL, and an n8n community node for no-code automation.
-- **Open source and self-hostable.** ISC licensed. Run it on your own infrastructure with Docker.
+- **Open source and self-hostable.** MIT licensed. Run it on your own infrastructure with Docker.
 - **Audit-ready.** Policy-based RBAC, immutable audit logs, electronic document sign-off workflows, and evidence chains.
 
 ## Capabilities
@@ -48,35 +51,39 @@ prb auth login
 # List open risks
 prb risk list
 
-# Create a measure and link evidence
-prb measure create --name "MFA enforced on all production systems"
-prb evidence create --measure <id> --file screenshot.png
+# Create an internal control and link evidence
+prb internal-control create --name "MFA enforced on all production systems" --category "Security"
+prb evidence upload ./screenshot.png --internal-control <id>
+prb evidence link --url https://example.com/policy --name "Policy" --internal-control <id>
 
 # Manage vendor compliance
 prb thirdpartymgmt vendor list
 prb thirdpartymgmt risk-assessment create --vendor <id>
 ```
 
-Run `prb help` for the full command reference.
+Run `prb help` or see the [CLI documentation](https://www.probo.com/docs/developers/cli/overview) for the full command reference.
 
 ### MCP API
 
 Probo exposes 270+ [MCP](https://modelcontextprotocol.io) tools covering every entity and operation in the platform. Any MCP-compatible LLM agent (Claude, Cursor, Continue, and others) can connect directly and interact with your compliance data.
 
-The full MCP specification is at [`pkg/server/api/mcp/v1/specification.yaml`](pkg/server/api/mcp/v1/specification.yaml).
+See the [MCP documentation](https://www.probo.com/docs/developers/api/mcp/overview) for setup guides per client. The full MCP specification is at [`pkg/server/api/mcp/v1/specification.yaml`](pkg/server/api/mcp/v1/specification.yaml).
 
 ### n8n node
 
-The [`@probo/n8n-nodes-probo`](packages/n8n-node/) community node brings Probo into n8n workflows for no-code automation of compliance tasks over the GraphQL API.
+The [`@probo/n8n-nodes-probo`](packages/n8n-node/) community node brings Probo into n8n workflows for no-code automation of compliance tasks over the GraphQL API. See the [n8n documentation](https://www.probo.com/docs/developers/api/n8n/overview).
 
 ## Quick Start
+
+To run Probo in production, follow the [self-hosting guide](https://www.probo.com/docs/deployment/self-hosting) (Docker Compose or Kubernetes). The steps below set up a local development environment.
 
 **Prerequisites**
 
 | Tool | Version |
 |------|---------|
-| Go | 1.26+ |
-| Node.js | 22+ |
+| Go | 1.27+ |
+| Node.js | 24.15+ |
+| npm | 12.0.2+ |
 | Docker | latest |
 | mkcert | latest |
 
@@ -94,8 +101,8 @@ npm ci
 # 3. Start infrastructure services (PostgreSQL, object storage, etc.)
 make stack-up
 
-# 4. Build
-make build
+# 4. Build (WITH_APPS=1 also runs codegen and builds the web console)
+make build WITH_APPS=1
 
 # 5. Generate the local dev config
 make dev-config
@@ -126,13 +133,19 @@ To report a security vulnerability, email [security@probo.com](mailto:security@p
 
 ## Community
 
+- [Documentation](https://www.probo.com/docs) - Product guides, self-hosting, CLI, MCP, and API reference
 - [Discord](https://discord.gg/8qfdJYfvpY) - Get help, share feedback, and talk to the team
-- [Documentation](https://www.probo.com/docs)
 - [Blog](https://www.probo.com/blog)
 - [Twitter / X](https://twitter.com/getprobo)
 - [LinkedIn](https://www.linkedin.com/company/getprobo)
 - [Website](https://www.probo.com)
 
+## Thanks
+
+The local Go cache actions use the cache strategy from [CloudX](https://www.cloudx.ai). See [Scaling Golang CI by Replacing actions/setup-go](https://www.cloudx.ai/posts/setup-go) and [cloudx-io/setup-go](https://github.com/cloudx-io/setup-go). Thank you to Lukas Schwab, Peter Downs, and the CloudX team.
+
+The local stack runs [fakecloud](https://fakecloud.dev) so AWS workload identity can be tried without an AWS account. See [faiscadev/fakecloud](https://github.com/faiscadev/fakecloud). Thank you to the fakecloud team.
+
 ## License
 
-Probo is [ISC licensed](LICENSE).
+Probo is [MIT licensed](LICENSE).

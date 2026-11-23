@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -39,6 +45,13 @@ type (
 	CommonThirdPartyDomains []*CommonThirdPartyDomain
 )
 
+// LoadByDomain resolves a host to the catalog entry that owns it.
+//
+// A domain is unique per catalog entry, not globally: two entries for the same
+// vendor each carry it until one is merged away. The ordering makes the choice
+// deterministic in that window, so attribution cannot flip between two calls
+// or after a vacuum. Collapsing the duplicate is `proboctl common-third-party
+// merge`; this only keeps the answer stable until it runs.
 func (d *CommonThirdPartyDomain) LoadByDomain(
 	ctx context.Context,
 	conn pg.Querier,
@@ -55,6 +68,8 @@ FROM
     common_third_party_domains
 WHERE
     domain = @domain
+ORDER BY
+    created_at, id
 LIMIT 1;
 `
 
@@ -231,6 +246,56 @@ LIMIT @limit;
 	*ds = domains
 
 	return nil
+}
+
+// LoadAllGroupedByCommonThirdPartyID returns every owned domain in the
+// catalog, grouped by the catalog entry that owns it.
+//
+// Duplicate detection compares domain sets across the whole catalog, so it
+// needs all of them at once; loading per entry would be one round trip per
+// candidate. Only the domain strings are returned because that is all the
+// comparison uses.
+func (ds *CommonThirdPartyDomains) LoadAllGroupedByCommonThirdPartyID(
+	ctx context.Context,
+	conn pg.Querier,
+) (map[gid.GID][]string, error) {
+	q := `
+SELECT
+    common_third_party_id,
+    domain
+FROM
+    common_third_party_domains
+ORDER BY
+    common_third_party_id,
+    domain
+`
+
+	rows, err := conn.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("cannot query common third party domains: %w", err)
+	}
+	defer rows.Close()
+
+	byParty := make(map[gid.GID][]string)
+
+	for rows.Next() {
+		var (
+			partyID gid.GID
+			domain  string
+		)
+
+		if err := rows.Scan(&partyID, &domain); err != nil {
+			return nil, fmt.Errorf("cannot scan common third party domain: %w", err)
+		}
+
+		byParty[partyID] = append(byParty[partyID], domain)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("cannot iterate common third party domains: %w", err)
+	}
+
+	return byParty, nil
 }
 
 func (ds *CommonThirdPartyDomains) LoadByCommonThirdPartyID(

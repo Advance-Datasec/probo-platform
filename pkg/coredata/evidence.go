@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -24,16 +30,21 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.gearno.de/kit/pg"
+	"go.gearno.de/x/ref"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/iam/policy"
 	"go.probo.inc/probo/pkg/page"
+)
+
+var (
+	_ Searchable = (*Evidence)(nil)
 )
 
 type (
 	Evidence struct {
 		ID                             gid.GID                   `db:"id"`
 		OrganizationID                 gid.GID                   `db:"organization_id"`
-		MeasureID                      gid.GID                   `db:"measure_id"`
+		InternalControlID              gid.GID                   `db:"internal_control_id"`
 		TaskID                         *gid.GID                  `db:"task_id"`
 		State                          EvidenceState             `db:"state"`
 		ReferenceID                    string                    `db:"reference_id"`
@@ -57,6 +68,10 @@ func (e Evidence) CursorKey(orderBy EvidenceOrderField) page.CursorKey {
 	}
 
 	panic(fmt.Sprintf("unsupported order by: %s", orderBy))
+}
+
+func (e Evidence) SearchText() []string {
+	return []string{e.ReferenceID, ref.UnrefOrZero(e.Description), e.URL}
 }
 
 // AuthorizationAttributes returns the authorization attributes for policy evaluation.
@@ -99,7 +114,7 @@ func (e *Evidence) AuthorizationAttributes(
 	return attrsByID, nil
 }
 
-func (e Evidence) Upsert(
+func (e *Evidence) Upsert(
 	ctx context.Context,
 	conn pg.Querier,
 	scope Scoper,
@@ -109,7 +124,7 @@ INSERT INTO
     evidences (
         tenant_id,
         id,
-        measure_id,
+        internal_control_id,
         task_id,
         reference_id,
         state,
@@ -125,7 +140,7 @@ INSERT INTO
 VALUES (
     @tenant_id,
     @evidence_id,
-    @measure_id,
+    @internal_control_id,
     @task_id,
     @reference_id,
     @state,
@@ -142,13 +157,14 @@ ON CONFLICT (task_id, reference_id) DO UPDATE SET
 	description = @description,
 	type = @type,
 	updated_at = @updated_at
-WHERE evidences.state = 'REQUESTED';
+WHERE evidences.state = 'REQUESTED'
+RETURNING id;
 `
 
 	args := pgx.StrictNamedArgs{
 		"tenant_id":                         scope.GetTenantID(),
 		"evidence_id":                       e.ID,
-		"measure_id":                        e.MeasureID,
+		"internal_control_id":               e.InternalControlID,
 		"task_id":                           e.TaskID,
 		"reference_id":                      e.ReferenceID,
 		"evidence_file_id":                  e.EvidenceFileId,
@@ -161,9 +177,28 @@ WHERE evidences.state = 'REQUESTED';
 		"description_status":                e.DescriptionStatus,
 		"description_processing_started_at": e.DescriptionProcessingStartedAt,
 	}
-	_, err := conn.Exec(ctx, q, args)
 
-	return err
+	var id gid.GID
+
+	err := conn.QueryRow(ctx, q, args).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = conn.QueryRow(
+			ctx,
+			`SELECT id FROM evidences WHERE task_id = @task_id AND reference_id = @reference_id`,
+			pgx.StrictNamedArgs{
+				"task_id":      e.TaskID,
+				"reference_id": e.ReferenceID,
+			},
+		).Scan(&id)
+	}
+
+	if err != nil {
+		return fmt.Errorf("cannot upsert evidence: %w", err)
+	}
+
+	e.ID = id
+
+	return nil
 }
 
 func (e Evidence) Insert(
@@ -177,7 +212,7 @@ INSERT INTO
         tenant_id,
         id,
         organization_id,
-        measure_id,
+        internal_control_id,
         task_id,
         reference_id,
         state,
@@ -194,7 +229,7 @@ VALUES (
     @tenant_id,
     @evidence_id,
     @organization_id,
-    @measure_id,
+    @internal_control_id,
     @task_id,
     @reference_id,
     @state,
@@ -213,7 +248,7 @@ VALUES (
 		"tenant_id":                         scope.GetTenantID(),
 		"evidence_id":                       e.ID,
 		"organization_id":                   e.OrganizationID,
-		"measure_id":                        e.MeasureID,
+		"internal_control_id":               e.InternalControlID,
 		"task_id":                           e.TaskID,
 		"reference_id":                      e.ReferenceID,
 		"evidence_file_id":                  e.EvidenceFileId,
@@ -252,7 +287,7 @@ SELECT
     id,
     organization_id,
     task_id,
-    measure_id,
+    internal_control_id,
     reference_id,
     state,
     type,
@@ -291,11 +326,69 @@ LIMIT 1;
 	return nil
 }
 
-func (e *Evidences) CountByMeasureID(
+func (e *Evidences) LoadByIDs(
 	ctx context.Context,
 	conn pg.Querier,
 	scope Scoper,
-	measureID gid.GID,
+	evidenceIDs []gid.GID,
+) error {
+	if len(evidenceIDs) == 0 {
+		*e = nil
+		return nil
+	}
+
+	q := `
+SELECT
+	id,
+	organization_id,
+	task_id,
+	internal_control_id,
+	reference_id,
+	state,
+	type,
+	url,
+	evidence_file_id,
+	description,
+	description_status,
+	description_processing_started_at,
+	created_at,
+	updated_at
+FROM
+	evidences
+WHERE
+	%s
+	AND id = ANY(@evidence_ids)
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"evidence_ids": evidenceIDs}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query evidences: %w", err)
+	}
+
+	items, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[Evidence])
+	if err != nil {
+		return fmt.Errorf("cannot collect evidences: %w", err)
+	}
+
+	*e = items
+
+	if len(items) != len(gid.NewSet(evidenceIDs...)) {
+		return ErrResourceNotFound
+	}
+
+	return nil
+}
+
+func (e *Evidences) CountByInternalControlID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	internalControlID gid.GID,
 ) (int, error) {
 	q := `
 SELECT
@@ -304,12 +397,12 @@ FROM
 	evidences
 WHERE
 	%s
-	AND measure_id = @measure_id
+	AND internal_control_id = @internal_control_id
 	`
 
 	q = fmt.Sprintf(q, scope.SQLFragment())
 
-	args := pgx.StrictNamedArgs{"measure_id": measureID}
+	args := pgx.StrictNamedArgs{"internal_control_id": internalControlID}
 	maps.Copy(args, scope.SQLArguments())
 
 	row := conn.QueryRow(ctx, q, args)
@@ -324,18 +417,65 @@ WHERE
 	return count, nil
 }
 
-func (e *Evidences) LoadByMeasureID(
+func LoadEvidenceIDsByInternalControlID(
 	ctx context.Context,
 	conn pg.Querier,
 	scope Scoper,
-	measureID gid.GID,
+	internalControlID gid.GID,
+) ([]gid.GID, error) {
+	return loadEvidenceIDs(ctx, conn, scope, "internal_control_id", internalControlID)
+}
+
+func LoadEvidenceIDsByTaskID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	taskID gid.GID,
+) ([]gid.GID, error) {
+	return loadEvidenceIDs(ctx, conn, scope, "task_id", taskID)
+}
+
+func loadEvidenceIDs(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	column string,
+	parentID gid.GID,
+) ([]gid.GID, error) {
+	q := fmt.Sprintf(
+		`SELECT id FROM evidences WHERE %s AND %s = @parent_id ORDER BY id`,
+		scope.SQLFragment(),
+		column,
+	)
+
+	args := pgx.StrictNamedArgs{"parent_id": parentID}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return nil, fmt.Errorf("cannot query evidence ids: %w", err)
+	}
+
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[gid.GID])
+	if err != nil {
+		return nil, fmt.Errorf("cannot collect evidence ids: %w", err)
+	}
+
+	return ids, nil
+}
+
+func (e *Evidences) LoadByInternalControlID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	internalControlID gid.GID,
 	cursor *page.Cursor[EvidenceOrderField],
 ) error {
 	q := `
 SELECT
 	id,
 	organization_id,
-	measure_id,
+	internal_control_id,
 	task_id,
 	reference_id,
 	state,
@@ -351,13 +491,13 @@ FROM
 	evidences
 WHERE
 	%s
-	AND measure_id = @measure_id
+	AND internal_control_id = @internal_control_id
 	AND %s
 	`
 
 	q = fmt.Sprintf(q, scope.SQLFragment(), cursor.SQLFragment())
 
-	args := pgx.StrictNamedArgs{"measure_id": measureID}
+	args := pgx.StrictNamedArgs{"internal_control_id": internalControlID}
 	maps.Copy(args, scope.SQLArguments())
 	maps.Copy(args, cursor.SQLArguments())
 
@@ -420,7 +560,7 @@ func (e *Evidences) LoadByTaskID(
 SELECT
     id,
     organization_id,
-    measure_id,
+    internal_control_id,
     task_id,
     reference_id,
     state,
@@ -498,9 +638,16 @@ WHERE
 	}
 	maps.Copy(args, scope.SQLArguments())
 
-	_, err := conn.Exec(ctx, q, args)
+	result, err := conn.Exec(ctx, q, args)
+	if err != nil {
+		return err
+	}
 
-	return err
+	if result.RowsAffected() == 0 {
+		return ErrResourceNotFound
+	}
+
+	return nil
 }
 
 func (e Evidence) Delete(
@@ -521,9 +668,13 @@ WHERE
 	args := pgx.StrictNamedArgs{"evidence_id": e.ID}
 	maps.Copy(args, scope.SQLArguments())
 
-	_, err := conn.Exec(ctx, q, args)
+	result, err := conn.Exec(ctx, q, args)
 	if err != nil {
 		return fmt.Errorf("cannot delete evidence: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return ErrResourceNotFound
 	}
 
 	return nil
@@ -538,7 +689,7 @@ SELECT
     id,
     organization_id,
     task_id,
-    measure_id,
+    internal_control_id,
     reference_id,
     state,
     type,

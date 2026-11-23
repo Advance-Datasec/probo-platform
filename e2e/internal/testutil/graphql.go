@@ -1,32 +1,48 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package testutil
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/textproto"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+// compliancePortalHTTPSAddr is the loopback address of the dedicated trust-center
+// HTTPS listener started by the e2e probod (see generateConfig). Compliance
+// pages are served here exclusively, routed by TLS SNI / Host header. Uses a
+// non-privileged port so the e2e suite doesn't require root/CAP_NET_BIND_SERVICE.
+const compliancePortalHTTPSAddr = "127.0.0.1:8443"
 
 type GraphQLRequest struct {
 	Query     string         `json:"query"`
@@ -77,11 +93,50 @@ func (e GraphQLErrors) Error() string {
 		return ""
 	}
 
-	if len(e) == 1 {
-		return e[0].Message
+	details := make([]string, 0, len(e))
+	for _, gqlErr := range e {
+		detail := gqlErr.Message
+		if code := gqlErr.Code(); code != "" {
+			detail = fmt.Sprintf("[%s] %s", code, detail)
+		}
+
+		if len(gqlErr.Path) > 0 {
+			path := make([]string, 0, len(gqlErr.Path))
+			for _, segment := range gqlErr.Path {
+				path = append(path, fmt.Sprint(segment))
+			}
+
+			detail += fmt.Sprintf(" (path: %s)", strings.Join(path, "."))
+		}
+
+		details = append(details, detail)
 	}
 
-	return fmt.Sprintf("%s (and %d more errors)", e[0].Message, len(e)-1)
+	return strings.Join(details, "; ")
+}
+
+// parseGraphQLHTTPResponse prefers a GraphQL errors payload over a non-200
+// HTTP status so callers can assert on extensions.code when auth middlewares
+// short-circuit with 403 (or similar) while still returning GraphQL errors.
+func parseGraphQLHTTPResponse(statusCode int, body []byte) (*GraphQLResponse, error) {
+	var gqlResp GraphQLResponse
+	if err := json.Unmarshal(body, &gqlResp); err != nil {
+		if statusCode != http.StatusOK {
+			return nil, fmt.Errorf("unexpected status %d: %s", statusCode, string(body))
+		}
+
+		return nil, fmt.Errorf("cannot decode response: %w", err)
+	}
+
+	if len(gqlResp.Errors) > 0 {
+		return &gqlResp, GraphQLErrors(gqlResp.Errors)
+	}
+
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status %d: %s", statusCode, string(body))
+	}
+
+	return &gqlResp, nil
 }
 
 func (c *Client) doWithEndpoint(endpoint string, query string, variables map[string]any) (*GraphQLResponse, error) {
@@ -114,20 +169,7 @@ func (c *Client) doWithEndpoint(endpoint string, query string, variables map[str
 		return nil, fmt.Errorf("cannot read response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var gqlResp GraphQLResponse
-	if err := json.Unmarshal(respBody, &gqlResp); err != nil {
-		return nil, fmt.Errorf("cannot decode response: %w", err)
-	}
-
-	if len(gqlResp.Errors) > 0 {
-		return &gqlResp, GraphQLErrors(gqlResp.Errors)
-	}
-
-	return &gqlResp, nil
+	return parseGraphQLHTTPResponse(resp.StatusCode, respBody)
 }
 
 func (c *Client) Do(query string, variables map[string]any) (*GraphQLResponse, error) {
@@ -184,24 +226,116 @@ func ConsoleGraphQLWithAccessToken(
 		return nil, fmt.Errorf("cannot read response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var gqlResp GraphQLResponse
-	if err := json.Unmarshal(respBody, &gqlResp); err != nil {
-		return nil, fmt.Errorf("cannot decode response: %w", err)
-	}
-
-	if len(gqlResp.Errors) > 0 {
-		return &gqlResp, GraphQLErrors(gqlResp.Errors)
-	}
-
-	return &gqlResp, nil
+	return parseGraphQLHTTPResponse(resp.StatusCode, respBody)
 }
 
-func (c *Client) DoTrust(trustCenterID string, query string, variables map[string]any) (*GraphQLResponse, error) {
-	return c.doWithEndpoint(fmt.Sprintf("/trust/%s/api/trust/v1/graphql", trustCenterID), query, variables)
+// trustHTTPClient builds an HTTP client that always dials the dedicated
+// trust-center HTTPS listener on loopback while presenting the compliance
+// page's host as TLS SNI. Certificates are step-ca-issued for e2e, so
+// verification is skipped when the root is not installed in the test runner.
+func trustHTTPClient(serverName string) *http.Client {
+	return trustHTTPClientWithJar(serverName, nil)
+}
+
+func trustHTTPClientWithJar(serverName string, jar http.CookieJar) *http.Client {
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+
+	return &http.Client{
+		Jar:     jar,
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return dialer.DialContext(ctx, "tcp", compliancePortalHTTPSAddr)
+			},
+			TLSClientConfig: &tls.Config{
+				ServerName:         serverName,
+				InsecureSkipVerify: true, //nolint:gosec // e2e talks to step-ca-issued certs on loopback.
+			},
+		},
+	}
+}
+
+// WaitForCompliancePortalHTTPS blocks until the dedicated trust-center listener
+// serves the page over TLS, or 30s elapse. Managed domains provision
+// certificates asynchronously after activation. Use
+// WaitForCompliancePortalHTTPSWithin when a busy provisioner needs a longer
+// budget.
+func WaitForCompliancePortalHTTPS(t testing.TB, host string) {
+	t.Helper()
+
+	WaitForCompliancePortalHTTPSWithin(t, host, 30*time.Second)
+}
+
+// WaitForCompliancePortalHTTPSWithin is WaitForCompliancePortalHTTPS with an
+// explicit timeout.
+func WaitForCompliancePortalHTTPSWithin(t testing.TB, host string, timeout time.Duration) {
+	t.Helper()
+
+	client := TrustHTTPClient(host)
+
+	require.Eventually(
+		t,
+		func() bool {
+			resp, err := client.Get("https://" + host + complianceportalOAuthMetadataPath())
+			if err != nil {
+				return false
+			}
+
+			defer func() { _ = resp.Body.Close() }()
+
+			return resp.StatusCode == http.StatusOK
+		},
+		timeout,
+		500*time.Millisecond,
+		"compliance portal did not become servable on the dedicated listener",
+	)
+}
+
+func complianceportalOAuthMetadataPath() string {
+	return "/.well-known/oauth-client-metadata"
+}
+
+// DoTrust posts a GraphQL query to a compliance page served on the dedicated
+// listener. host is the page's serving domain (a customer custom domain or a
+// managed {slug}.probopage.localhost subdomain).
+func (c *Client) DoTrust(host string, query string, variables map[string]any) (*GraphQLResponse, error) {
+	reqBody := GraphQLRequest{
+		Query:     query,
+		Variables: variables,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("cannot marshal request: %w", err)
+	}
+
+	endpoint := fmt.Sprintf("https://%s/graphql", host)
+
+	req, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("cannot create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	client := trustHTTPClient(host)
+	if c.trustClient != nil && host == c.trustHost {
+		client = c.trustClient
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read response: %w", err)
+	}
+
+	return parseGraphQLHTTPResponse(resp.StatusCode, respBody)
 }
 
 func (c *Client) Execute(query string, variables map[string]any, result any) error {
@@ -234,8 +368,8 @@ func (c *Client) ExecuteConnect(query string, variables map[string]any, result a
 	return nil
 }
 
-func (c *Client) ExecuteTrust(trustCenterID string, query string, variables map[string]any, result any) error {
-	resp, err := c.DoTrust(trustCenterID, query, variables)
+func (c *Client) ExecuteTrust(host string, query string, variables map[string]any, result any) error {
+	resp, err := c.DoTrust(host, query, variables)
 	if err != nil {
 		return err
 	}
@@ -263,12 +397,24 @@ func (c *Client) ExecuteShouldFail(query string, variables map[string]any) error
 	return err
 }
 
+func (c *Client) ExecuteConnectShouldFail(query string, variables map[string]any) error {
+	c.T.Helper()
+	_, err := c.DoConnect(query, variables)
+	require.Error(c.T, err, "expected Connect GraphQL request to fail but it succeeded")
+
+	return err
+}
+
 func (c *Client) HTTPClient() *http.Client {
 	return c.httpClient
 }
 
 func (c *Client) BaseURL() string {
 	return c.baseURL
+}
+
+func TrustHTTPClient(trustHost string) *http.Client {
+	return trustHTTPClient(trustHost)
 }
 
 type UploadFile struct {
@@ -379,17 +525,9 @@ func (c *Client) executeMultipart(endpoint string, query string, variables map[s
 		return fmt.Errorf("cannot read response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var gqlResp GraphQLResponse
-	if err := json.Unmarshal(respBody, &gqlResp); err != nil {
-		return fmt.Errorf("cannot decode response: %w", err)
-	}
-
-	if len(gqlResp.Errors) > 0 {
-		return GraphQLErrors(gqlResp.Errors)
+	gqlResp, err := parseGraphQLHTTPResponse(resp.StatusCode, respBody)
+	if err != nil {
+		return err
 	}
 
 	if result != nil && gqlResp.DataString() != "" {

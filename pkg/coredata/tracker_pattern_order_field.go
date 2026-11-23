@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -24,11 +30,10 @@ import (
 type TrackerPatternOrderField string
 
 const (
-	TrackerPatternOrderFieldCreatedAt     TrackerPatternOrderField = "CREATED_AT"
-	TrackerPatternOrderFieldName          TrackerPatternOrderField = "NAME"
-	TrackerPatternOrderFieldLastMatchedAt TrackerPatternOrderField = "LAST_MATCHED_AT"
-	TrackerPatternOrderFieldUpdatedAt     TrackerPatternOrderField = "UPDATED_AT"
-	TrackerPatternOrderFieldSource        TrackerPatternOrderField = "SOURCE"
+	TrackerPatternOrderFieldCreatedAt TrackerPatternOrderField = "CREATED_AT"
+	TrackerPatternOrderFieldName      TrackerPatternOrderField = "NAME"
+	TrackerPatternOrderFieldUpdatedAt TrackerPatternOrderField = "UPDATED_AT"
+	TrackerPatternOrderFieldSource    TrackerPatternOrderField = "SOURCE"
 )
 
 var (
@@ -42,24 +47,13 @@ func TrackerPatternOrderFields() []TrackerPatternOrderField {
 	return []TrackerPatternOrderField{
 		TrackerPatternOrderFieldCreatedAt,
 		TrackerPatternOrderFieldName,
-		TrackerPatternOrderFieldLastMatchedAt,
 		TrackerPatternOrderFieldUpdatedAt,
 		TrackerPatternOrderFieldSource,
 	}
 }
 
 func (v TrackerPatternOrderField) IsValid() bool {
-	switch v {
-	case
-		TrackerPatternOrderFieldCreatedAt,
-		TrackerPatternOrderFieldName,
-		TrackerPatternOrderFieldLastMatchedAt,
-		TrackerPatternOrderFieldUpdatedAt,
-		TrackerPatternOrderFieldSource:
-		return true
-	}
-
-	return false
+	return isValidOrderField(v, TrackerPatternOrderFields())
 }
 
 func (v TrackerPatternOrderField) String() string {
@@ -71,14 +65,7 @@ func (v TrackerPatternOrderField) MarshalText() ([]byte, error) {
 }
 
 func (v *TrackerPatternOrderField) UnmarshalText(text []byte) error {
-	val := TrackerPatternOrderField(text)
-	if !val.IsValid() {
-		return fmt.Errorf("invalid TrackerPatternOrderField value: %q", string(text))
-	}
-
-	*v = val
-
-	return nil
+	return unmarshalOrderField(v, text, TrackerPatternOrderFields())
 }
 
 func (p TrackerPatternOrderField) Column() string {
@@ -86,13 +73,13 @@ func (p TrackerPatternOrderField) Column() string {
 	case TrackerPatternOrderFieldCreatedAt:
 		return "created_at"
 	case TrackerPatternOrderFieldName:
-		return "display_name"
-	case TrackerPatternOrderFieldLastMatchedAt:
-		return "COALESCE(last_matched_at, '0001-01-01T00:00:00Z'::timestamptz)"
+		return "pattern"
 	case TrackerPatternOrderFieldUpdatedAt:
 		return "updated_at"
 	case TrackerPatternOrderFieldSource:
-		return "COALESCE(source, '')"
+		// source is cookie_source; '' is not a valid enum value, so
+		// COALESCE must compare text (NULL sources sort as empty).
+		return "COALESCE(source::text, '')"
 	}
 
 	panic(fmt.Sprintf("unsupported order by: %s", p))

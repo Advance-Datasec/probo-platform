@@ -1,0 +1,190 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+package probo
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.probo.inc/probo/pkg/coredata"
+	"go.probo.inc/probo/pkg/docgen"
+	"go.probo.inc/probo/pkg/gid"
+)
+
+func TestCollapseTrackerPolicyThirdParties_ConflictingPrivacyPolicyURLs(t *testing.T) {
+	t.Parallel()
+
+	low := gidWithSuffix(1)
+	high := gidWithSuffix(2)
+	urlLow := new("https://low.example/privacy")
+	urlHigh := new("https://high.example/privacy")
+
+	lowFirst := coredata.CommonThirdParties{
+		{ID: low, Name: "Hotjar", PrivacyPolicyURL: urlLow},
+		{ID: high, Name: "hotjar", PrivacyPolicyURL: urlHigh},
+	}
+	highFirst := coredata.CommonThirdParties{
+		{ID: high, Name: "hotjar", PrivacyPolicyURL: urlHigh},
+		{ID: low, Name: "Hotjar", PrivacyPolicyURL: urlLow},
+	}
+
+	want := []docgen.TrackerPolicyThirdParty{
+		{Name: "Hotjar", PrivacyPolicyURL: *urlLow},
+	}
+
+	assert.Equal(t, want, collapseTrackerPolicyThirdParties(lowFirst))
+	assert.Equal(t, want, collapseTrackerPolicyThirdParties(highFirst))
+}
+
+func TestCollapseTrackerPolicyThirdParties_BackfillsEmptyPrivacyPolicyURL(t *testing.T) {
+	t.Parallel()
+
+	low := gidWithSuffix(1)
+	high := gidWithSuffix(2)
+	urlHigh := new("https://high.example/privacy")
+
+	parties := coredata.CommonThirdParties{
+		{ID: high, Name: "Hotjar", PrivacyPolicyURL: urlHigh},
+		{ID: low, Name: "Hotjar"},
+	}
+
+	rows := collapseTrackerPolicyThirdParties(parties)
+	require.Len(t, rows, 1)
+	assert.Equal(t, *urlHigh, rows[0].PrivacyPolicyURL)
+}
+
+func TestCommonPatternIDsForSnapshotTrackers(t *testing.T) {
+	t.Parallel()
+
+	google := gidWithSuffix(1)
+	meta := gidWithSuffix(2)
+	hotjar := gidWithSuffix(3)
+	extensionVendor := gidWithSuffix(4)
+	moved := gidWithSuffix(5)
+	maxAge := new(3600)
+	otherAge := new(60)
+	extension := coredata.CookieSourceExtension
+
+	snapshot := coredata.CookieBannerVersionSnapshot{
+		Categories: []coredata.CookieBannerVersionSnapshotCategory{
+			{
+				Cookies: coredata.CookieItems{
+					{
+						Name:          "_ga",
+						TrackerType:   coredata.TrackerTypeCookie,
+						MaxAgeSeconds: maxAge,
+					},
+					{
+						Name:          "_gid",
+						TrackerType:   coredata.TrackerTypeCookie,
+						MaxAgeSeconds: maxAge,
+					},
+					{
+						Name:        "_fbp",
+						TrackerType: coredata.TrackerTypeCookie,
+					},
+					{
+						Name:          "hidden",
+						TrackerType:   coredata.TrackerTypeCookie,
+						MaxAgeSeconds: maxAge,
+					},
+					{
+						Name:        "ext_key",
+						TrackerType: coredata.TrackerTypeCookie,
+					},
+					{
+						Name:          "moved_off_category",
+						TrackerType:   coredata.TrackerTypeCookie,
+						MaxAgeSeconds: maxAge,
+					},
+				},
+			},
+		},
+	}
+
+	patterns := coredata.TrackerPatterns{
+		{
+			Pattern:                "_ga",
+			TrackerType:            coredata.TrackerTypeCookie,
+			MaxAgeSeconds:          maxAge,
+			CommonTrackerPatternID: &google,
+		},
+		{
+			Pattern:                "_gid",
+			TrackerType:            coredata.TrackerTypeCookie,
+			MaxAgeSeconds:          maxAge,
+			CommonTrackerPatternID: &google,
+		},
+		{
+			Pattern:                "_fbp",
+			TrackerType:            coredata.TrackerTypeCookie,
+			CommonTrackerPatternID: &meta,
+		},
+		{
+			Pattern:                "_fbp",
+			TrackerType:            coredata.TrackerTypeCookie,
+			MaxAgeSeconds:          otherAge,
+			CommonTrackerPatternID: &hotjar,
+		},
+		{
+			Pattern:                "uncategorised_pixel",
+			TrackerType:            coredata.TrackerTypeCookie,
+			CommonTrackerPatternID: &hotjar,
+		},
+		{
+			Pattern:                "moved_off_category",
+			TrackerType:            coredata.TrackerTypeCookie,
+			MaxAgeSeconds:          maxAge,
+			CommonTrackerPatternID: &moved,
+		},
+		{
+			Pattern:                "draft_only",
+			TrackerType:            coredata.TrackerTypeCookie,
+			CommonTrackerPatternID: &hotjar,
+		},
+		{
+			Pattern:                "hidden",
+			TrackerType:            coredata.TrackerTypeCookie,
+			MaxAgeSeconds:          maxAge,
+			Excluded:               true,
+			CommonTrackerPatternID: &hotjar,
+		},
+		{
+			Pattern:                "ext_key",
+			TrackerType:            coredata.TrackerTypeCookie,
+			Source:                 &extension,
+			CommonTrackerPatternID: &extensionVendor,
+		},
+	}
+
+	ids := commonPatternIDsForSnapshotTrackers(patterns, snapshot)
+
+	assert.Equal(t, []gid.GID{google, meta, moved}, ids)
+}
+
+func gidWithSuffix(suffix byte) gid.GID {
+	var id gid.GID
+
+	id[len(id)-1] = suffix
+
+	return id
+}

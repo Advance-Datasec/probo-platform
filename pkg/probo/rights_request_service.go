@@ -1,29 +1,39 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"go.gearno.de/kit/pg"
+	"go.gearno.de/x/ref"
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/page"
 	"go.probo.inc/probo/pkg/validator"
+	"go.probo.inc/probo/pkg/webhook"
+	webhooktypes "go.probo.inc/probo/pkg/webhook/types"
 )
 
 type RightsRequestService struct {
@@ -105,6 +115,31 @@ func (s RightsRequestService) Get(
 	return request, nil
 }
 
+func (s RightsRequestService) GetByIDs(
+	ctx context.Context,
+	scope coredata.Scoper,
+	rightsRequestIDs ...gid.GID,
+) (coredata.RightsRequests, error) {
+	var rightsRequests coredata.RightsRequests
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := rightsRequests.LoadByIDs(ctx, conn, scope, rightsRequestIDs); err != nil &&
+				!errors.Is(err, coredata.ErrResourceNotFound) {
+				return fmt.Errorf("cannot load rights requests by ids: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return rightsRequests, nil
+}
+
 func (s *RightsRequestService) Create(
 	ctx context.Context, scope coredata.Scoper,
 	req *CreateRightsRequestRequest,
@@ -141,6 +176,28 @@ func (s *RightsRequestService) Create(
 				return fmt.Errorf("cannot insert rights request: %w", err)
 			}
 
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				request.ID,
+				request.OrganizationID,
+				ref.UnrefOrZero(request.DataSubject),
+				request.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
+			if err := webhook.InsertData(
+				ctx,
+				conn,
+				scope,
+				request.OrganizationID,
+				coredata.WebhookEventTypeRightRequestCreated,
+				webhooktypes.NewRightsRequest(request),
+			); err != nil {
+				return fmt.Errorf("cannot insert webhook event: %w", err)
+			}
+
 			return nil
 		},
 	)
@@ -167,6 +224,8 @@ func (s *RightsRequestService) Update(
 			if err := request.LoadByID(ctx, conn, scope, req.ID); err != nil {
 				return fmt.Errorf("cannot load rights request: %w", err)
 			}
+
+			previousRequest := webhooktypes.NewRightsRequest(request)
 
 			if req.RequestType != nil {
 				request.RequestType = *req.RequestType
@@ -202,6 +261,29 @@ func (s *RightsRequestService) Update(
 				return fmt.Errorf("cannot update rights request: %w", err)
 			}
 
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				request.ID,
+				request.OrganizationID,
+				ref.UnrefOrZero(request.DataSubject),
+				request.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
+			if err := webhook.InsertUpdateData(
+				ctx,
+				conn,
+				scope,
+				request.OrganizationID,
+				coredata.WebhookEventTypeRightRequestUpdated,
+				webhooktypes.NewRightsRequest(request),
+				previousRequest,
+			); err != nil {
+				return fmt.Errorf("cannot insert webhook event: %w", err)
+			}
+
 			return nil
 		},
 	)
@@ -222,6 +304,21 @@ func (s *RightsRequestService) Delete(
 			request := &coredata.RightsRequest{}
 			if err := request.LoadByID(ctx, conn, scope, rightsRequestID); err != nil {
 				return fmt.Errorf("cannot load rights request: %w", err)
+			}
+
+			if err := webhook.InsertData(
+				ctx,
+				conn,
+				scope,
+				request.OrganizationID,
+				coredata.WebhookEventTypeRightRequestDeleted,
+				webhooktypes.NewRightsRequest(request),
+			); err != nil {
+				return fmt.Errorf("cannot insert webhook event: %w", err)
+			}
+
+			if err := coredata.DeleteSearchResource(ctx, conn, request.ID); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
 			}
 
 			if err := request.Delete(ctx, conn, scope); err != nil {

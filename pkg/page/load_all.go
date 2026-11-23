@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package page
 
@@ -21,14 +27,50 @@ import (
 
 // MaxLoadAllPages caps how many pages LoadAll walks, bounding a single
 // call to MaxLoadAllPages*MaxCursorSize rows. Past that, LoadAll errors
-// rather than materialising an unbounded set.
+// rather than materialising an unbounded set. WalkAll is uncapped: it
+// streams page-by-page and is meant for callers that can process rows
+// without holding the full set in memory.
 const MaxLoadAllPages = 20
 
 // Loader runs one paginated query for the given cursor and returns the
-// rows it loaded. Callers bind the connection, scope, parent key and
-// filter in a closure, exposing only ctx and cursor (typically a coredata
-// LoadBy* on a fresh receiver).
-type Loader[T Paginable[U], U OrderField] func(ctx context.Context, cursor *Cursor[U]) ([]T, error)
+// rows it loaded. S may be []T or a coredata collection type with underlying
+// type []T (e.g. AuditLogEntries). Callers bind the connection, scope, parent
+// key and filter in a closure, exposing only ctx and cursor (typically a
+// coredata LoadBy* on a fresh receiver).
+type Loader[T Paginable[U], U OrderField, S ~[]T] func(ctx context.Context, cursor *Cursor[U]) (S, error)
+
+// WalkAll walks every matching row via keyset pagination, advancing a
+// MaxCursorSize forward cursor until no rows remain, and invokes walk with
+// every page of rows. Unlike LoadAll, it does not apply MaxLoadAllPages.
+func WalkAll[T Paginable[U], U OrderField, S ~[]T](
+	ctx context.Context,
+	orderBy OrderBy[U],
+	fetch Loader[T, U, S],
+	walk func(rows S) error,
+) error {
+	var key *CursorKey
+
+	for {
+		cursor := NewCursor(MaxCursorSize, key, Head, orderBy)
+
+		rows, err := fetch(ctx, cursor)
+		if err != nil {
+			return fmt.Errorf("cannot load all rows: %w", err)
+		}
+
+		p := NewPage([]T(rows), cursor)
+		if err := walk(S(p.Data)); err != nil {
+			return err
+		}
+
+		if !p.Info.HasNext {
+			return nil
+		}
+
+		k := p.Last().CursorKey(orderBy.Field)
+		key = &k
+	}
+}
 
 // LoadAll walks every matching row via keyset pagination, advancing a
 // MaxCursorSize forward cursor until no rows remain, and returns them
@@ -37,39 +79,37 @@ type Loader[T Paginable[U], U OrderField] func(ctx context.Context, cursor *Curs
 func LoadAll[T Paginable[U], U OrderField](
 	ctx context.Context,
 	orderBy OrderBy[U],
-	fetch Loader[T, U],
+	fetch Loader[T, U, []T],
 ) ([]T, error) {
 	var (
-		all []T
-		key *CursorKey
+		all   []T
+		pages int
 	)
 
-	for page := 0; ; page++ {
-		if page >= MaxLoadAllPages {
-			return nil, fmt.Errorf(
-				"cannot load all rows: result set exceeds %d rows (%d pages of %d)",
-				MaxLoadAllPages*MaxCursorSize,
-				MaxLoadAllPages,
-				MaxCursorSize,
-			)
-		}
+	err := WalkAll(
+		ctx,
+		orderBy,
+		func(ctx context.Context, cursor *Cursor[U]) ([]T, error) {
+			if pages >= MaxLoadAllPages {
+				return nil, fmt.Errorf(
+					"cannot load all rows: result set exceeds %d rows (%d pages of %d)",
+					MaxLoadAllPages*MaxCursorSize,
+					MaxLoadAllPages,
+					MaxCursorSize,
+				)
+			}
 
-		cursor := NewCursor(MaxCursorSize, key, Head, orderBy)
+			pages++
 
-		rows, err := fetch(ctx, cursor)
-		if err != nil {
-			return nil, fmt.Errorf("cannot load all rows: %w", err)
-		}
-
-		p := NewPage(rows, cursor)
-		all = append(all, p.Data...)
-
-		if !p.Info.HasNext {
-			break
-		}
-
-		k := p.Last().CursorKey(orderBy.Field)
-		key = &k
+			return fetch(ctx, cursor)
+		},
+		func(rows []T) error {
+			all = append(all, rows...)
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	return all, nil

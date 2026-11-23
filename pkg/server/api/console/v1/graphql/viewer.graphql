@@ -8,6 +8,7 @@ type Viewer {
         last: Int
         before: CursorKey
         orderBy: DocumentOrder
+        filter: EmployeeDocumentFilter
     ): EmployeeDocumentConnection! @goField(forceResolver: true)
 
     signableDocument(id: ID!): EmployeeDocument @goField(forceResolver: true)
@@ -19,7 +20,40 @@ type Viewer {
         last: Int
         before: CursorKey
         orderBy: DocumentOrder
+        filter: EmployeeDocumentFilter
     ): EmployeeDocumentConnection! @goField(forceResolver: true)
 
     approvableDocument(id: ID!): EmployeeDocument @goField(forceResolver: true)
+
+    enrolledDevices(
+        organizationId: ID!
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: DeviceOrder
+    ): EmployeeDeviceConnection! @goField(forceResolver: true)
+
+    assignedTasks(
+        organizationId: ID!
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: TaskOrder
+        filter: TaskFilter
+    ): TaskConnection! @goField(forceResolver: true)
+
+    # Own-device read for self-enrollment status polling before org assumption.
+    enrolledDevice(id: ID!): Device @goField(forceResolver: true)
+
+    probotIdentityBindings: [ProbotIdentityBinding!]!
+        @goField(forceResolver: true)
+
+    notifications(
+        organizationId: ID!
+        first: Int
+        after: CursorKey
+        filter: NotificationFilter
+    ): NotificationConnection! @goField(forceResolver: true)
 }

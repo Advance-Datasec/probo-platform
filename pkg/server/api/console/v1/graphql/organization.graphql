@@ -9,9 +9,29 @@ type OrganizationContext {
 
 enum ProfileState
   @goModel(model: "go.probo.inc/probo/pkg/coredata.ProfileState") {
+  PENDING @goEnum(value: "go.probo.inc/probo/pkg/coredata.ProfileStatePending")
   ACTIVE @goEnum(value: "go.probo.inc/probo/pkg/coredata.ProfileStateActive")
-  INACTIVE
-    @goEnum(value: "go.probo.inc/probo/pkg/coredata.ProfileStateInactive")
+  DEACTIVATED
+    @goEnum(value: "go.probo.inc/probo/pkg/coredata.ProfileStateDeactivated")
+}
+
+enum MembershipRole
+  @goModel(model: "go.probo.inc/probo/pkg/coredata.MembershipRole") {
+  OWNER @goEnum(value: "go.probo.inc/probo/pkg/coredata.MembershipRoleOwner")
+  ADMIN @goEnum(value: "go.probo.inc/probo/pkg/coredata.MembershipRoleAdmin")
+  EMPLOYEE
+    @goEnum(value: "go.probo.inc/probo/pkg/coredata.MembershipRoleEmployee")
+  VIEWER @goEnum(value: "go.probo.inc/probo/pkg/coredata.MembershipRoleViewer")
+  AUDITOR
+    @goEnum(value: "go.probo.inc/probo/pkg/coredata.MembershipRoleAuditor")
+  COMPLIANCE_PORTAL_MANAGER
+    @goEnum(
+      value: "go.probo.inc/probo/pkg/coredata.MembershipRoleCompliancePortalManager"
+    )
+  COMPLIANCE_PORTAL_ACCESS_MANAGER
+    @goEnum(
+      value: "go.probo.inc/probo/pkg/coredata.MembershipRoleCompliancePortalAccessManager"
+    )
 }
 
 type Profile implements Node {
@@ -22,8 +42,8 @@ type Profile implements Node {
     additionalEmailAddresses: [EmailAddr!]!
     kind: String
     position: String
-    contractStartDate: Datetime
-    contractEndDate: Datetime
+    contract: Period
+    avatar: File @goField(forceResolver: true)
     createdAt: Datetime!
     updatedAt: Datetime!
 
@@ -57,7 +77,10 @@ input ProfileOrder
 
 input ProfileFilter {
     contractEnded: Boolean
-    state: ProfileState
+    states: [ProfileState!]
+    query: String
+    role: MembershipRole
+    kind: String
 }
 
 type ProfileConnection
@@ -90,13 +113,10 @@ type UpdateOrganizationContextPayload {
 type Organization implements Node {
     id: ID!
     name: String!
+    legalName: String
     logo: File @goField(forceResolver: true)
     horizontalLogo: File @goField(forceResolver: true)
 
-    description: String
-    websiteUrl: String
-    email: String
-    headquarterAddress: String
     context: OrganizationContext @goField(forceResolver: true)
 
     profiles(
@@ -108,7 +128,7 @@ type Organization implements Node {
         filter: ProfileFilter
     ): ProfileConnection! @goField(forceResolver: true)
 
-    measureCategories: [String!]! @goField(forceResolver: true)
+    internalControlCategories: [String!]! @goField(forceResolver: true)
 
     accessReviewSources(
         first: Int
@@ -180,8 +200,37 @@ type Organization implements Node {
         last: Int
         before: CursorKey
     ): SlackConnectionConnection! @goField(forceResolver: true)
-    slackOAuth2Scopes: [String!]! @goField(forceResolver: true)
     connectors(filter: ConnectorFilter): [Connector!]! @goField(forceResolver: true)
+    linearTeams(first: Int, after: String, query: String): LinearTeamConnection!
+        @goField(forceResolver: true)
+    linearSettings: LinearSettings! @goField(forceResolver: true)
+    linearIssues(
+        teamId: String!
+        first: Int
+        after: String
+        query: String
+    ): LinearIssueConnection! @goField(forceResolver: true)
+    asanaTeams(first: Int, after: String, query: String): AsanaTeamConnection!
+        @goField(forceResolver: true)
+    asanaProjects(
+        teamId: String
+        first: Int
+        after: String
+        query: String
+    ): AsanaProjectConnection! @goField(forceResolver: true)
+    asanaTasks(
+        projectId: String!
+        first: Int
+        after: String
+        query: String
+    ): AsanaTaskConnection! @goField(forceResolver: true)
+    asanaProjectSetup(projectId: String!): AsanaProjectSetup
+        @goField(forceResolver: true)
+    asanaSettings: AsanaSettings! @goField(forceResolver: true)
+    slackbotAvailable: Boolean! @goField(forceResolver: true)
+    slackbotInstallation: SlackbotInstallation @goField(forceResolver: true)
+    slackbotChannels(cursor: String): SlackbotChannelPage!
+        @goField(forceResolver: true)
 
     controls(
         first: Int
@@ -238,14 +287,14 @@ type Organization implements Node {
         orderBy: FrameworkOrder
     ): FrameworkConnection! @goField(forceResolver: true)
 
-    measures(
+    internalControls(
         first: Int
         after: CursorKey
         last: Int
         before: CursorKey
-        orderBy: MeasureOrder
-        filter: MeasureFilter
-    ): MeasureConnection! @goField(forceResolver: true)
+        orderBy: InternalControlOrder
+        filter: InternalControlFilter
+    ): InternalControlConnection! @goField(forceResolver: true)
 
     obligationsDocument: Document @goField(forceResolver: true)
 
@@ -256,6 +305,28 @@ type Organization implements Node {
         before: CursorKey
         orderBy: ObligationOrder
     ): ObligationConnection! @goField(forceResolver: true)
+
+    businessFunctionsDocument: Document @goField(forceResolver: true)
+
+    businessFunctions(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: BusinessFunctionOrder
+        filter: BusinessFunctionFilter
+    ): BusinessFunctionConnection! @goField(forceResolver: true)
+
+    aiSystemsDocument: Document @goField(forceResolver: true)
+
+    aiSystems(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: AiSystemOrder
+        filter: AiSystemFilter
+    ): AiSystemConnection! @goField(forceResolver: true)
 
     processingActivities(
         first: Int
@@ -286,21 +357,30 @@ type Organization implements Node {
 
     risksDocument: Document @goField(forceResolver: true)
 
-    riskAssessments(
+    riskAnalyses(
         first: Int
         after: CursorKey
         last: Int
         before: CursorKey
-        orderBy: RiskAssessmentOrder
-    ): RiskAssessmentConnection! @goField(forceResolver: true)
+        orderBy: RiskAnalysisOrder
+    ): RiskAnalysisConnection! @goField(forceResolver: true)
 
-    riskAssessmentScenarios(
+    treatmentPlans(
         first: Int
         after: CursorKey
         last: Int
         before: CursorKey
-        orderBy: RiskAssessmentScenarioOrder
-    ): RiskAssessmentScenarioConnection @goField(forceResolver: true)
+        orderBy: TreatmentPlanOrder
+        filter: TreatmentPlanFilter
+    ): TreatmentPlanConnection! @goField(forceResolver: true)
+
+    riskAnalysisScenarios(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: RiskAnalysisScenarioOrder
+    ): RiskAnalysisScenarioConnection @goField(forceResolver: true)
 
     tasks(
         first: Int
@@ -308,25 +388,32 @@ type Organization implements Node {
         last: Int
         before: CursorKey
         orderBy: TaskOrder
+        filter: TaskFilter
     ): TaskConnection! @goField(forceResolver: true)
 
-    agentRuns(
+    agentExecutions(
         first: Int
         after: CursorKey
         last: Int
         before: CursorKey
-        orderBy: AgentRunOrder
-    ): AgentRunConnection! @goField(forceResolver: true)
+        orderBy: AgentExecutionOrder
+    ): AgentExecutionConnection! @goField(forceResolver: true)
 
-    trustCenter: TrustCenter @goField(forceResolver: true)
-    customDomain: CustomDomain @goField(forceResolver: true)
-    trustCenterFiles(
+    compliancePortals(
         first: Int
         after: CursorKey
         last: Int
         before: CursorKey
-        orderBy: TrustCenterFileOrder
-    ): TrustCenterFileConnection! @goField(forceResolver: true)
+        orderBy: CompliancePortalOrder
+    ): CompliancePortalConnection! @goField(forceResolver: true)
+
+    employeePortals(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: EmployeePortalOrder
+    ): EmployeePortalConnection @goField(forceResolver: true)
 
     cookieBanners(
         first: Int
@@ -346,6 +433,17 @@ type Organization implements Node {
     ): ThirdPartyConnection! @goField(forceResolver: true)
 
     thirdPartiesDocument: Document @goField(forceResolver: true)
+
+    deviceAgentVersions: [String!]! @goField(forceResolver: true)
+
+    devices(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: DeviceOrder
+        filter: DeviceFilter
+    ): DeviceConnection! @goField(forceResolver: true)
 
     webhookSubscriptions(
         first: Int

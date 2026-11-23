@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package oauth2
 
@@ -20,7 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"sync/atomic"
+	"slices"
 	"time"
 
 	"go.gearno.de/kit/log"
@@ -48,6 +54,11 @@ const (
 	tokenTypeBearer           = "Bearer"
 	oauthGrantAccessTokenName = "OAuth grant"
 
+	// CreateManualAccessToken only. Grant-flow tokens use accessTokenDuration.
+	manualAccessTokenMaxLifetime = 180 * 24 * time.Hour
+	// A client clock a few minutes fast can still request the maximum.
+	manualAccessTokenExpirySkew = 5 * time.Minute
+
 	// userCodeAlphabet excludes ambiguous characters: 0/O, 1/I/L.
 	userCodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 )
@@ -55,14 +66,12 @@ const (
 type (
 	Service struct {
 		pg                        *pg.Client
-		signingKeys               SigningKeys
-		activeSigningIdx          []int
-		rrCounter                 atomic.Uint64
+		keyRing                   *jose.KeyRing
 		baseURL                   uri.URI
 		logger                    *log.Logger
 		gc                        *GarbageCollector
 		cimd                      *cimdFetcher
-		cimdAllowedClientIDs      []string
+		cimdAllow                 CIMDAllowFunc
 		registry                  *oauth2scope.Registry
 		accessTokenDuration       time.Duration
 		refreshTokenDuration      time.Duration
@@ -78,6 +87,7 @@ type (
 		ResponseType        coredata.OAuth2ResponseType
 		ClientIDRaw         string
 		RedirectURI         string
+		Resources           []string
 		Scopes              coredata.OAuth2Scopes
 		CodeChallenge       string
 		CodeChallengeMethod coredata.OAuth2CodeChallengeMethod
@@ -116,11 +126,13 @@ type (
 		RefreshToken string
 		IDToken      string
 		Scope        string
+		ClientID     gid.GID
 	}
 
 	IntrospectResult struct {
 		ClientID   gid.GID
 		IdentityID gid.GID
+		Resources  []uri.URI
 		Scopes     coredata.OAuth2Scopes
 		IssuedAt   time.Time
 		ExpiresAt  time.Time
@@ -165,31 +177,26 @@ func WithRegistry(registry *oauth2scope.Registry) Option {
 	}
 }
 
-func WithCIMDAllowedClientIDs(clientIDs []string) Option {
+func WithCIMDAllow(fn CIMDAllowFunc) Option {
 	return func(s *Service) {
-		s.cimdAllowedClientIDs = clientIDs
+		s.cimdAllow = fn
 	}
+}
+
+func (s *Service) SetCIMDAllow(fn CIMDAllowFunc) {
+	s.cimdAllow = fn
 }
 
 func NewService(
 	pgClient *pg.Client,
-	signingKeys SigningKeys,
+	keyRing *jose.KeyRing,
 	baseURL uri.URI,
 	logger *log.Logger,
 	opts ...Option,
 ) *Service {
-	var activeIdx []int
-
-	for i, k := range signingKeys {
-		if k.Active {
-			activeIdx = append(activeIdx, i)
-		}
-	}
-
 	s := &Service{
 		pg:                        pgClient,
-		signingKeys:               signingKeys,
-		activeSigningIdx:          activeIdx,
+		keyRing:                   keyRing,
 		baseURL:                   baseURL,
 		logger:                    logger,
 		accessTokenDuration:       1 * time.Hour,
@@ -208,32 +215,18 @@ func NewService(
 	return s
 }
 
-// signingKey returns the next active signing key using round-robin.
-func (s *Service) signingKey() *SigningKey {
-	n := s.rrCounter.Add(1)
-	idx := s.activeSigningIdx[n%uint64(len(s.activeSigningIdx))]
-
-	return &s.signingKeys[idx]
-}
-
 func (s *Service) Run(ctx context.Context) error {
 	return s.gc.Run(ctx)
 }
 
 // JWKS returns the public key set.
 func (s *Service) JWKS() *jose.JWKS {
-	jwks := &jose.JWKS{
-		Keys: make([]jose.JWK, 0, len(s.signingKeys)),
-	}
+	return s.keyRing.JWKS()
+}
 
-	for _, sk := range s.signingKeys {
-		jwks.Keys = append(
-			jwks.Keys,
-			jose.RSAPublicKeyToJWK(&sk.PrivateKey.PublicKey, sk.KID),
-		)
-	}
-
-	return jwks
+// Issuer returns the OAuth2 issuer URI embedded in ID tokens.
+func (s *Service) Issuer() uri.URI {
+	return s.baseURL
 }
 
 func (s *Service) CreateAccessToken(
@@ -251,6 +244,7 @@ func (s *Service) CreateAccessToken(
 		HashedValue: hash.SHA256String(tokenValue),
 		ClientID:    new(clientID),
 		IdentityID:  identityID,
+		Resources:   []uri.URI{s.baseURL},
 		Scopes:      scopes,
 		CreatedAt:   now,
 		ExpiresAt:   now.Add(s.accessTokenDuration),
@@ -297,9 +291,22 @@ func (s *Service) GetClientByID(ctx context.Context, clientID gid.GID) (*coredat
 
 func (s *Service) ExchangeAuthorizationCode(
 	ctx context.Context,
-	client *coredata.OAuth2Client,
-	codeValue, redirectURI, codeVerifier string,
+	clientIDRaw string,
+	codeValue string,
+	redirectURI string,
+	resources []string,
+	codeVerifier string,
 ) (*TokenResult, error) {
+	client, err := s.resolveClient(ctx, nil, clientIDRaw)
+	if err != nil {
+		return nil, err
+	}
+
+	requestedResources, err := s.requestedResources(resources)
+	if err != nil {
+		return nil, err
+	}
+
 	var (
 		code                 = coredata.OAuth2AuthorizationCode{}
 		identity             = coredata.Identity{}
@@ -362,6 +369,20 @@ func (s *Service) ExchangeAuthorizationCode(
 				)
 			}
 
+			if len(requestedResources) == 0 {
+				requestedResources = slices.Clone(code.Resources)
+			}
+
+			if err := validateAuthorizationCodeExchange(
+				&code,
+				now,
+				redirectURI,
+				requestedResources,
+				codeVerifier,
+			); err != nil {
+				return err
+			}
+
 			if err := identity.LoadByID(ctx, tx, code.IdentityID); err != nil {
 				return fmt.Errorf("cannot load identity: %w", err)
 			}
@@ -376,56 +397,24 @@ func (s *Service) ExchangeAuthorizationCode(
 		return nil, err
 	}
 
-	if now.After(code.ExpiresAt) {
-		return nil, NewError(
-			ErrInvalidGrant,
-			WithDescription("authorization code expired"),
-		)
-	}
-
-	if code.RedirectURI.String() != redirectURI {
-		return nil, NewError(
-			ErrInvalidRedirectURI,
-			WithDescription("redirect_uri mismatch"),
-		)
-	}
-
-	if code.CodeChallenge != nil {
-		if codeVerifier == "" {
-			return nil, NewError(
-				ErrInvalidRequest,
-				WithDescription("code_verifier required"),
-			)
-		}
-
-		if !ValidateCodeChallenge(codeVerifier, *code.CodeChallenge, *code.CodeChallengeMethod) {
-			return nil, NewError(
-				ErrInvalidRequest,
-				WithDescription("invalid code_verifier"),
-			)
-		}
-	}
-
 	if code.Scopes.Contains(ScopeOpenID) {
-		var (
-			idTokenClaims = NewIDTokenClaims(
-				s.baseURL,
-				code.IdentityID,
-				client.ID,
-				code.AuthTime,
-				code.Scopes,
-				ref.UnrefOrZero(code.Nonce),
-				accessTokenValue,
-				identity.EmailAddress.String(),
-				identity.EmailAddressVerified,
-				identity.FullName,
-				s.accessTokenDuration,
-			)
-			sk  = s.signingKey()
-			err error
+		idTokenClaims := NewIDTokenClaims(
+			s.baseURL,
+			code.IdentityID,
+			client.ID,
+			code.AuthTime,
+			code.Scopes,
+			ref.UnrefOrZero(code.Nonce),
+			accessTokenValue,
+			identity.EmailAddress.String(),
+			identity.EmailAddressVerified,
+			identity.FullName,
+			s.accessTokenDuration,
 		)
 
-		idToken, err = jose.SignJWT(sk.PrivateKey, sk.KID, idTokenClaims)
+		var err error
+
+		idToken, err = s.keyRing.Sign(idTokenClaims)
 		if err != nil {
 			return nil, fmt.Errorf("cannot sign id token: %w", err)
 		}
@@ -440,6 +429,7 @@ func (s *Service) ExchangeAuthorizationCode(
 				HashedValue: hash.SHA256String(accessTokenValue),
 				ClientID:    new(client.ID),
 				IdentityID:  code.IdentityID,
+				Resources:   requestedResources,
 				Scopes:      code.Scopes,
 				CreatedAt:   now,
 				ExpiresAt:   accessTokenExpiresAt,
@@ -457,6 +447,7 @@ func (s *Service) ExchangeAuthorizationCode(
 					HashedValue:   hash.SHA256String(refreshTokenValue),
 					ClientID:      client.ID,
 					IdentityID:    code.IdentityID,
+					Resources:     code.Resources,
 					Scopes:        code.Scopes,
 					AccessTokenID: accessToken.ID,
 					CreatedAt:     now,
@@ -481,6 +472,7 @@ func (s *Service) ExchangeAuthorizationCode(
 		RefreshToken: refreshTokenValue,
 		Scope:        code.Scopes.String(),
 		IDToken:      idToken,
+		ClientID:     client.ID,
 	}, nil
 }
 
@@ -488,7 +480,13 @@ func (s *Service) RefreshToken(
 	ctx context.Context,
 	client *coredata.OAuth2Client,
 	refreshTokenValue string,
+	resources []string,
 ) (*TokenResult, error) {
+	requestedResources, err := s.requestedResources(resources)
+	if err != nil {
+		return nil, err
+	}
+
 	var (
 		accessTokenValue     = rand.MustHexString(tokenByteLength)
 		refreshTokenValueNew = rand.MustHexString(refreshTokenByteLength)
@@ -583,26 +581,35 @@ func (s *Service) RefreshToken(
 		)
 	}
 
+	if len(requestedResources) == 0 {
+		requestedResources = slices.Clone(previousRefreshToken.Resources)
+	}
+
+	if !resourcesSubset(requestedResources, previousRefreshToken.Resources) {
+		return nil, NewError(
+			ErrInvalidTarget,
+			WithDescription("resource does not match refresh token"),
+		)
+	}
+
 	if previousRefreshToken.Scopes.Contains(ScopeOpenID) {
-		var (
-			claims = NewIDTokenClaims(
-				s.baseURL,
-				previousRefreshToken.IdentityID,
-				client.ID,
-				time.Now(),
-				previousRefreshToken.Scopes,
-				"",
-				accessTokenValue,
-				identity.EmailAddress.String(),
-				identity.EmailAddressVerified,
-				identity.FullName,
-				s.accessTokenDuration,
-			)
-			sk  = s.signingKey()
-			err error
+		claims := NewIDTokenClaims(
+			s.baseURL,
+			previousRefreshToken.IdentityID,
+			client.ID,
+			time.Now(),
+			previousRefreshToken.Scopes,
+			"",
+			accessTokenValue,
+			identity.EmailAddress.String(),
+			identity.EmailAddressVerified,
+			identity.FullName,
+			s.accessTokenDuration,
 		)
 
-		idToken, err = jose.SignJWT(sk.PrivateKey, sk.KID, claims)
+		var err error
+
+		idToken, err = s.keyRing.Sign(claims)
 		if err != nil {
 			return nil, fmt.Errorf("cannot sign id token: %w", err)
 		}
@@ -611,8 +618,22 @@ func (s *Service) RefreshToken(
 	if err := s.pg.WithTx(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
-			if err := previousRefreshToken.Revoke(ctx, tx, now); err != nil {
+			// Password reset locks the identity row, then revokes refresh tokens.
+			// Take that lock first so its revoke starts after this transaction
+			// commits and sees any pair inserted below.
+			if err := identity.LoadByIDForUpdate(ctx, tx, previousRefreshToken.IdentityID); err != nil {
+				return fmt.Errorf("cannot lock identity: %w", err)
+			}
+
+			// Revoke updates a row only while revoked_at is null. Zero rows
+			// means password reset or another refresh already revoked it.
+			revoked, err := previousRefreshToken.Revoke(ctx, tx, now)
+			if err != nil {
 				return fmt.Errorf("cannot revoke previous refresh token: %w", err)
+			}
+
+			if revoked == 0 {
+				return fmt.Errorf("refresh token already revoked")
 			}
 
 			// Attempt to delete the previous (legacy) access token.
@@ -634,6 +655,7 @@ func (s *Service) RefreshToken(
 				HashedValue: hash.SHA256String(accessTokenValue),
 				ClientID:    new(client.ID),
 				IdentityID:  previousRefreshToken.IdentityID,
+				Resources:   requestedResources,
 				Scopes:      previousRefreshToken.Scopes,
 				CreatedAt:   now,
 				ExpiresAt:   accessTokenExpiresAt,
@@ -647,6 +669,7 @@ func (s *Service) RefreshToken(
 				HashedValue:   hash.SHA256String(refreshTokenValueNew),
 				ClientID:      client.ID,
 				IdentityID:    previousRefreshToken.IdentityID,
+				Resources:     previousRefreshToken.Resources,
 				Scopes:        previousRefreshToken.Scopes,
 				AccessTokenID: accessToken.ID,
 				CreatedAt:     now,
@@ -669,6 +692,7 @@ func (s *Service) RefreshToken(
 		RefreshToken: refreshTokenValueNew,
 		Scope:        previousRefreshToken.Scopes.String(),
 		IDToken:      idToken,
+		ClientID:     client.ID,
 	}, nil
 }
 
@@ -871,25 +895,21 @@ func (s *Service) PollDeviceCode(
 	)
 
 	if deviceCode.Scopes.Contains(ScopeOpenID) {
-		var (
-			claims = NewIDTokenClaims(
-				s.baseURL,
-				*deviceCode.IdentityID,
-				clientID,
-				now,
-				deviceCode.Scopes,
-				"",
-				accessTokenValue,
-				identity.EmailAddress.String(),
-				identity.EmailAddressVerified,
-				identity.FullName,
-				s.accessTokenDuration,
-			)
-			sk  = s.signingKey()
-			err error
+		claims := NewIDTokenClaims(
+			s.baseURL,
+			*deviceCode.IdentityID,
+			clientID,
+			now,
+			deviceCode.Scopes,
+			"",
+			accessTokenValue,
+			identity.EmailAddress.String(),
+			identity.EmailAddressVerified,
+			identity.FullName,
+			s.accessTokenDuration,
 		)
 
-		idToken, err = jose.SignJWT(sk.PrivateKey, sk.KID, claims)
+		idToken, err = s.keyRing.Sign(claims)
 		if err != nil {
 			return nil, fmt.Errorf("cannot sign id token: %w", err)
 		}
@@ -904,6 +924,7 @@ func (s *Service) PollDeviceCode(
 				HashedValue: hash.SHA256String(accessTokenValue),
 				ClientID:    new(clientID),
 				IdentityID:  *deviceCode.IdentityID,
+				Resources:   []uri.URI{s.baseURL},
 				Scopes:      deviceCode.Scopes,
 				CreatedAt:   now,
 				ExpiresAt:   accessTokenExpiresAt,
@@ -920,6 +941,7 @@ func (s *Service) PollDeviceCode(
 					HashedValue:   hash.SHA256String(refreshTokenValue),
 					ClientID:      clientID,
 					IdentityID:    *deviceCode.IdentityID,
+					Resources:     []uri.URI{s.baseURL},
 					Scopes:        deviceCode.Scopes,
 					AccessTokenID: accessToken.ID,
 					CreatedAt:     now,
@@ -944,6 +966,7 @@ func (s *Service) PollDeviceCode(
 		RefreshToken: refreshTokenValue,
 		Scope:        deviceCode.Scopes.String(),
 		IDToken:      idToken,
+		ClientID:     client.ID,
 	}, nil
 }
 
@@ -990,6 +1013,10 @@ func (s *Service) AuthorizeDevice(
 				return fmt.Errorf("cannot load oauth2 client: %w", err)
 			}
 
+			if err := s.requirePrivateClientMembership(ctx, tx, &client, identityID); err != nil {
+				return err
+			}
+
 			// RFC 6819 §5.2.3.2 / §5.2.4.1: public clients must always
 			// require explicit user consent since they cannot be strongly
 			// authenticated.
@@ -1001,6 +1028,7 @@ func (s *Service) AuthorizeDevice(
 					identityID,
 					client.ID,
 					deviceCode.Scopes,
+					[]uri.URI{s.baseURL},
 				); err == nil {
 					deviceCode.Status = coredata.OAuth2DeviceCodeStatusAuthorized
 					deviceCode.IdentityID = &identityID
@@ -1020,6 +1048,7 @@ func (s *Service) AuthorizeDevice(
 				SessionID:    sessionID,
 				ClientID:     client.ID,
 				Scopes:       deviceCode.Scopes,
+				Resources:    []uri.URI{s.baseURL},
 				DeviceCodeID: &deviceCode.ID,
 				Approved:     false,
 				CreatedAt:    now,
@@ -1045,38 +1074,54 @@ func (s *Service) RegisterClient(
 	ctx context.Context,
 	req *RegisterClientRequest,
 ) (gid.GID, string, error) {
+	// Public skips the organization check, so dynamic registration cannot set it.
+	if req.Visibility != coredata.OAuth2ClientVisibilityPrivate {
+		return gid.Nil,
+			"",
+			NewError(
+				ErrInvalidRequest,
+				WithDescription("dynamically registered clients must be private"),
+			)
+	}
+
 	for _, u := range req.RedirectURIs {
 		parsed, _ := url.Parse(u.String())
 
-		switch req.Visibility {
-		case coredata.OAuth2ClientVisibilityPublic:
-			if parsed.Scheme != "https" {
+		if parsed.Scheme == "http" {
+			if !netx.IsLoopback(parsed.Hostname()) {
 				return gid.Nil,
 					"",
 					NewError(
 						ErrInvalidRequest,
-						WithDescription("public clients require https redirect_uris"),
+						WithDescription("http redirect_uris are only allowed for localhost"),
 					)
 			}
-		case coredata.OAuth2ClientVisibilityPrivate:
-			if parsed.Scheme == "http" {
-				if !netx.IsLoopback(parsed.Hostname()) {
-					return gid.Nil,
-						"",
-						NewError(
-							ErrInvalidRequest,
-							WithDescription("http redirect_uris are only allowed for localhost"),
-						)
-				}
-			} else if parsed.Scheme != "https" {
-				return gid.Nil,
-					"",
-					NewError(
-						ErrInvalidRequest,
-						WithDescription(fmt.Sprintf("unsupported redirect_uri scheme: %s", parsed.Scheme)),
-					)
-			}
+		} else if parsed.Scheme != "https" {
+			return gid.Nil,
+				"",
+				NewError(
+					ErrInvalidRequest,
+					WithDescription(fmt.Sprintf("unsupported redirect_uri scheme: %s", parsed.Scheme)),
+				)
 		}
+	}
+
+	if req.ClientURI != nil && !req.ClientURI.IsHTTP() {
+		return gid.Nil,
+			"",
+			NewError(
+				ErrInvalidRequest,
+				WithDescription("client_uri must be an absolute http or https URL"),
+			)
+	}
+
+	if req.LogoURI != nil && !req.LogoURI.IsHTTP() {
+		return gid.Nil,
+			"",
+			NewError(
+				ErrInvalidRequest,
+				WithDescription("logo_uri must be an absolute http or https URL"),
+			)
 	}
 
 	var (
@@ -1268,6 +1313,7 @@ func (s *Service) IntrospectToken(
 		return &IntrospectResult{
 			ClientID:   resultClientID,
 			IdentityID: accessToken.IdentityID,
+			Resources:  accessToken.Resources,
 			Scopes:     accessToken.Scopes,
 			IssuedAt:   accessToken.CreatedAt,
 			ExpiresAt:  accessToken.ExpiresAt,
@@ -1281,6 +1327,7 @@ func (s *Service) IntrospectToken(
 		return &IntrospectResult{
 			ClientID:   refreshToken.ClientID,
 			IdentityID: refreshToken.IdentityID,
+			Resources:  refreshToken.Resources,
 			Scopes:     refreshToken.Scopes,
 			IssuedAt:   refreshToken.CreatedAt,
 			ExpiresAt:  refreshToken.ExpiresAt,
@@ -1353,7 +1400,7 @@ func (s *Service) RevokeToken(
 
 				if err == nil {
 					now := time.Now()
-					if err := refreshToken.Revoke(ctx, tx, now); err != nil {
+					if _, err := refreshToken.Revoke(ctx, tx, now); err != nil {
 						return fmt.Errorf("cannot revoke refresh token: %w", err)
 					}
 
@@ -1407,7 +1454,7 @@ func (s *Service) RevokeToken(
 
 			if err == nil {
 				now := time.Now()
-				if err := refreshToken.Revoke(ctx, tx, now); err != nil {
+				if _, err := refreshToken.Revoke(ctx, tx, now); err != nil {
 					return fmt.Errorf("cannot revoke refresh token: %w", err)
 				}
 
@@ -1424,11 +1471,48 @@ func (s *Service) RevokeToken(
 	)
 }
 
+// requirePrivateClientMembership limits a private client to active members of
+// its organization. Public clients, such as the CLI and CIMD clients, have no
+// organization and stay reachable by any signed-in user.
+func (s *Service) requirePrivateClientMembership(
+	ctx context.Context,
+	conn pg.Querier,
+	client *coredata.OAuth2Client,
+	identityID gid.GID,
+) error {
+	if client.Visibility != coredata.OAuth2ClientVisibilityPrivate {
+		return nil
+	}
+
+	if client.OrganizationID == nil {
+		return fmt.Errorf("cannot authorize: private client has no organization")
+	}
+
+	var membership coredata.Membership
+	if err := membership.LoadActiveByIdentityIDAndOrganizationID(
+		ctx,
+		conn,
+		identityID,
+		*client.OrganizationID,
+	); err != nil {
+		if errors.Is(err, coredata.ErrResourceNotFound) {
+			return ErrUnauthorizedMember
+		}
+
+		return fmt.Errorf("cannot check membership: %w", err)
+	}
+
+	return nil
+}
+
 func (s *Service) Authorize(
 	ctx context.Context,
 	req *AuthorizeRequest,
-) (string, error) {
-	var code string
+) (string, bool, error) {
+	var (
+		code              string
+		redirectValidated bool
+	)
 
 	if err := s.pg.WithTx(
 		ctx,
@@ -1442,33 +1526,30 @@ func (s *Service) Authorize(
 				return ErrInvalidRedirectURI
 			}
 
-			if client.Visibility == coredata.OAuth2ClientVisibilityPrivate {
-				if client.OrganizationID == nil {
-					return fmt.Errorf("cannot authorize: private client has no organization")
-				}
+			redirectValidated = true
 
-				var membership coredata.Membership
-				if err := membership.LoadActiveByIdentityIDAndOrganizationID(
-					ctx,
-					tx,
-					req.IdentityID,
-					*client.OrganizationID,
-				); err != nil {
-					if errors.Is(err, coredata.ErrResourceNotFound) {
-						return ErrUnauthorizedMember
-					}
+			resources, err := s.protectedResources(req.Resources)
+			if err != nil {
+				return err
+			}
 
-					return fmt.Errorf("cannot check membership: %w", err)
-				}
+			if err := s.requirePrivateClientMembership(ctx, tx, client, req.IdentityID); err != nil {
+				return err
 			}
 
 			if req.ResponseType != coredata.OAuth2ResponseTypeCode {
-				return fmt.Errorf("cannot authorize: unsupported response_type")
+				return NewError(
+					ErrUnsupportedResponseType,
+					WithDescription("unsupported response_type"),
+				)
 			}
 
 			requestedScopes := req.Scopes.OrDefault(client.Scopes)
 			if !client.AreScopesAllowed(requestedScopes) {
-				return fmt.Errorf("cannot authorize: requested scope exceeds client registration")
+				return NewError(
+					ErrInvalidScope,
+					WithDescription("requested scope exceeds client registration"),
+				)
 			}
 
 			if requestedScopes.Contains(ScopeOfflineAccess) && !client.HasGrantType(coredata.OAuth2GrantTypeRefreshToken) {
@@ -1480,48 +1561,71 @@ func (s *Service) Authorize(
 
 			codeChallengeMethod := req.CodeChallengeMethod
 			if client.TokenEndpointAuthMethod == coredata.OAuth2ClientTokenEndpointAuthMethodNone && req.CodeChallenge == "" {
-				return fmt.Errorf("cannot authorize: code_challenge required for public clients")
+				return NewError(
+					ErrInvalidRequest,
+					WithDescription("code_challenge required for public clients"),
+				)
 			}
 
 			if codeChallengeMethod != "" && codeChallengeMethod != coredata.OAuth2CodeChallengeMethodS256 {
-				return fmt.Errorf("cannot authorize: only S256 code_challenge_method is supported")
+				return NewError(
+					ErrInvalidRequest,
+					WithDescription("only S256 code_challenge_method is supported"),
+				)
 			}
 
 			if req.CodeChallenge != "" && codeChallengeMethod == "" {
 				codeChallengeMethod = coredata.OAuth2CodeChallengeMethodS256
 			}
 
-			// RFC 6819 §5.2.3.2 / §5.2.4.1: public clients must always require
-			// explicit user consent since they cannot be strongly authenticated.
-			if client.TokenEndpointAuthMethod != coredata.OAuth2ClientTokenEndpointAuthMethodNone {
+			skipConsent := false
+
+			if client.TokenEndpointAuthMethod == coredata.OAuth2ClientTokenEndpointAuthMethodNone {
+				// RFC 6819 §5.2.3.2 / §5.2.4.1: public clients must always
+				// require explicit user consent since they cannot be strongly
+				// authenticated. The only exception is verified compliance
+				// portal CIMD clients requesting identity scopes only
+				// (openid/profile/email) — matching VisitorOAuthScope.
+				allowance, allowanceErr := s.cimdAllowance(ctx, client.ExternalClientID)
+				if allowanceErr != nil {
+					s.logger.WarnCtx(ctx, "cannot check cimd client allowance", log.Error(allowanceErr))
+				} else {
+					skipConsent = allowance.SkipsConsent() && IsIdentityOnlyScopes(requestedScopes)
+				}
+			} else {
 				var existingConsent coredata.OAuth2Consent
-				if err := existingConsent.LoadMatchingConsent(
+
+				skipConsent = existingConsent.LoadMatchingConsent(
 					ctx,
 					tx,
 					req.IdentityID,
 					client.ID,
 					requestedScopes,
-				); err == nil {
-					var err error
+					resources,
+				) == nil
+			}
 
-					code, err = s.issueAuthorizationCode(
-						ctx,
-						tx,
-						client,
-						req.IdentityID,
-						uri.URI(req.RedirectURI),
-						requestedScopes,
-						req.CodeChallenge,
-						codeChallengeMethod,
-						req.Nonce,
-						req.AuthTime,
-					)
-					if err != nil {
-						return fmt.Errorf("cannot issue authorization code: %w", err)
-					}
+			if skipConsent {
+				var err error
 
-					return nil
+				code, err = s.issueAuthorizationCode(
+					ctx,
+					tx,
+					client,
+					req.IdentityID,
+					uri.URI(req.RedirectURI),
+					resources,
+					requestedScopes,
+					req.CodeChallenge,
+					codeChallengeMethod,
+					req.Nonce,
+					req.AuthTime,
+				)
+				if err != nil {
+					return fmt.Errorf("cannot issue authorization code: %w", err)
 				}
+
+				return nil
 			}
 
 			now := time.Now()
@@ -1532,6 +1636,7 @@ func (s *Service) Authorize(
 				ClientID:            client.ID,
 				Scopes:              requestedScopes,
 				RedirectURI:         new(uri.URI(req.RedirectURI)),
+				Resources:           resources,
 				CodeChallenge:       req.CodeChallenge,
 				CodeChallengeMethod: codeChallengeMethod,
 				Nonce:               req.Nonce,
@@ -1555,13 +1660,13 @@ func (s *Service) Authorize(
 		},
 	); err != nil {
 		if _, ok := errors.AsType[*ConsentRequiredError](err); ok {
-			return "", err
+			return "", redirectValidated, err
 		}
 
-		return "", err
+		return "", redirectValidated, err
 	}
 
-	return code, nil
+	return code, redirectValidated, nil
 }
 
 func (s *Service) GetConsentByID(
@@ -1642,6 +1747,10 @@ func (s *Service) ApproveConsent(
 				return fmt.Errorf("cannot load client: %w", err)
 			}
 
+			if err := s.requirePrivateClientMembership(ctx, tx, &client, req.IdentityID); err != nil {
+				return err
+			}
+
 			isDeviceFlow := consent.DeviceCodeID != nil
 			redirectURI := string(ref.UnrefOrZero(consent.RedirectURI))
 
@@ -1708,6 +1817,7 @@ func (s *Service) ApproveConsent(
 				&client,
 				consent.IdentityID,
 				ref.UnrefOrZero(consent.RedirectURI),
+				consent.Resources,
 				consent.Scopes,
 				consent.CodeChallenge,
 				consent.CodeChallengeMethod,
@@ -1756,12 +1866,183 @@ func (s *Service) AuthenticateClient(
 	return client, nil
 }
 
+func (s *Service) protectedResources(values []string) ([]uri.URI, error) {
+	if len(values) == 0 {
+		values = []string{s.baseURL.String()}
+	}
+
+	return s.supportedResources(values)
+}
+
+func (s *Service) requestedResources(values []string) ([]uri.URI, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+
+	return s.supportedResources(values)
+}
+
+// MCPResource returns the MCP protected-resource identifier for base.
+// ChatGPT and other MCP clients send this as the OAuth resource parameter.
+func MCPResource(base uri.URI) (uri.URI, error) {
+	joined, err := url.JoinPath(base.String(), "api", "mcp", "v1")
+	if err != nil {
+		return "", fmt.Errorf("cannot build MCP resource: %w", err)
+	}
+
+	return uri.URI(joined), nil
+}
+
+func (s *Service) supportedResources(values []string) ([]uri.URI, error) {
+	mcpResource, err := MCPResource(s.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve MCP resource: %w", err)
+	}
+
+	supported := []uri.URI{s.baseURL, mcpResource}
+
+	resources := make([]uri.URI, 0, len(values))
+	for _, raw := range values {
+		if raw == "" {
+			return nil, NewError(
+				ErrInvalidTarget,
+				WithDescription("resource must not be empty"),
+			)
+		}
+
+		// RFC 3986 section 6.2.3: for http and https an empty path and "/"
+		// identify the same resource. A client that round-trips the advertised
+		// identifier through a URL library gets the "/" spelling back, so
+		// comparing raw bytes rejects a resource this server itself
+		// advertised. Match on the normalized form, but keep the configured
+		// spelling, so everything stored and compared downstream continues to
+		// use one vocabulary.
+		matched, ok := matchResource(supported, uri.URI(raw))
+		if !ok {
+			return nil, NewError(
+				ErrInvalidTarget,
+				WithDescription("unsupported resource"),
+			)
+		}
+
+		if !slices.Contains(resources, matched) {
+			resources = append(resources, matched)
+		}
+	}
+
+	return resources, nil
+}
+
+// matchResource reports which supported resource the requested one denotes,
+// comparing both under scheme-based normalization. The returned value is the
+// supported entry as configured, not the requested spelling.
+func matchResource(supported []uri.URI, requested uri.URI) (uri.URI, bool) {
+	normalized := normalizeResource(requested)
+
+	for _, entry := range supported {
+		if normalizeResource(entry) == normalized {
+			return entry, true
+		}
+	}
+
+	return "", false
+}
+
+// normalizeResource applies RFC 3986 section 6.2.3 scheme-based normalization
+// to a resource identifier: for an http(s) URI a bare "/" path is equivalent to
+// no path at all. Non-http(s) resources and a trailing slash on any longer
+// path are left alone, so this widens nothing beyond the http(s) root case.
+// Input that does not parse is returned unchanged, leaving the caller to
+// reject it.
+func normalizeResource(resource uri.URI) uri.URI {
+	if !resource.IsHTTP() {
+		return resource
+	}
+
+	parsed, err := url.Parse(resource.String())
+	if err != nil {
+		return resource
+	}
+
+	if parsed.Path != "/" {
+		return resource
+	}
+
+	parsed.Path = ""
+
+	return uri.URI(parsed.String())
+}
+
+func resourcesSubset(requested []uri.URI, allowed []uri.URI) bool {
+	if len(requested) == 0 || len(allowed) == 0 {
+		return false
+	}
+
+	for _, resource := range requested {
+		if !slices.Contains(allowed, resource) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func validateAuthorizationCodeExchange(
+	code *coredata.OAuth2AuthorizationCode,
+	now time.Time,
+	redirectURI string,
+	resources []uri.URI,
+	codeVerifier string,
+) error {
+	if now.After(code.ExpiresAt) {
+		return NewError(
+			ErrInvalidGrant,
+			WithDescription("authorization code expired"),
+		)
+	}
+
+	if code.RedirectURI.String() != redirectURI {
+		return NewError(
+			ErrInvalidRedirectURI,
+			WithDescription("redirect_uri mismatch"),
+		)
+	}
+
+	if !resourcesSubset(resources, code.Resources) {
+		return NewError(
+			ErrInvalidTarget,
+			WithDescription("resource does not match authorization request"),
+		)
+	}
+
+	if code.CodeChallenge == nil {
+		return nil
+	}
+
+	if codeVerifier == "" {
+		return NewError(
+			ErrInvalidRequest,
+			WithDescription("code_verifier required"),
+		)
+	}
+
+	if !ValidateCodeChallenge(codeVerifier, *code.CodeChallenge, *code.CodeChallengeMethod) {
+		return NewError(
+			ErrInvalidRequest,
+			WithDescription("invalid code_verifier"),
+		)
+	}
+
+	return nil
+}
+
 func (s *Service) issueAuthorizationCode(
 	ctx context.Context,
 	tx pg.Tx,
 	client *coredata.OAuth2Client,
 	identityID gid.GID,
 	redirectURI uri.URI,
+	resources []uri.URI,
 	scopes coredata.OAuth2Scopes,
 	codeChallenge string,
 	codeChallengeMethod coredata.OAuth2CodeChallengeMethod,
@@ -1777,6 +2058,7 @@ func (s *Service) issueAuthorizationCode(
 		ClientID:    client.ID,
 		IdentityID:  identityID,
 		RedirectURI: redirectURI,
+		Resources:   resources,
 		Scopes:      scopes,
 		AuthTime:    authTime,
 		CreatedAt:   now,
@@ -1909,6 +2191,18 @@ func (s *Service) CreateManualAccessToken(
 	now := time.Now()
 	if !req.ExpiresAt.After(now) {
 		return "", nil, NewError(ErrInvalidRequest, WithDescription("expires_at must be in the future"))
+	}
+
+	maxExpiresAt := now.Add(manualAccessTokenMaxLifetime + manualAccessTokenExpirySkew)
+	if req.ExpiresAt.After(maxExpiresAt) {
+		days := int(manualAccessTokenMaxLifetime / (24 * time.Hour))
+
+		return "", nil, NewError(
+			ErrInvalidRequest,
+			WithDescription(
+				fmt.Sprintf("expires_at must not be more than %d days in the future", days),
+			),
+		)
 	}
 
 	if len(req.Scopes) == 0 {

@@ -1,19 +1,24 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   Breadcrumb,
   Button,
@@ -24,16 +29,17 @@ import {
   ImpactOptions,
   SentitivityOptions,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation } from "react-relay";
 import { graphql } from "relay-runtime";
-import { z } from "zod";
 
 import type { CreateRiskAssessmentDialogMutation } from "#/__generated__/core/CreateRiskAssessmentDialogMutation.graphql";
 import { ControlledField } from "#/components/form/ControlledField";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
+import { z } from "#/lib/zod";
 
 type Props = {
   children: ReactNode;
@@ -70,7 +76,7 @@ export function CreateRiskAssessmentDialog({
   connection,
   thirdPartyId,
 }: Props) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   const { register, handleSubmit, formState, reset, control }
     = useFormWithSchema(schema, {
@@ -79,7 +85,7 @@ export function CreateRiskAssessmentDialog({
         businessImpact: "LOW",
       },
     });
-  const { toast } = useToast();
+  const toast = useToast();
   const [createRiskAssessment, isCreating]
     = useMutation<CreateRiskAssessmentDialogMutation>(
       createRiskAssessmentMutation,
@@ -100,32 +106,32 @@ export function CreateRiskAssessmentDialog({
       },
       onCompleted(_response, errors) {
         if (errors) {
-          toast({
-            title: __("Error"),
+          toast.add({
+            title: t("createThirdPartyRiskAssessmentDialog.messages.error"),
             description: formatError(
-              __("Failed to create Risk Assessment"),
+              t("createThirdPartyRiskAssessmentDialog.errors.create"),
               errors,
             ),
-            variant: "error",
+            type: "error",
           });
           return;
         }
-        toast({
-          title: __("Success"),
-          description: __("Risk Assessment created successfully."),
-          variant: "success",
+        toast.add({
+          title: t("createThirdPartyRiskAssessmentDialog.messages.success"),
+          description: t("createThirdPartyRiskAssessmentDialog.messages.created"),
+          type: "success",
         });
         dialogRef.current?.close();
         reset();
       },
       onError(error) {
-        toast({
-          title: __("Error"),
+        toast.add({
+          title: t("createThirdPartyRiskAssessmentDialog.messages.error"),
           description: formatError(
-            __("Failed to create Risk Assessment"),
+            t("createThirdPartyRiskAssessmentDialog.errors.create"),
             error,
           ),
-          variant: "error",
+          type: "error",
         });
       },
     });
@@ -140,14 +146,14 @@ export function CreateRiskAssessmentDialog({
       trigger={children}
       title={(
         <Breadcrumb
-          items={[__("Risk Assessments"), __("New Risk Assessment")]}
+          items={[t("createThirdPartyRiskAssessmentDialog.breadcrumb.riskAssessments"), t("createThirdPartyRiskAssessmentDialog.breadcrumb.newRiskAssessment")]}
         />
       )}
     >
       <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
         <DialogContent padded className="space-y-4">
           <ControlledField
-            label={__("Data Sensitivity")}
+            label={t("createThirdPartyRiskAssessmentDialog.fields.dataSensitivity")}
             name="dataSensitivity"
             control={control}
             type="select"
@@ -155,7 +161,7 @@ export function CreateRiskAssessmentDialog({
             <SentitivityOptions />
           </ControlledField>
           <ControlledField
-            label={__("Business Impact")}
+            label={t("createThirdPartyRiskAssessmentDialog.fields.businessImpact")}
             name="businessImpact"
             control={control}
             type="select"
@@ -163,18 +169,16 @@ export function CreateRiskAssessmentDialog({
             <ImpactOptions />
           </ControlledField>
           <Field
-            label={__("Notes")}
+            label={t("createThirdPartyRiskAssessmentDialog.fields.notes")}
             {...register("notes")}
             type="textarea"
             error={formState.errors.notes?.message}
-            help={__(
-              "Add any context or details about this risk assessment that might be helpful for future reference.",
-            )}
+            help={t("createThirdPartyRiskAssessmentDialog.notesHelp")}
           />
         </DialogContent>
         <DialogFooter>
           <Button type="submit" disabled={isCreating}>
-            {__("Create")}
+            {t("createThirdPartyRiskAssessmentDialog.actions.create")}
           </Button>
         </DialogFooter>
       </form>

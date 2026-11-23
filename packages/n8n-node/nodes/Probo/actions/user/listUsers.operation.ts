@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import type {
 	INodeProperties,
@@ -18,23 +24,14 @@ import type {
 	INodeExecutionData,
 	IDataObject,
 } from 'n8n-workflow';
-import { proboConnectApiRequestAllItems } from '../../GenericFunctions';
+import { proboConnectApiRequestAllItems, executionItems } from '../../GenericFunctions';
+import { organizationLocator } from '../../locators';
 
 export const description: INodeProperties[] = [
-	{
-		displayName: 'Organization ID',
-		name: 'organizationId',
-		type: 'string',
-		displayOptions: {
-			show: {
-				resource: ['user'],
-				operation: ['listUsers'],
-			},
-		},
-		default: '',
-		description: 'The ID of the organization',
-		required: true,
-	},
+	organizationLocator({
+		resource: ['user'],
+		operation: ['listUsers'],
+	}),
 	{
 		displayName: 'Return All',
 		name: 'returnAll',
@@ -65,21 +62,98 @@ export const description: INodeProperties[] = [
 		default: 50,
 		description: 'Max number of results to return',
 	},
+	{
+		displayName: 'Search',
+		name: 'query',
+		type: 'string',
+		displayOptions: {
+			show: {
+				resource: ['user'],
+				operation: ['listUsers'],
+			},
+		},
+		default: '',
+		description: 'Search users by full name or email address',
+	},
+	{
+		displayName: 'States',
+		name: 'state',
+		type: 'multiOptions',
+		displayOptions: {
+			show: {
+				resource: ['user'],
+				operation: ['listUsers'],
+			},
+		},
+		options: [
+			{ name: 'Active', value: 'ACTIVE' },
+			{ name: 'Deactivated', value: 'DEACTIVATED' },
+			{ name: 'Pending', value: 'PENDING' },
+		],
+		default: [],
+		description: 'Filter by profile states',
+	},
+	{
+		displayName: 'Role',
+		name: 'role',
+		type: 'options',
+		displayOptions: {
+			show: {
+				resource: ['user'],
+				operation: ['listUsers'],
+			},
+		},
+		options: [
+			{ name: 'Admin', value: 'ADMIN' },
+			{ name: 'All', value: '' },
+			{ name: 'Auditor', value: 'AUDITOR' },
+			{ name: 'Compliance Portal Access Manager', value: 'COMPLIANCE_PORTAL_ACCESS_MANAGER' },
+			{ name: 'Compliance Portal Manager', value: 'COMPLIANCE_PORTAL_MANAGER' },
+			{ name: 'Employee', value: 'EMPLOYEE' },
+			{ name: 'Owner', value: 'OWNER' },
+			{ name: 'Viewer', value: 'VIEWER' },
+		],
+		default: '',
+		description: 'Filter by membership role',
+	},
+	{
+		displayName: 'Type',
+		name: 'kind',
+		type: 'options',
+		displayOptions: {
+			show: {
+				resource: ['user'],
+				operation: ['listUsers'],
+			},
+		},
+		options: [
+			{ name: 'All', value: '' },
+			{ name: 'Contractor', value: 'CONTRACTOR' },
+			{ name: 'Employee', value: 'EMPLOYEE' },
+			{ name: 'Service Account', value: 'SERVICE_ACCOUNT' },
+		],
+		default: '',
+		description: 'Filter by profile kind',
+	},
 ];
 
 export async function execute(
 	this: IExecuteFunctions,
 	itemIndex: number,
-): Promise<INodeExecutionData> {
-	const organizationId = this.getNodeParameter('organizationId', itemIndex) as string;
+): Promise<INodeExecutionData[]> {
+	const organizationId = this.getNodeParameter('organizationId', itemIndex, '', { extractValue: true }) as string;
 	const returnAll = this.getNodeParameter('returnAll', itemIndex) as boolean;
 	const limit = this.getNodeParameter('limit', itemIndex, 50) as number;
+	const query = this.getNodeParameter('query', itemIndex, '') as string;
+	const state = this.getNodeParameter('state', itemIndex, []) as string[];
+	const role = this.getNodeParameter('role', itemIndex, '') as string;
+	const kind = this.getNodeParameter('kind', itemIndex, '') as string;
 
-	const query = `
-		query ListUsers($organizationId: ID!, $first: Int, $after: CursorKey, $orderBy: ProfileOrder) {
+	const gqlQuery = `
+		query ListUsers($organizationId: ID!, $first: Int, $after: CursorKey, $orderBy: ProfileOrder, $filter: ProfileFilter) {
 			node(id: $organizationId) {
 				... on Organization {
-					profiles(first: $first, after: $after, orderBy: $orderBy) {
+					profiles(first: $first, after: $after, orderBy: $orderBy, filter: $filter) {
 						edges {
 							node {
 								id
@@ -90,8 +164,10 @@ export async function execute(
 								additionalEmailAddresses
 								kind
 								position
-								contractStartDate
-								contractEndDate
+								contract {
+									start
+									end
+								}
 								createdAt
 								updatedAt
 								organization { id name }
@@ -108,10 +184,27 @@ export async function execute(
 		}
 	`;
 
+	const filter: IDataObject = {};
+	if (query) {
+		filter.query = query;
+	}
+	if (state.length > 0) {
+		filter.states = state;
+	}
+	if (role) {
+		filter.role = role;
+	}
+	if (kind) {
+		filter.kind = kind;
+	}
+
 	const users = await proboConnectApiRequestAllItems.call(
 		this,
-		query,
-		{ organizationId },
+		gqlQuery,
+		{
+			organizationId,
+			...(Object.keys(filter).length > 0 ? { filter } : {}),
+		},
 		(response: IDataObject) => {
 			const data = response?.data as IDataObject | undefined;
 			const node = data?.node as IDataObject | undefined;
@@ -122,8 +215,5 @@ export async function execute(
 		limit,
 	);
 
-	return {
-		json: { users },
-		pairedItem: { item: itemIndex },
-	};
+	return executionItems(users, itemIndex);
 }

@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package cookiebanner
 
@@ -47,7 +53,7 @@ func seedWorkerFixture(t *testing.T, ctx context.Context, client *pg.Client) wor
 	t.Helper()
 
 	tenantID := gid.NewTenantID()
-	scope := coredata.NewScope(tenantID)
+	scope := coredata.NewScope(tenantID, gid.Nil)
 	organizationID := gid.New(tenantID, coredata.OrganizationEntityType)
 	bannerID := gid.New(tenantID, coredata.CookieBannerEntityType)
 	uncategorisedID := gid.New(tenantID, coredata.CookieCategoryEntityType)
@@ -55,17 +61,19 @@ func seedWorkerFixture(t *testing.T, ctx context.Context, client *pg.Client) wor
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
 	banner := coredata.CookieBanner{
-		ID:                bannerID,
-		OrganizationID:    organizationID,
-		Name:              "Worker Test Banner",
-		Origin:            "https://worker-test-" + bannerID.String() + ".example.com",
-		State:             coredata.CookieBannerStateActive,
-		CookiePolicyURL:   "https://worker-test.example.com/cookies",
-		ConsentExpiryDays: 180,
-		ShowBranding:      false,
-		DefaultLanguage:   "en",
-		CreatedAt:         now,
-		UpdatedAt:         now,
+		ID:                   bannerID,
+		OrganizationID:       organizationID,
+		Name:                 "Worker Test Banner",
+		Origin:               "https://worker-test-" + bannerID.String() + ".example.com",
+		State:                coredata.CookieBannerStateActive,
+		CookiePolicyURL:      "https://worker-test.example.com/cookies",
+		ConsentExpiryDays:    180,
+		ShowBranding:         false,
+		Capabilities:         coredata.DefaultCookieBannerCapabilities(),
+		DefaultLanguage:      "en",
+		PublisherCountryCode: "AA",
+		CreatedAt:            now,
+		UpdatedAt:            now,
 	}
 
 	require.NoError(t, client.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
@@ -94,6 +102,7 @@ func seedWorkerFixture(t *testing.T, ctx context.Context, client *pg.Client) wor
 			Kind:            coredata.CookieCategoryKindUncategorised,
 			Rank:            0,
 			GCMConsentTypes: []string{},
+			TCFPurposeIDs:   []int{},
 			PostHogConsent:  false,
 			CreatedAt:       now,
 			UpdatedAt:       now,
@@ -112,6 +121,7 @@ func seedWorkerFixture(t *testing.T, ctx context.Context, client *pg.Client) wor
 			Kind:            coredata.CookieCategoryKindNormal,
 			Rank:            1,
 			GCMConsentTypes: []string{},
+			TCFPurposeIDs:   []int{},
 			PostHogConsent:  false,
 			CreatedAt:       now,
 			UpdatedAt:       now,
@@ -179,7 +189,6 @@ func newExactPattern(
 		TrackerType:        coredata.TrackerTypeCookie,
 		Pattern:            pattern,
 		MatchType:          coredata.TrackerPatternMatchTypeExact,
-		DisplayName:        pattern,
 		Description:        "",
 		MaxAgeSeconds:      maxAge,
 		Source:             &source,
@@ -206,7 +215,6 @@ func newGlobInCategory(
 		TrackerType:        coredata.TrackerTypeCookie,
 		Pattern:            pattern,
 		MatchType:          coredata.TrackerPatternMatchTypeGlob,
-		DisplayName:        pattern,
 		Description:        "",
 		MaxAgeSeconds:      maxAge,
 		Source:             &source,
@@ -218,43 +226,10 @@ func newGlobInCategory(
 
 func newTestHandler(client *pg.Client) *patternAnalysisHandler {
 	return &patternAnalysisHandler{
-		svc:    NewService(client, false),
+		svc:    NewService(client, false, 0),
 		pg:     client,
 		logger: log.NewLogger(log.WithOutput(io.Discard)),
 	}
-}
-
-// seedThirdParty inserts a minimal org ThirdParty so a tracker pattern's
-// third_party_id (a FK to third_parties) can point at a real row.
-func seedThirdParty(t *testing.T, ctx context.Context, client *pg.Client, fx workerFixture, name string) gid.GID {
-	t.Helper()
-
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	id := gid.New(fx.scope.GetTenantID(), coredata.ThirdPartyEntityType)
-
-	party := coredata.ThirdParty{
-		ID:             id,
-		OrganizationID: fx.organizationID,
-		Name:           name,
-		Category:       coredata.ThirdPartyCategoryAnalytics,
-		Certifications: []string{},
-		Countries:      coredata.CountryCodes{},
-		CreatedAt:      now,
-		UpdatedAt:      now,
-	}
-
-	require.NoError(t, client.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
-		return party.Insert(ctx, tx, fx.scope)
-	}))
-
-	t.Cleanup(func() {
-		_ = client.WithTx(context.Background(), func(ctx context.Context, tx pg.Tx) error {
-			_, err := tx.Exec(ctx, `DELETE FROM third_parties WHERE id = $1`, id)
-			return err
-		})
-	})
-
-	return id
 }
 
 // TestPatternAnalysisWorker_PromotesSourceOnExistingGlob seeds a
@@ -281,9 +256,9 @@ func TestPatternAnalysisWorker_PromotesSourceOnExistingGlob(t *testing.T) {
 		&maxAge,
 	)
 	exacts := []*coredata.TrackerPattern{
-		newExactPattern(fx, "_ga_abc123", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
-		newExactPattern(fx, "_ga_def456", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
-		newExactPattern(fx, "_ga_xyz789", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
+		newExactPattern(fx, "_ga_abc12345", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
+		newExactPattern(fx, "_ga_def45678", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
+		newExactPattern(fx, "_ga_xyz78901", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
 	}
 
 	require.NoError(t, client.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
@@ -375,9 +350,9 @@ func TestPatternAnalysisWorker_AdoptionTriggersDraftVersion(t *testing.T) {
 		&maxAge,
 	)
 	exacts := []*coredata.TrackerPattern{
-		newExactPattern(fx, "_ga_abc123", fx.uncategorisedID, coredata.CookieSourcePreExisting, &maxAge),
-		newExactPattern(fx, "_ga_def456", fx.uncategorisedID, coredata.CookieSourcePreExisting, &maxAge),
-		newExactPattern(fx, "_ga_xyz789", fx.uncategorisedID, coredata.CookieSourcePreExisting, &maxAge),
+		newExactPattern(fx, "_ga_abc12345", fx.uncategorisedID, coredata.CookieSourcePreExisting, &maxAge),
+		newExactPattern(fx, "_ga_def45678", fx.uncategorisedID, coredata.CookieSourcePreExisting, &maxAge),
+		newExactPattern(fx, "_ga_xyz78901", fx.uncategorisedID, coredata.CookieSourcePreExisting, &maxAge),
 	}
 
 	require.NoError(t, client.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
@@ -455,8 +430,8 @@ func TestPatternAnalysisWorker_AdoptionTriggersDraftVersion(t *testing.T) {
 // exact `ph_phc_<id>_posthog` in uncategorised. The merge loop hits
 // the cross-category skip branch (the existing slot belongs to a
 // recategorised glob), so promotion can only happen via the
-// adoption path. This guards against the gap where last_matched_at
-// was refreshed on the glob but its source stayed at PRE_EXISTING
+// adoption path. This guards against the gap where the glob was
+// considered already seen but its source stayed at PRE_EXISTING
 // despite the new SDK-observed signal.
 func TestPatternAnalysisWorker_AdoptionPromotesSourceCrossCategory(t *testing.T) {
 	t.Parallel()
@@ -550,9 +525,9 @@ func TestPatternAnalysisWorker_AdoptionPromotesSourceCrossCategory(t *testing.T)
 // created and the merge/adoption loops in
 // patternAnalysisHandler.Process never see the new signal. Without
 // the in-line source promotion in reportDetectedTracker (which
-// mutates matchedPattern.Source and writes via Update), only
-// last_matched_at would advance — source would stay stuck at
-// PRE_EXISTING despite the new SDK-observed evidence. This test
+// mutates matchedPattern.Source and writes via Update), source
+// would stay stuck at PRE_EXISTING despite the new SDK-observed
+// evidence. This test
 // pins the same-category promotion path; the cross-category gap
 // is covered by TestPatternAnalysisWorker_AdoptionPromotesSourceCrossCategory.
 func TestReportDetectedTrackers_PromotesSourceOnExistingGlob(t *testing.T) {
@@ -576,7 +551,7 @@ func TestReportDetectedTrackers_PromotesSourceOnExistingGlob(t *testing.T) {
 		return existingGlob.Insert(ctx, tx, fx.scope)
 	}))
 
-	svc := NewService(client, false)
+	svc := NewService(client, false, 0)
 
 	require.NoError(t, svc.ReportDetectedTrackers(ctx, fx.banner.ID, ReportDetectedTrackersRequest{
 		Cookies: []DetectedCookie{
@@ -596,7 +571,6 @@ func TestReportDetectedTrackers_PromotesSourceOnExistingGlob(t *testing.T) {
 
 	require.NotNil(t, loaded.Source)
 	assert.Equal(t, coredata.CookieSourceScript, *loaded.Source, "reportDetectedTracker must promote a PRE_EXISTING glob to SCRIPT when a stronger detection matches it")
-	assert.NotNil(t, loaded.LastMatchedAt, "matched detections must bump last_matched_at")
 	assert.Equal(t, fx.uncategorisedID, loaded.CookieCategoryID, "category must not move")
 
 	var exacts coredata.TrackerPatterns
@@ -644,9 +618,9 @@ func TestPatternAnalysisWorker_MergeWithoutAdoptionSkipsDraftVersion(t *testing.
 	maxAge := 7 * 24 * 3600
 
 	exacts := []*coredata.TrackerPattern{
-		newExactPattern(fx, "_ga_abc123", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
-		newExactPattern(fx, "_ga_def456", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
-		newExactPattern(fx, "_ga_xyz789", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
+		newExactPattern(fx, "_ga_abc12345", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
+		newExactPattern(fx, "_ga_def45678", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
+		newExactPattern(fx, "_ga_xyz78901", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
 	}
 
 	require.NoError(t, client.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
@@ -702,121 +676,4 @@ func TestPatternAnalysisWorker_MergeWithoutAdoptionSkipsDraftVersion(t *testing.
 	if !errors.Is(err, coredata.ErrResourceNotFound) {
 		t.Fatalf("merge-only run unexpectedly produced a banner version: state=%s", latest.State)
 	}
-}
-
-// TestPatternAnalysisWorker_GlobInheritsUnanimousMapping seeds three
-// exacts that all resolve to the same org ThirdParty (one carrying a
-// description) and asserts the merged glob inherits that third party and
-// description, so the mapping worker can skip the expensive org
-// resolution. Mapping is still re-armed so the glob derives its own
-// catalog row.
-func TestPatternAnalysisWorker_GlobInheritsUnanimousMapping(t *testing.T) {
-	t.Parallel()
-
-	client := test.PGClient(t)
-	ctx := context.Background()
-	fx := seedWorkerFixture(t, ctx, client)
-
-	thirdPartyID := seedThirdParty(t, ctx, client, fx, "Google Analytics")
-
-	maxAge := 7 * 24 * 3600
-
-	exacts := []*coredata.TrackerPattern{
-		newExactPattern(fx, "_ga_abc123", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
-		newExactPattern(fx, "_ga_def456", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
-		newExactPattern(fx, "_ga_xyz789", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
-	}
-	for _, ep := range exacts {
-		ep.ThirdPartyID = &thirdPartyID
-	}
-
-	exacts[1].Description = "Google Analytics measurement cookie"
-
-	require.NoError(t, client.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
-		for _, ep := range exacts {
-			if err := ep.Insert(ctx, tx, fx.scope); err != nil {
-				return err
-			}
-		}
-
-		return nil
-	}))
-
-	h := newTestHandler(client)
-	require.NoError(t, h.Process(ctx, fx.banner))
-
-	loaded := &coredata.TrackerPattern{}
-
-	require.NoError(t, client.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
-		return loaded.LoadByBannerIDTypeAndPattern(
-			ctx,
-			conn,
-			fx.scope,
-			fx.banner.ID,
-			coredata.TrackerTypeCookie,
-			"_ga_*",
-			&maxAge,
-		)
-	}))
-
-	require.NotNil(t, loaded.ThirdPartyID, "glob must inherit the unanimous org third party from the merged exacts")
-	assert.Equal(t, thirdPartyID, *loaded.ThirdPartyID)
-	assert.Equal(t, "Google Analytics measurement cookie", loaded.Description, "glob must inherit the description tied to the resolved third party")
-	assert.NotNil(t, loaded.MappingRequestedAt, "mapping must still be re-armed so the glob derives its own catalog row")
-}
-
-// TestPatternAnalysisWorker_GlobSkipsConflictingMapping seeds exacts
-// that resolve to two different org ThirdParties and asserts the merged
-// glob is left blank rather than guessing, preserving a fresh mapping
-// pass.
-func TestPatternAnalysisWorker_GlobSkipsConflictingMapping(t *testing.T) {
-	t.Parallel()
-
-	client := test.PGClient(t)
-	ctx := context.Background()
-	fx := seedWorkerFixture(t, ctx, client)
-
-	thirdPartyA := seedThirdParty(t, ctx, client, fx, "Vendor A")
-	thirdPartyB := seedThirdParty(t, ctx, client, fx, "Vendor B")
-
-	maxAge := 7 * 24 * 3600
-
-	exacts := []*coredata.TrackerPattern{
-		newExactPattern(fx, "_ga_abc123", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
-		newExactPattern(fx, "_ga_def456", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
-		newExactPattern(fx, "_ga_xyz789", fx.normalCategoryID, coredata.CookieSourceScript, &maxAge),
-	}
-	exacts[0].ThirdPartyID = &thirdPartyA
-	exacts[1].ThirdPartyID = &thirdPartyB
-
-	require.NoError(t, client.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
-		for _, ep := range exacts {
-			if err := ep.Insert(ctx, tx, fx.scope); err != nil {
-				return err
-			}
-		}
-
-		return nil
-	}))
-
-	h := newTestHandler(client)
-	require.NoError(t, h.Process(ctx, fx.banner))
-
-	loaded := &coredata.TrackerPattern{}
-
-	require.NoError(t, client.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
-		return loaded.LoadByBannerIDTypeAndPattern(
-			ctx,
-			conn,
-			fx.scope,
-			fx.banner.ID,
-			coredata.TrackerTypeCookie,
-			"_ga_*",
-			&maxAge,
-		)
-	}))
-
-	assert.Nil(t, loaded.ThirdPartyID, "glob must not inherit a third party when the merged exacts disagree")
-	assert.Equal(t, "", loaded.Description, "glob must stay blank when no unanimous mapping exists")
-	assert.NotNil(t, loaded.MappingRequestedAt, "glob must be re-armed for a fresh mapping pass")
 }

@@ -1,19 +1,23 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { sprintf } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   Checkbox,
@@ -25,32 +29,18 @@ import {
   useDialogRef,
 } from "@probo/ui";
 import { forwardRef, type ReactNode, useImperativeHandle } from "react";
-import { z } from "zod";
+import { useTranslation } from "react-i18next";
 
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
 
-const bulkExportSchema = z.object({
-  withWatermark: z.boolean(),
-  watermarkEmail: z.string().optional().or(z.literal("")),
-  withSignatures: z.boolean(),
-}).refine((data) => {
-  if (data.withWatermark && (!data.watermarkEmail || data.watermarkEmail === "")) {
-    return false;
-  }
-  if (data.withWatermark && data.watermarkEmail && !z.string().email().safeParse(data.watermarkEmail).success) {
-    return false;
-  }
-  return true;
-}, {
-  message: "Please enter a valid email address",
-  path: ["watermarkEmail"],
-});
-
-type BulkExportFormData = z.infer<typeof bulkExportSchema>;
+import {
+  type ExportFormData,
+  exportSchema,
+} from "./watermark";
 
 type Props = {
   children: ReactNode;
-  onExport: (options: BulkExportFormData) => Promise<void>;
+  onExport: (options: ExportFormData) => Promise<void>;
   isLoading?: boolean;
   defaultEmail: string;
   selectedCount: number;
@@ -63,15 +53,15 @@ export type BulkExportDialogRef = {
 
 export const BulkExportDialog = forwardRef<BulkExportDialogRef, Props>(
   ({ children, onExport, isLoading = false, defaultEmail, selectedCount }, ref) => {
-    const { __ } = useTranslate();
+    const { t } = useTranslation();
     const dialogRef = useDialogRef();
 
     const { register, handleSubmit, formState, watch, setValue } = useFormWithSchema(
-      bulkExportSchema,
+      exportSchema,
       {
         defaultValues: {
           withWatermark: false,
-          watermarkEmail: defaultEmail,
+          watermarkText: defaultEmail,
           withSignatures: true,
         },
       },
@@ -85,10 +75,12 @@ export const BulkExportDialog = forwardRef<BulkExportDialogRef, Props>(
       close: () => dialogRef.current?.close(),
     }));
 
-    const onSubmit = async (data: BulkExportFormData) => {
+    const onSubmit = async (data: ExportFormData) => {
       const options = {
         ...data,
-        watermarkEmail: data.withWatermark ? data.watermarkEmail : undefined,
+        watermarkText: data.withWatermark && data.watermarkText !== defaultEmail
+          ? data.watermarkText
+          : undefined,
       };
       await onExport(options);
       dialogRef.current?.close();
@@ -100,7 +92,7 @@ export const BulkExportDialog = forwardRef<BulkExportDialogRef, Props>(
         <Dialog
           className="max-w-md"
           ref={dialogRef}
-          title={sprintf(__("Export %s Documents"), selectedCount)}
+          title={t("bulkExportDialog.title", { count: selectedCount })}
         >
           <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
             <DialogContent className="space-y-4" padded>
@@ -112,10 +104,10 @@ export const BulkExportDialog = forwardRef<BulkExportDialogRef, Props>(
                   />
                   <div className="flex-1">
                     <label className="text-sm font-medium text-txt-primary cursor-pointer">
-                      {__("Include signatures")}
+                      {t("bulkExportDialog.includeSignatures.label")}
                     </label>
                     <p className="text-xs text-txt-secondary mt-1">
-                      {__("Show signature information and approval details in the PDFs")}
+                      {t("bulkExportDialog.includeSignatures.description")}
                     </p>
                   </div>
                 </div>
@@ -127,10 +119,10 @@ export const BulkExportDialog = forwardRef<BulkExportDialogRef, Props>(
                   />
                   <div className="flex-1">
                     <label className="text-sm font-medium text-txt-primary cursor-pointer">
-                      {__("Add watermark")}
+                      {t("bulkExportDialog.watermark.label")}
                     </label>
                     <p className="text-xs text-txt-secondary mt-1">
-                      {__("Add confidential watermark with email and timestamp to all PDFs")}
+                      {t("bulkExportDialog.watermark.description")}
                     </p>
                   </div>
                 </div>
@@ -138,11 +130,11 @@ export const BulkExportDialog = forwardRef<BulkExportDialogRef, Props>(
                 {watchWatermark && (
                   <div className="ml-6">
                     <Field
-                      label={__("Watermark email")}
-                      {...register("watermarkEmail")}
-                      type="email"
-                      placeholder={__("Enter email address")}
-                      error={formState.errors.watermarkEmail?.message}
+                      label={t("bulkExportDialog.watermark.textLabel")}
+                      {...register("watermarkText")}
+                      type="text"
+                      placeholder={t("bulkExportDialog.watermark.textPlaceholder")}
+                      error={formState.errors.watermarkText?.message}
                       autoComplete="off"
                       required
                     />
@@ -152,7 +144,7 @@ export const BulkExportDialog = forwardRef<BulkExportDialogRef, Props>(
 
               <div className="bg-level-1 p-3 rounded-lg border border-border-subtle">
                 <p className="text-sm text-txt-secondary">
-                  {__("The documents will be exported as individual PDFs in a ZIP file. You will receive an email when the export is ready for download.")}
+                  {t("bulkExportDialog.notice")}
                 </p>
               </div>
             </DialogContent>
@@ -165,11 +157,11 @@ export const BulkExportDialog = forwardRef<BulkExportDialogRef, Props>(
                   ? (
                       <>
                         <Spinner size={16} />
-                        {__("Exporting...")}
+                        {t("bulkExportDialog.actions.exporting")}
                       </>
                     )
                   : (
-                      __("Export Documents")
+                      t("bulkExportDialog.actions.export")
                     )}
               </Button>
             </DialogFooter>

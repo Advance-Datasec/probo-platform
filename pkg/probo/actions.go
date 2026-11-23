@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
@@ -26,62 +32,6 @@ const (
 	// OrganizationContext actions
 	ActionOrganizationContextGet    = "core:organization-context:get"
 	ActionOrganizationContextUpdate = "core:organization-context:update"
-
-	// TrustCenter actions
-	ActionTrustCenterGet                          = "core:trust-center:get"
-	ActionTrustCenterUpdate                       = "core:trust-center:update"
-	ActionTrustCenterGetNda                       = "core:trust-center:get-nda"
-	ActionTrustCenterNonDisclosureAgreementUpload = "core:trust-center:upload-nda"
-	ActionTrustCenterNonDisclosureAgreementDelete = "core:trust-center:delete-nda"
-
-	// TrustCenterAccess actions
-	ActionTrustCenterAccessGet    = "core:trust-center-access:get"
-	ActionTrustCenterAccessList   = "core:trust-center-access:list"
-	ActionTrustCenterAccessCreate = "core:trust-center-access:create"
-	ActionTrustCenterAccessUpdate = "core:trust-center-access:update"
-	ActionTrustCenterAccessDelete = "core:trust-center-access:delete"
-
-	// MailingListUpdate actions
-	ActionMailingListUpdateList   = "core:mailing-list-update:list"
-	ActionMailingListUpdateCreate = "core:mailing-list-update:create"
-	ActionMailingListUpdateUpdate = "core:mailing-list-update:update"
-	ActionMailingListUpdateSend   = "core:mailing-list-update:send"
-	ActionMailingListUpdateDelete = "core:mailing-list-update:delete"
-
-	// MailingList actions
-	ActionMailingListUpdate = "core:mailing-list:update"
-
-	// MailingListSubscriber actions
-	ActionMailingListSubscriberList   = "core:mailing-list-subscriber:list"
-	ActionMailingListSubscriberCreate = "core:mailing-list-subscriber:create"
-	ActionMailingListSubscriberDelete = "core:mailing-list-subscriber:delete"
-
-	// TrustCenterReference actions
-	ActionTrustCenterReferenceList       = "core:trust-center-reference:list"
-	ActionTrustCenterReferenceGetLogoUrl = "core:trust-center-reference:get-logo-url"
-	ActionTrustCenterReferenceCreate     = "core:trust-center-reference:create"
-	ActionTrustCenterReferenceUpdate     = "core:trust-center-reference:update"
-	ActionTrustCenterReferenceDelete     = "core:trust-center-reference:delete"
-
-	// ComplianceFramework actions
-	ActionComplianceFrameworkList       = "core:compliance-framework:list"
-	ActionComplianceFrameworkCreate     = "core:compliance-framework:create"
-	ActionComplianceFrameworkDelete     = "core:compliance-framework:delete"
-	ActionComplianceFrameworkUpdateRank = "core:compliance-framework:update-rank"
-
-	// ComplianceExternalURL actions
-	ActionComplianceExternalURLList   = "core:compliance-external-url:list"
-	ActionComplianceExternalURLCreate = "core:compliance-external-url:create"
-	ActionComplianceExternalURLUpdate = "core:compliance-external-url:update"
-	ActionComplianceExternalURLDelete = "core:compliance-external-url:delete"
-
-	// TrustCenterFile actions
-	ActionTrustCenterFileGet        = "core:trust-center-file:get"
-	ActionTrustCenterFileList       = "core:trust-center-file:list"
-	ActionTrustCenterFileGetFileUrl = "core:trust-center-file:get-file-url"
-	ActionTrustCenterFileUpdate     = "core:trust-center-file:update"
-	ActionTrustCenterFileDelete     = "core:trust-center-file:delete"
-	ActionTrustCenterFileCreate     = "core:trust-center-file:create"
 
 	// ThirdParty actions
 	ActionThirdPartyList    = "core:thirdParty:list"
@@ -142,56 +92,55 @@ const (
 	ActionFrameworkImport = "core:framework:import"
 
 	// Control actions
-	ActionControlGet                     = "core:control:get"
-	ActionControlList                    = "core:control:list"
-	ActionControlCreate                  = "core:control:create"
-	ActionControlUpdate                  = "core:control:update"
-	ActionControlDelete                  = "core:control:delete"
-	ActionControlMeasureMappingCreate    = "core:control:create-measure-mapping"
-	ActionControlMeasureMappingDelete    = "core:control:delete-measure-mapping"
-	ActionControlDocumentMappingCreate   = "core:control:create-document-mapping"
-	ActionControlDocumentMappingDelete   = "core:control:delete-document-mapping"
-	ActionControlAuditMappingCreate      = "core:control:create-audit-mapping"
-	ActionControlAuditMappingDelete      = "core:control:delete-audit-mapping"
-	ActionControlObligationMappingCreate = "core:control:create-obligation-mapping"
-	ActionControlObligationMappingDelete = "core:control:delete-obligation-mapping"
+	ActionControlGet                          = "core:control:get"
+	ActionControlList                         = "core:control:list"
+	ActionControlCreate                       = "core:control:create"
+	ActionControlUpdate                       = "core:control:update"
+	ActionControlDelete                       = "core:control:delete"
+	ActionControlInternalControlMappingCreate = "core:control:create-internal-control-mapping"
+	ActionControlInternalControlMappingDelete = "core:control:delete-internal-control-mapping"
+	ActionControlDocumentMappingCreate        = "core:control:create-document-mapping"
+	ActionControlDocumentMappingDelete        = "core:control:delete-document-mapping"
+	ActionControlAuditMappingCreate           = "core:control:create-audit-mapping"
+	ActionControlAuditMappingDelete           = "core:control:delete-audit-mapping"
+	ActionControlObligationMappingCreate      = "core:control:create-obligation-mapping"
+	ActionControlObligationMappingDelete      = "core:control:delete-obligation-mapping"
 
-	// Measure actions
-	ActionMeasureGet                     = "core:measure:get"
-	ActionMeasureList                    = "core:measure:list"
-	ActionMeasureCreate                  = "core:measure:create"
-	ActionMeasureUpdate                  = "core:measure:update"
-	ActionMeasureDelete                  = "core:measure:delete"
-	ActionMeasureEvidenceUpload          = "core:measure:upload-evidence"
-	ActionMeasureImport                  = "core:measure:import"
-	ActionMeasureDocumentMappingCreate   = "core:measure:create-document-mapping"
-	ActionMeasureDocumentMappingDelete   = "core:measure:delete-document-mapping"
-	ActionMeasureThirdPartyMappingCreate = "core:measure:create-third-party-mapping"
-	ActionMeasureThirdPartyMappingDelete = "core:measure:delete-third-party-mapping"
-
-	// Task actions
-	ActionTaskGet      = "core:task:get"
-	ActionTaskList     = "core:task:list"
-	ActionTaskCreate   = "core:task:create"
-	ActionTaskUpdate   = "core:task:update"
-	ActionTaskDelete   = "core:task:delete"
-	ActionTaskAssign   = "core:task:assign"
-	ActionTaskUnassign = "core:task:unassign"
+	// Internal control actions
+	ActionInternalControlGet                     = "core:internal-control:get"
+	ActionInternalControlList                    = "core:internal-control:list"
+	ActionInternalControlCreate                  = "core:internal-control:create"
+	ActionInternalControlUpdate                  = "core:internal-control:update"
+	ActionInternalControlDelete                  = "core:internal-control:delete"
+	ActionInternalControlEvidenceUpload          = "core:internal-control:upload-evidence"
+	ActionInternalControlImport                  = "core:internal-control:import"
+	ActionInternalControlDocumentMappingCreate   = "core:internal-control:create-document-mapping"
+	ActionInternalControlDocumentMappingDelete   = "core:internal-control:delete-document-mapping"
+	ActionInternalControlThirdPartyMappingCreate = "core:internal-control:create-third-party-mapping"
+	ActionInternalControlThirdPartyMappingDelete = "core:internal-control:delete-third-party-mapping"
 
 	// Evidence actions
 	ActionEvidenceList   = "core:evidence:list"
 	ActionEvidenceDelete = "core:evidence:delete"
 
 	// Document actions
-	ActionDocumentGet               = "core:document:get"
-	ActionDocumentList              = "core:document:list"
-	ActionDocumentCreate            = "core:document:create"
-	ActionDocumentUpdate            = "core:document:update"
-	ActionDocumentDelete            = "core:document:delete"
-	ActionDocumentChangelogGenerate = "core:document:generate-changelog"
-	ActionDocumentArchive           = "core:document:archive"
-	ActionDocumentUnarchive         = "core:document:unarchive"
-	ActionDocumentDeleteDraft       = "core:document:delete-draft"
+	ActionDocumentGet       = "core:document:get"
+	ActionDocumentList      = "core:document:list"
+	ActionDocumentCreate    = "core:document:create"
+	ActionDocumentUpdate    = "core:document:update"
+	ActionDocumentDelete    = "core:document:delete"
+	ActionDocumentArchive   = "core:document:archive"
+	ActionDocumentUnarchive = "core:document:unarchive"
+	// Document comment actions
+	ActionDocumentComment        = "core:document:comment"
+	ActionDocumentCommentUpdate  = "core:document:comment-update"
+	ActionDocumentCommentDelete  = "core:document:comment-delete"
+	ActionDocumentCommentResolve = "core:document:comment-resolve"
+
+	// Document suggestion actions
+	ActionDocumentSuggest       = "core:document:suggest"
+	ActionDocumentSuggestAccept = "core:document:suggest-accept"
+	ActionDocumentSuggestReject = "core:document:suggest-reject"
 
 	// DocumentVersion actions
 	ActionDocumentVersionGet             = "core:document-version:get"
@@ -206,6 +155,10 @@ const (
 	ActionDocumentVersionPublish         = "core:document-version:publish"
 	ActionDocumentVersionExport          = "core:document-version:export"
 
+	// DocumentRevision actions
+	ActionDocumentRevisionGet  = "core:document-revision:get"
+	ActionDocumentRevisionList = "core:document-revision:list"
+
 	// EmployeeDocument actions
 	ActionEmployeeDocumentGet              = "core:employee-document:get"
 	ActionEmployeeDocumentList             = "core:employee-document:list"
@@ -218,18 +171,18 @@ const (
 	ActionDocumentVersionSignatureList    = "core:document-version-signature:list"
 
 	// Risk actions
-	ActionRiskGet                     = "core:risk:get"
-	ActionRiskList                    = "core:risk:list"
-	ActionRiskCreate                  = "core:risk:create"
-	ActionRiskUpdate                  = "core:risk:update"
-	ActionRiskDelete                  = "core:risk:delete"
-	ActionRiskMeasureMappingCreate    = "core:risk:create-measure-mapping"
-	ActionRiskMeasureMappingDelete    = "core:risk:delete-measure-mapping"
-	ActionRiskDocumentMappingCreate   = "core:risk:create-document-mapping"
-	ActionRiskDocumentMappingDelete   = "core:risk:delete-document-mapping"
-	ActionRiskObligationMappingCreate = "core:risk:create-obligation-mapping"
-	ActionRiskObligationMappingDelete = "core:risk:delete-obligation-mapping"
-	ActionRiskPublish                 = "core:risk:publish"
+	ActionRiskGet                          = "risk-management:risk:get"
+	ActionRiskList                         = "risk-management:risk:list"
+	ActionRiskCreate                       = "risk-management:risk:create"
+	ActionRiskUpdate                       = "risk-management:risk:update"
+	ActionRiskDelete                       = "risk-management:risk:delete"
+	ActionRiskInternalControlMappingCreate = "risk-management:risk:create-internal-control-mapping"
+	ActionRiskInternalControlMappingDelete = "risk-management:risk:delete-internal-control-mapping"
+	ActionRiskDocumentMappingCreate        = "risk-management:risk:create-document-mapping"
+	ActionRiskDocumentMappingDelete        = "risk-management:risk:delete-document-mapping"
+	ActionRiskObligationMappingCreate      = "risk-management:risk:create-obligation-mapping"
+	ActionRiskObligationMappingDelete      = "risk-management:risk:delete-obligation-mapping"
+	ActionRiskPublish                      = "risk-management:risk:publish"
 
 	// Asset actions
 	ActionAssetGet     = "core:asset:get"
@@ -248,13 +201,15 @@ const (
 	ActionDatumPublish = "core:datum:publish"
 
 	// Audit actions
-	ActionAuditGet          = "core:audit:get"
-	ActionAuditList         = "core:audit:list"
-	ActionAuditCreate       = "core:audit:create"
-	ActionAuditUpdate       = "core:audit:update"
-	ActionAuditDelete       = "core:audit:delete"
-	ActionAuditReportUpload = "core:audit:upload-report"
-	ActionAuditReportDelete = "core:audit:delete-report"
+	ActionAuditGet                    = "core:audit:get"
+	ActionAuditList                   = "core:audit:list"
+	ActionAuditCreate                 = "core:audit:create"
+	ActionAuditUpdate                 = "core:audit:update"
+	ActionAuditDelete                 = "core:audit:delete"
+	ActionAuditReportUpload           = "core:audit:upload-report"
+	ActionAuditReportDelete           = "core:audit:delete-report"
+	ActionAuditFrameworkMappingCreate = "core:audit:create-framework-mapping"
+	ActionAuditFrameworkMappingDelete = "core:audit:delete-framework-mapping"
 
 	// Report actions
 	ActionReportGet            = "core:report:get"
@@ -269,6 +224,8 @@ const (
 	ActionFindingDelete             = "core:finding:delete"
 	ActionFindingAuditMappingCreate = "core:finding:create-audit-mapping"
 	ActionFindingAuditMappingDelete = "core:finding:delete-audit-mapping"
+	ActionFindingTaskMappingCreate  = "core:finding:create-task-mapping"
+	ActionFindingTaskMappingDelete  = "core:finding:delete-task-mapping"
 	ActionFindingPublish            = "core:finding:publish"
 
 	// Obligation actions
@@ -279,6 +236,22 @@ const (
 	ActionObligationDelete  = "core:obligation:delete"
 	ActionObligationPublish = "core:obligation:publish"
 
+	// BusinessFunction actions
+	ActionBusinessFunctionGet     = "core:business-function:get"
+	ActionBusinessFunctionList    = "core:business-function:list"
+	ActionBusinessFunctionCreate  = "core:business-function:create"
+	ActionBusinessFunctionUpdate  = "core:business-function:update"
+	ActionBusinessFunctionDelete  = "core:business-function:delete"
+	ActionBusinessFunctionPublish = "core:business-function:publish"
+
+	// AiSystem actions
+	ActionAiSystemGet     = "core:ai-system:get"
+	ActionAiSystemList    = "core:ai-system:list"
+	ActionAiSystemCreate  = "core:ai-system:create"
+	ActionAiSystemUpdate  = "core:ai-system:update"
+	ActionAiSystemDelete  = "core:ai-system:delete"
+	ActionAiSystemPublish = "core:ai-system:publish"
+
 	// ProcessingActivity actions
 	ActionProcessingActivityList    = "core:processing-activity:list"
 	ActionProcessingActivityGet     = "core:processing-activity:get"
@@ -287,13 +260,9 @@ const (
 	ActionProcessingActivityDelete  = "core:processing-activity:delete"
 	ActionProcessingActivityPublish = "core:processing-activity:publish"
 
-	// CustomDomain actions
-	ActionCustomDomainGet    = "core:custom-domain:get"
-	ActionCustomDomainCreate = "core:custom-domain:create"
-	ActionCustomDomainDelete = "core:custom-domain:delete"
-
 	// File actions
-	ActionFileGet = "core:file:get"
+	ActionFileGet    = "core:file:get"
+	ActionFileUpload = "core:file:upload"
 
 	// Connector actions
 	ActionConnectorInitiate = "core:connector:initiate"
@@ -302,10 +271,12 @@ const (
 	ActionSlackConnectionList = "core:slack-connection:list"
 
 	// Connector actions (generic)
-	ActionConnectorCreate = "core:connector:create"
-	ActionConnectorGet    = "core:connector:get"
-	ActionConnectorList   = "core:connector:list"
-	ActionConnectorDelete = "core:connector:delete"
+	ActionConnectorCreate   = "core:connector:create"
+	ActionConnectorUpdate   = "core:connector:update"
+	ActionConnectorGet      = "core:connector:get"
+	ActionConnectorList     = "core:connector:list"
+	ActionConnectorDelete   = "core:connector:delete"
+	ActionConnectorDiscover = "core:connector:discover"
 
 	// DataProtectionImpactAssessment actions
 	ActionDataProtectionImpactAssessmentList    = "core:data-protection-impact-assessment:list"
@@ -322,9 +293,6 @@ const (
 	ActionTransferImpactAssessmentUpdate  = "core:transfer-impact-assessment:update"
 	ActionTransferImpactAssessmentDelete  = "core:transfer-impact-assessment:delete"
 	ActionTransferImpactAssessmentPublish = "core:transfer-impact-assessment:publish"
-
-	// TrustCenterDocumentAccess actions
-	ActionTrustCenterDocumentAccessList = "core:trust-center-document-access:list"
 
 	// RightsRequest actions
 	ActionRightsRequestList   = "core:rights-request:list"
@@ -377,63 +345,6 @@ const (
 	ActionCookieCategoryUpdate = "core:cookie-category:update"
 	ActionCookieCategoryDelete = "core:cookie-category:delete"
 
-	// RiskAssessment actions
-	ActionRiskAssessmentGet    = "core:risk-assessment:get"
-	ActionRiskAssessmentList   = "core:risk-assessment:list"
-	ActionRiskAssessmentCreate = "core:risk-assessment:create"
-	ActionRiskAssessmentUpdate = "core:risk-assessment:update"
-	ActionRiskAssessmentDelete = "core:risk-assessment:delete"
-
-	// RiskAssessmentScope actions
-	ActionRiskAssessmentScopeGet    = "core:risk-assessment-scope:get"
-	ActionRiskAssessmentScopeList   = "core:risk-assessment-scope:list"
-	ActionRiskAssessmentScopeCreate = "core:risk-assessment-scope:create"
-	ActionRiskAssessmentScopeUpdate = "core:risk-assessment-scope:update"
-	ActionRiskAssessmentScopeDelete = "core:risk-assessment-scope:delete"
-
-	// RiskAssessmentNode actions
-	ActionRiskAssessmentNodeGet    = "core:risk-assessment-node:get"
-	ActionRiskAssessmentNodeList   = "core:risk-assessment-node:list"
-	ActionRiskAssessmentNodeCreate = "core:risk-assessment-node:create"
-	ActionRiskAssessmentNodeUpdate = "core:risk-assessment-node:update"
-	ActionRiskAssessmentNodeDelete = "core:risk-assessment-node:delete"
-
-	// RiskAssessmentBoundary actions
-	ActionRiskAssessmentBoundaryGet    = "core:risk-assessment-boundary:get"
-	ActionRiskAssessmentBoundaryList   = "core:risk-assessment-boundary:list"
-	ActionRiskAssessmentBoundaryCreate = "core:risk-assessment-boundary:create"
-	ActionRiskAssessmentBoundaryUpdate = "core:risk-assessment-boundary:update"
-	ActionRiskAssessmentBoundaryDelete = "core:risk-assessment-boundary:delete"
-
-	// RiskAssessmentProcess actions
-	ActionRiskAssessmentProcessGet    = "core:risk-assessment-process:get"
-	ActionRiskAssessmentProcessList   = "core:risk-assessment-process:list"
-	ActionRiskAssessmentProcessCreate = "core:risk-assessment-process:create"
-	ActionRiskAssessmentProcessUpdate = "core:risk-assessment-process:update"
-	ActionRiskAssessmentProcessDelete = "core:risk-assessment-process:delete"
-
-	// RiskAssessmentThreat actions
-	ActionRiskAssessmentThreatGet    = "core:risk-assessment-threat:get"
-	ActionRiskAssessmentThreatList   = "core:risk-assessment-threat:list"
-	ActionRiskAssessmentThreatCreate = "core:risk-assessment-threat:create"
-	ActionRiskAssessmentThreatUpdate = "core:risk-assessment-threat:update"
-	ActionRiskAssessmentThreatDelete = "core:risk-assessment-threat:delete"
-
-	// RiskAssessmentScenario actions
-	ActionRiskAssessmentScenarioGet    = "core:risk-assessment-scenario:get"
-	ActionRiskAssessmentScenarioList   = "core:risk-assessment-scenario:list"
-	ActionRiskAssessmentScenarioCreate = "core:risk-assessment-scenario:create"
-	ActionRiskAssessmentScenarioUpdate = "core:risk-assessment-scenario:update"
-	ActionRiskAssessmentScenarioDelete = "core:risk-assessment-scenario:delete"
-
-	// RiskAssessmentScenarioThreat actions
-	ActionRiskAssessmentScenarioThreatLink   = "core:risk-assessment-scenario-threat:create"
-	ActionRiskAssessmentScenarioThreatUnlink = "core:risk-assessment-scenario-threat:delete"
-
-	// RiskAssessmentScenarioRisk actions
-	ActionRiskAssessmentScenarioRiskLink   = "core:risk-assessment-scenario-risk:create"
-	ActionRiskAssessmentScenarioRiskUnlink = "core:risk-assessment-scenario-risk:delete"
-
 	// Cookie actions
 	ActionCookieGet    = "core:cookie:get"
 	ActionCookieList   = "core:cookie:list"
@@ -462,7 +373,10 @@ const (
 	ActionCommonThirdPartyGet  = "core:common-third-party:get"
 	ActionCommonThirdPartyList = "core:common-third-party:list"
 
+	// CommonGVLVendor actions (global IAB GVL catalog, no organization scope).
+	ActionCommonGVLVendorList = "core:common-gvl-vendor:list"
+
 	// ElectronicSignature actions (tenant-scoped via the related document
-	// version signature / trust center access).
+	// version signature / compliance portal access).
 	ActionElectronicSignatureGet = "core:electronic-signature:get"
 )

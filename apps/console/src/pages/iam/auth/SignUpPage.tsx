@@ -1,30 +1,42 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
+import { Field } from "@base-ui/react/field";
+import { Form } from "@base-ui/react/form";
 import { formatError } from "@probo/helpers";
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
-import { Button, Field, useToast } from "@probo/ui";
-import { useEffect } from "react";
+import { Button } from "@probo/ui/src/v2/Button/Button";
+import { ButtonLink } from "@probo/ui/src/v2/Button/ButtonLink";
+import { TextField } from "@probo/ui/src/v2/form/TextField";
+import { Link } from "@probo/ui/src/v2/Link/Link";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
+import { Heading } from "@probo/ui/src/v2/typography/Heading";
+import { Text } from "@probo/ui/src/v2/typography/Text";
+import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation, usePreloadedQuery, useQueryLoader } from "react-relay";
-import { Link, useNavigate } from "react-router";
+import { useSearchParams } from "react-router";
 import { graphql } from "relay-runtime";
-import { z } from "zod";
 
 import type { SignUpPageMutation } from "#/__generated__/iam/SignUpPageMutation.graphql";
 import type { SignUpPageQuery } from "#/__generated__/iam/SignUpPageQuery.graphql";
-import { useFormWithSchema } from "#/hooks/useFormWithSchema";
 
 const signUpPageQuery = graphql`
   query SignUpPageQuery {
@@ -42,148 +54,203 @@ const signUpMutation = graphql`
   }
 `;
 
-const schema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8),
-  fullName: z.string().min(2),
-});
-
-type FormData = z.infer<typeof schema>;
-
 function SignUpPageContent(props: { queryRef: NonNullable<ReturnType<typeof useQueryLoader<SignUpPageQuery>>[0]> }) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
-  const navigate = useNavigate();
+  const { t } = useTranslation();
+  const toast = useToast();
+  const [searchParams] = useSearchParams();
+  const [signedUpEmail, setSignedUpEmail] = useState("");
 
-  usePageTitle(__("Sign up"));
+  usePageTitle(t("signUpPage.pageTitle"));
 
   const data = usePreloadedQuery<SignUpPageQuery>(signUpPageQuery, props.queryRef);
 
-  const { register, handleSubmit, formState } = useFormWithSchema(schema, {
-    defaultValues: {
-      email: "",
-      password: "",
-      fullName: "",
-    },
-  });
+  const [signUp, isSigningUp] = useMutation<SignUpPageMutation>(signUpMutation);
 
-  const [signUp] = useMutation<SignUpPageMutation>(signUpMutation);
-
-  const onSubmit = (data: FormData) => {
+  const onSubmit = (email: string, password: string, fullName: string) => {
     signUp({
       variables: {
         input: {
-          email: data.email,
-          password: data.password,
-          fullName: data.fullName,
+          email,
+          password,
+          fullName,
         },
       },
       onCompleted: (_, e) => {
         if (e) {
-          toast({
-            title: __("Sign up failed"),
-            description: formatError(__("Sign up failed"), e),
-            variant: "error",
+          toast.add({
+            title: t("signUpPage.errors.failed"),
+            description: formatError(t("signUpPage.errors.failed"), e),
+            type: "error",
           });
           return;
         }
 
-        toast({
-          title: __("Success"),
-          description: __("Account created successfully"),
-          variant: "success",
+        setSignedUpEmail(email);
+        toast.add({
+          title: t("common.success"), description: t("signUpPage.messages.created"),
+          type: "success",
         });
-        void navigate("/", { replace: true });
       },
       onError: (e) => {
-        toast({
-          title: __("Sign up failed"),
+        toast.add({
+          title: t("signUpPage.errors.failed"),
           description: e.message,
-          variant: "error",
+          type: "error",
         });
       },
     });
   };
 
-  if (!data.signUpEnabled) {
+  if (signedUpEmail !== "") {
+    const loginSearch = searchParams.toString();
+    const authSearch = loginSearch === "" ? "" : "?" + loginSearch;
+
     return (
-      <div className="space-y-6 w-full max-w-md mx-auto pt-8 text-center">
-        <div className="space-y-2">
-          <h1 className="text-3xl font-bold">{__("Registration unavailable")}</h1>
-          <p className="text-txt-tertiary">
-            {__("New account registration is currently disabled. Please contact your administrator or reach out to Probo for assistance.")}
-          </p>
+      <div className="flex w-full flex-col gap-8">
+        <div className="flex flex-col gap-1">
+          <Heading level={1} size={4} weight="medium" align="center" highContrast>
+            {t("signUpPage.checkEmail.title")}
+          </Heading>
+          <Text size={2} align="center" className="block">
+            {t("signUpPage.checkEmail.description", { email: signedUpEmail })}
+          </Text>
         </div>
 
-        <div>
-          <Button
-            variant="secondary"
-            className="w-xs h-10 mx-auto"
-            to="/auth/login"
+        <Text align="center" size={2} className="block">
+          {t("signUpPage.checkEmail.resend")}
+          {" "}
+          <Link
+            to={{
+              pathname: "/auth/resend-verification-email",
+              search: authSearch,
+            }}
+            state={{ email: signedUpEmail }}
           >
-            {__("Back to login")}
-          </Button>
+            {t("signUpPage.actions.resend")}
+          </Link>
+        </Text>
+
+        <Text align="center" size={2} className="block">
+          <Link
+            to={{
+              pathname: "/auth/login",
+              search: authSearch,
+            }}
+          >
+            {t("signUpPage.actions.backToLogin")}
+          </Link>
+        </Text>
+      </div>
+    );
+  }
+
+  if (!data.signUpEnabled) {
+    return (
+      <div className="flex w-full flex-col gap-8">
+        <div className="flex flex-col gap-1">
+          <Heading level={1} size={4} weight="medium" align="center" highContrast>
+            {t("signUpPage.unavailable.title")}
+          </Heading>
+          <Text size={2} align="center" className="block">
+            {t("signUpPage.unavailable.description")}
+          </Text>
         </div>
+
+        <ButtonLink
+          to="/auth/login"
+          variant="soft"
+          color="neutral"
+          size={3}
+          className="w-full"
+        >
+          {t("signUpPage.actions.backToLogin")}
+        </ButtonLink>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6 w-full max-w-md mx-auto pt-8">
-      <div className="space-y-2 text-center">
-        <h1 className="text-3xl font-bold">{__("Sign up")}</h1>
-        <p className="text-txt-tertiary">
-          {__("Enter your information to create an account")}
-        </p>
+    <div className="flex w-full flex-col gap-8">
+      <div className="flex flex-col gap-1">
+        <Heading level={1} size={4} weight="medium" align="center" highContrast>
+          {t("signUpPage.title")}
+        </Heading>
+        <Text size={2} align="center" className="block">
+          {t("signUpPage.description")}
+        </Text>
       </div>
 
-      <form onSubmit={e => void handleSubmit(onSubmit)(e)} className="space-y-4">
-        <Field
-          label={__("Full Name")}
-          type="text"
-          placeholder={__("John Doe")}
-          {...register("fullName")}
-          required
-          error={formState.errors.fullName?.message}
-        />
+      <Form
+        className="flex flex-col gap-5"
+        onFormSubmit={(values) => {
+          onSubmit(
+            String(values.email ?? ""),
+            String(values.password ?? ""),
+            String(values.fullName ?? ""),
+          );
+        }}
+      >
+        <Field.Root name="fullName" className="flex flex-col gap-1.5">
+          <Field.Label className="text-1 font-medium text-sand-12">
+            {t("signUpPage.fields.fullName")}
+          </Field.Label>
+          <TextField
+            type="text"
+            name="fullName"
+            required
+            minLength={2}
+            placeholder={t("signUpPage.fields.fullNamePlaceholder")}
+          />
+          <Field.Error className="text-1 text-red-11" />
+        </Field.Root>
 
-        <Field
-          label={__("Email")}
-          type="email"
-          placeholder={__("name@example.com")}
-          {...register("email")}
-          required
-          error={formState.errors.email?.message}
-        />
+        <Field.Root name="email" className="flex flex-col gap-1.5">
+          <Field.Label className="text-1 font-medium text-sand-12">
+            {t("signUpPage.fields.email")}
+          </Field.Label>
+          <TextField
+            type="email"
+            name="email"
+            required
+            placeholder={t("signUpPage.fields.emailPlaceholder")}
+          />
+          <Field.Error className="text-1 text-red-11" />
+        </Field.Root>
 
-        <Field
-          label={__("Password")}
-          type="password"
-          placeholder="••••••••"
-          {...register("password")}
-          required
-          error={formState.errors.password?.message}
-        />
+        <Field.Root name="password" className="flex flex-col gap-1.5">
+          <Field.Label className="text-1 font-medium text-sand-12">
+            {t("signUpPage.fields.password")}
+          </Field.Label>
+          <TextField
+            type="password"
+            name="password"
+            required
+            minLength={8}
+            placeholder="••••••••"
+          />
+          <Field.Error className="text-1 text-red-11" />
+        </Field.Root>
 
-        <Button type="submit" className="w-xs h-10 mx-auto mt-6" disabled={formState.isLoading}>
-          {formState.isLoading
-            ? __("Creating account...")
-            : __("Sign up with email")}
+        <Button
+          type="submit"
+          variant="solid"
+          color="neutral"
+          highContrast
+          size={3}
+          className="w-full"
+          loading={isSigningUp}
+        >
+          {t("signUpPage.actions.signUpWithEmail")}
         </Button>
-      </form>
+      </Form>
 
-      <div className="text-center">
-        <p className="text-sm text-txt-tertiary">
-          {__("Already have an account?")}
-          {" "}
-          <Link
-            to="/auth/login"
-            className="underline text-txt-primary hover:text-txt-secondary"
-          >
-            {__("Log in here")}
-          </Link>
-        </p>
-      </div>
+      <Text align="center" size={2} className="block">
+        {t("signUpPage.alreadyHaveAccount")}
+        {" "}
+        <Link to="/auth/login">
+          {t("signUpPage.actions.logIn")}
+        </Link>
+      </Text>
     </div>
   );
 }

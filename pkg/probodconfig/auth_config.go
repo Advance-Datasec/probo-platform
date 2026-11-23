@@ -1,23 +1,55 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probodconfig
 
 import (
 	"encoding/base64"
 	"fmt"
+	"net/http"
+	"strings"
 )
+
+type CookieSameSite string
+
+const (
+	CookieSameSiteLax    CookieSameSite = "lax"
+	CookieSameSiteStrict CookieSameSite = "strict"
+	CookieSameSiteNone   CookieSameSite = "none"
+)
+
+func ParseCookieSameSite(raw string) (CookieSameSite, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", string(CookieSameSiteLax):
+		return CookieSameSiteLax, nil
+	case string(CookieSameSiteStrict):
+		return CookieSameSiteStrict, nil
+	case string(CookieSameSiteNone):
+		return CookieSameSiteNone, nil
+	default:
+		return "", fmt.Errorf(
+			"invalid same-site value %q: must be lax, strict, or none",
+			raw,
+		)
+	}
+}
 
 type AuthConfig struct {
 	Cookie                              CookieConfig       `json:"cookie"`
@@ -26,6 +58,7 @@ type AuthConfig struct {
 	InvitationConfirmationTokenValidity int                `json:"invitation-confirmation-token-validity"`
 	PasswordResetTokenValidity          int                `json:"password-reset-token-validity"`
 	MagicLinkTokenValidity              int                `json:"magic-link-token-validity"`
+	EmailConfirmationTokenValidity      int                `json:"email-confirmation-token-validity"`
 	SAML                                SAMLConfig         `json:"saml"`
 	Google                              OIDCProviderConfig `json:"google,omitzero"`
 	Microsoft                           OIDCProviderConfig `json:"microsoft,omitzero"`
@@ -42,17 +75,44 @@ type OAuth2ServerConfig struct {
 }
 
 type OAuth2SigningKeyConfig struct {
-	PrivateKey string `json:"private-key"`
-	KID        string `json:"kid"`
-	Active     bool   `json:"active"`
+	PrivateKey RSAPrivateKey `json:"private-key"`
+	KID        string        `json:"kid"`
+	Active     bool          `json:"active"`
 }
 
 type CookieConfig struct {
-	Domain   string `json:"domain,omitempty"`
-	Secret   string `json:"secret"`
-	Duration int    `json:"duration"`
-	Name     string `json:"name,omitempty"`
-	Secure   bool   `json:"secure"`
+	Domain   string         `json:"domain,omitempty"`
+	Secret   string         `json:"secret"`
+	Duration int            `json:"duration"`
+	Name     string         `json:"name,omitempty"`
+	Secure   bool           `json:"secure"`
+	SameSite CookieSameSite `json:"same-site,omitempty"`
+}
+
+func (c CookieConfig) HTTPSameSite() (http.SameSite, error) {
+	switch c.SameSite {
+	case "", CookieSameSiteLax:
+		return http.SameSiteLaxMode, nil
+	case CookieSameSiteStrict:
+		return http.SameSiteStrictMode, nil
+	case CookieSameSiteNone:
+		return http.SameSiteNoneMode, nil
+	default:
+		return 0, fmt.Errorf("invalid cookie same-site value %q", c.SameSite)
+	}
+}
+
+func (c CookieConfig) Validate() error {
+	sameSite, err := c.HTTPSameSite()
+	if err != nil {
+		return err
+	}
+
+	if sameSite == http.SameSiteNoneMode && !c.Secure {
+		return fmt.Errorf("cookie same-site none requires secure cookies")
+	}
+
+	return nil
 }
 
 type PasswordConfig struct {

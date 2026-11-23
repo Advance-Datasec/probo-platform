@@ -1,45 +1,106 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package slug
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestMake(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
+		name     string
 		input    string
 		expected string
 	}{
-		{"Hello World", "hello-world"},
-		{"This is a test", "this-is-a-test"},
-		{"Special characters: !@#$%^&*()", "special-characters"},
-		{"Multiple---Hyphens", "multiple-hyphens"},
-		{"-Trim-Hyphens-", "trim-hyphens"},
-		{"123 Numbers", "123-numbers"},
-		{"     Spaces     ", "spaces"},
-		{"", ""},
-		{"UPPERCASE", "uppercase"},
-		{"under_score", "under-score"},
-		{"dots.and.more.dots", "dotsandmoredots"},
+		{name: "hello world", input: "Hello World", expected: "hello-world"},
+		{name: "this is a test", input: "This is a test", expected: "this-is-a-test"},
+		{name: "special characters", input: "Special characters: !@#$%^&*()", expected: "special-characters"},
+		{name: "multiple hyphens", input: "Multiple---Hyphens", expected: "multiple-hyphens"},
+		{name: "trim hyphens", input: "-Trim-Hyphens-", expected: "trim-hyphens"},
+		{name: "numbers", input: "123 Numbers", expected: "123-numbers"},
+		{name: "spaces", input: "     Spaces     ", expected: "spaces"},
+		{name: "empty", input: "", expected: ""},
+		{name: "uppercase", input: "UPPERCASE", expected: "uppercase"},
+		{name: "underscore", input: "under_score", expected: "under-score"},
+		{name: "dots", input: "dots.and.more.dots", expected: "dotsandmoredots"},
 	}
 
-	for _, test := range tests {
-		slug := Make(test.input)
-		if slug != test.expected {
-			t.Errorf("Slug(%q) = %q; expected %q", test.input, slug, test.expected)
-		}
+	for _, tt := range tests {
+		t.Run(
+			tt.name,
+			func(t *testing.T) {
+				t.Parallel()
+
+				assert.Equal(t, tt.expected, Make(tt.input))
+			},
+		)
 	}
+}
+
+func TestMakeWithEntropy(t *testing.T) {
+	t.Parallel()
+
+	t.Run(
+		"empty input returns hex only",
+		func(t *testing.T) {
+			t.Parallel()
+
+			assert.Regexp(t, `^[0-9a-f]{8}$`, MakeWithEntropy(""))
+		},
+	)
+
+	t.Run(
+		"non-empty input returns base with hex suffix",
+		func(t *testing.T) {
+			t.Parallel()
+
+			got := MakeWithEntropy("Hello World")
+			assert.Regexp(t, `^hello-world-[0-9a-f]{8}$`, got)
+		},
+	)
+
+	t.Run(
+		"successive calls differ",
+		func(t *testing.T) {
+			t.Parallel()
+
+			first := MakeWithEntropy("Acme Corp")
+			second := MakeWithEntropy("Acme Corp")
+			assert.NotEqual(t, first, second, "MakeWithEntropy should produce distinct slugs")
+		},
+	)
+
+	t.Run(
+		"long names stay within dns label length",
+		func(t *testing.T) {
+			t.Parallel()
+
+			got := MakeWithEntropy(strings.Repeat("Very Long Organization Name ", 10))
+			assert.LessOrEqual(t, len(got), 63)
+			assert.Regexp(t, `^[a-z0-9-]+-[0-9a-f]{8}$`, got)
+		},
+	)
 }

@@ -1,4 +1,8 @@
 enum AuditState @goModel(model: "go.probo.inc/probo/pkg/coredata.AuditState") {
+    TO_BOOK
+        @goEnum(value: "go.probo.inc/probo/pkg/coredata.AuditStateToBook")
+    AUDIT_BOOKED
+        @goEnum(value: "go.probo.inc/probo/pkg/coredata.AuditStateAuditBooked")
     NOT_STARTED
         @goEnum(value: "go.probo.inc/probo/pkg/coredata.AuditStateNotStarted")
     IN_PROGRESS
@@ -89,6 +93,14 @@ enum AuditOrderField
         @goEnum(
             value: "go.probo.inc/probo/pkg/coredata.AuditOrderFieldValidUntil"
         )
+    AUDIT_START_DATE
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.AuditOrderFieldAuditStartDate"
+        )
+    AUDIT_END_DATE
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.AuditOrderFieldAuditEndDate"
+        )
     STATE @goEnum(value: "go.probo.inc/probo/pkg/coredata.AuditOrderFieldState")
 }
 
@@ -142,17 +154,40 @@ input FindingFilter {
     status: FindingStatus
     priority: FindingPriority
     ownerId: ID
+    auditId: ID
+    query: String
 }
 
-type Audit implements Node {
+type Audit implements Node & Taggable {
+    tags(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: TagOrder
+    ): TagConnection! @goField(forceResolver: true)
+
     id: ID!
     name: String
+    firm: String
     organization: Organization @goField(forceResolver: true)
-    framework: Framework @goField(forceResolver: true)
-    validFrom: Datetime
-    validUntil: Datetime
+    frameworks(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: FrameworkOrder
+    ): FrameworkConnection! @goField(forceResolver: true)
+    validity: Period
+    auditDates: Period
     reportFile: File @goField(forceResolver: true)
     state: AuditState!
+    compliancePortalAudit(
+        compliancePortalId: ID!
+    ): CompliancePortalAudit @goField(forceResolver: true)
+    compliancePortalDocumentAccess(
+        compliancePortalAccessId: ID!
+    ): CompliancePortalDocumentAccess @goField(forceResolver: true)
 
     controls(
         first: Int
@@ -172,18 +207,26 @@ type Audit implements Node {
         filter: FindingFilter
     ): FindingConnection @goField(forceResolver: true)
 
-    trustCenterVisibility: TrustCenterVisibility!
     createdAt: Datetime!
     updatedAt: Datetime!
 
     permission(action: String!): Boolean! @goField(forceResolver: true)
 }
 
-type Finding implements Node {
+type Finding implements Node & Taggable {
+    tags(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: TagOrder
+    ): TagConnection! @goField(forceResolver: true)
+
     id: ID!
     organization: Organization @goField(forceResolver: true)
     kind: FindingKind!
     referenceId: String!
+    title: String!
     description: String
     source: String
     audits(
@@ -202,6 +245,14 @@ type Finding implements Node {
     priority: FindingPriority!
     risk: Risk @goField(forceResolver: true)
     effectivenessCheck: String
+    tasks(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: TaskOrder
+        filter: TaskFilter
+    ): TaskConnection! @goField(forceResolver: true)
     createdAt: Datetime!
     updatedAt: Datetime!
     permission(action: String!): Boolean! @goField(forceResolver: true)
@@ -216,8 +267,12 @@ type AuditConnection
     pageInfo: PageInfo!
 }
 
-type AuditEdge {
+type AuditEdge
+    @goModel(
+        model: "go.probo.inc/probo/pkg/server/api/console/v1/types.AuditEdge"
+    ) {
     cursor: CursorKey!
+    referenceId: String
     node: Audit!
 }
 
@@ -253,6 +308,18 @@ extend type Mutation {
     deleteFindingAuditMapping(
         input: DeleteFindingAuditMappingInput!
     ): DeleteFindingAuditMappingPayload
+    createFindingTaskMapping(
+        input: CreateFindingTaskMappingInput!
+    ): CreateFindingTaskMappingPayload!
+    deleteFindingTaskMapping(
+        input: DeleteFindingTaskMappingInput!
+    ): DeleteFindingTaskMappingPayload!
+    createAuditFrameworkMapping(
+        input: CreateAuditFrameworkMappingInput!
+    ): CreateAuditFrameworkMappingPayload
+    deleteAuditFrameworkMapping(
+        input: DeleteAuditFrameworkMappingInput!
+    ): DeleteAuditFrameworkMappingPayload
     publishFindingList(
         input: PublishFindingListInput!
     ): PublishFindingListPayload!
@@ -271,22 +338,22 @@ type PublishFindingListPayload {
 
 input CreateAuditInput {
     organizationId: ID!
-    frameworkId: ID!
+    frameworkIds: [ID!]!
     name: String
-    validFrom: Datetime
-    validUntil: Datetime
+    firm: String
+    validity: PeriodInput
+    auditDates: PeriodInput
     state: AuditState
-    trustCenterVisibility: TrustCenterVisibility
     file: Upload
 }
 
 input UpdateAuditInput {
     id: ID!
     name: String @goField(omittable: true)
-    validFrom: Datetime
-    validUntil: Datetime
+    firm: String @goField(omittable: true)
+    validity: PeriodInput
+    auditDates: PeriodInput
     state: AuditState
-    trustCenterVisibility: TrustCenterVisibility
 }
 
 input DeleteAuditInput {
@@ -305,6 +372,7 @@ input DeleteAuditReportInput {
 input CreateFindingInput {
     organizationId: ID!
     kind: FindingKind!
+    title: String!
     description: String
     source: String
     identifiedOn: Datetime
@@ -320,6 +388,7 @@ input CreateFindingInput {
 
 input UpdateFindingInput {
     id: ID!
+    title: String @goField(omittable: true)
     description: String @goField(omittable: true)
     source: String @goField(omittable: true)
     identifiedOn: Datetime @goField(omittable: true)
@@ -346,6 +415,26 @@ input CreateFindingAuditMappingInput {
 input DeleteFindingAuditMappingInput {
     findingId: ID!
     auditId: ID!
+}
+
+input CreateFindingTaskMappingInput {
+    findingId: ID!
+    taskId: ID!
+}
+
+type CreateFindingTaskMappingPayload {
+    findingEdge: FindingEdge!
+    taskEdge: TaskEdge!
+}
+
+input DeleteFindingTaskMappingInput {
+    findingId: ID!
+    taskId: ID!
+}
+
+type DeleteFindingTaskMappingPayload {
+    deletedFindingId: ID!
+    deletedTaskId: ID!
 }
 
 type CreateAuditPayload {
@@ -388,4 +477,24 @@ type CreateFindingAuditMappingPayload {
 type DeleteFindingAuditMappingPayload {
     deletedFindingId: ID
     deletedAuditId: ID
+}
+
+input CreateAuditFrameworkMappingInput {
+    auditId: ID!
+    frameworkId: ID!
+}
+
+input DeleteAuditFrameworkMappingInput {
+    auditId: ID!
+    frameworkId: ID!
+}
+
+type CreateAuditFrameworkMappingPayload {
+    auditEdge: AuditEdge
+    frameworkEdge: FrameworkEdge
+}
+
+type DeleteAuditFrameworkMappingPayload {
+    deletedAuditId: ID
+    deletedFrameworkId: ID
 }

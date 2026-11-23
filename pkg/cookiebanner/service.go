@@ -1,29 +1,37 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package cookiebanner
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.gearno.de/kit/pg"
@@ -34,13 +42,44 @@ import (
 	"go.probo.inc/probo/pkg/validator"
 )
 
+const (
+	MaxTrackerIdentifierLength = 255
+	MaxTCStringLength          = 16 * 1024
+)
+
 type Service struct {
-	pg           *pg.Client
-	showBranding bool
+	pg               *pg.Client
+	showBranding     bool
+	tcfCmpID         int
+	now              func() time.Time
+	pageLoadCounts   sync.Map
+	patternHitCounts sync.Map
+	// afterPatternLookup runs after FindMatchingPattern in
+	// reportDetectedTracker. Tests use it to hold a SCRIPT first-insert
+	// until a PRE_EXISTING sibling has committed, so the loser hits
+	// InsertIfNotExists instead of a later FindMatchingPattern promote.
+	afterPatternLookup func(source *coredata.CookieSource)
 }
 
-func NewService(pgClient *pg.Client, showBranding bool) *Service {
-	return &Service{pg: pgClient, showBranding: showBranding}
+func NewService(pgClient *pg.Client, showBranding bool, tcfCmpID int) *Service {
+	return &Service{
+		pg:           pgClient,
+		showBranding: showBranding,
+		tcfCmpID:     normalizeTCFCmpID(tcfCmpID),
+		now:          time.Now,
+	}
+}
+
+func (s *Service) TCFCmpID() int {
+	return s.tcfCmpID
+}
+
+func normalizeTCFCmpID(id int) int {
+	if id < 2 || id > 4095 {
+		return DefaultTCFCmpID
+	}
+
+	return id
 }
 
 type (
@@ -62,12 +101,15 @@ type (
 	}
 
 	UpdateCookieBannerRequest struct {
-		CookieBannerID    gid.GID
-		Name              *string
-		PrivacyPolicyURL  *string
-		CookiePolicyURL   *string
-		ConsentExpiryDays *int
-		DefaultLanguage   *string
+		CookieBannerID       gid.GID
+		Name                 *string
+		PrivacyPolicyURL     *string
+		CookiePolicyURL      *string
+		ConsentExpiryDays    *int
+		DefaultLanguage      *string
+		PublisherCountryCode *string
+		Capabilities         *coredata.CookieBannerCapabilitiesPatch
+		ForceOptIn           *bool
 	}
 
 	UpdateCookieCategoryRequest struct {
@@ -76,6 +118,7 @@ type (
 		Slug             *string
 		Description      *string
 		GCMConsentTypes  *[]string
+		TCFPurposeIDs    *[]int
 		PostHogConsent   *bool
 	}
 
@@ -106,14 +149,20 @@ type (
 		Regulation       *Regulation
 		RegulationSource coredata.RegulationSource
 		CountryCode      *coredata.CountryCode
-		ConsentMode      *coredata.CookieConsentMode
+		SubdivisionCode  *coredata.SubdivisionCode
+		TC               *string
+		Origin           string
 	}
 
 	DetectedCookie struct {
-		Name          string
-		MaxAgeSeconds *int
-		Source        coredata.CookieSource
-		InitiatorURL  *string
+		Name            string
+		MaxAgeSeconds   *int
+		Source          coredata.CookieSource
+		InitiatorURL    *string
+		CookieDomain    *string
+		HostOnly        *bool
+		Hit             bool
+		CategoryGranted *bool
 	}
 
 	ReportDetectedCookiesRequest struct {
@@ -121,11 +170,13 @@ type (
 	}
 
 	DetectedStorageItem struct {
-		Key          string
-		StorageType  coredata.TrackerType
-		ValueSize    *int
-		Source       *coredata.CookieSource
-		InitiatorURL *string
+		Key             string
+		StorageType     coredata.TrackerType
+		ValueSize       *int
+		Source          *coredata.CookieSource
+		InitiatorURL    *string
+		Hit             bool
+		CategoryGranted *bool
 	}
 
 	DetectedResourceItem struct {
@@ -134,9 +185,13 @@ type (
 	}
 
 	ReportDetectedTrackersRequest struct {
-		Cookies   []DetectedCookie
-		Storage   []DetectedStorageItem
-		Resources []DetectedResourceItem
+		Cookies       []DetectedCookie
+		Storage       []DetectedStorageItem
+		Resources     []DetectedResourceItem
+		PageView      bool
+		ConsentAction *coredata.CookieConsentAction
+		Family        coredata.BrowserFamily
+		Presentation  coredata.CookieBannerPresentation
 	}
 
 	CreateTrackerPatternRequest struct {
@@ -144,7 +199,6 @@ type (
 		TrackerType      coredata.TrackerType
 		Pattern          string
 		MatchType        coredata.TrackerPatternMatchType
-		DisplayName      string
 		MaxAgeSeconds    *int
 		Description      string
 		Source           *coredata.CookieSource
@@ -194,18 +248,48 @@ type (
 	}
 
 	BannerConfig struct {
-		BannerID          gid.GID                                        `json:"banner_id"`
-		Version           int                                            `json:"version"`
-		Language          string                                         `json:"language"`
-		DefaultLanguage   string                                         `json:"default_language"`
-		PrivacyPolicyURL  string                                         `json:"privacy_policy_url,omitempty"`
-		CookiePolicyURL   string                                         `json:"cookie_policy_url"`
-		ConsentExpiryDays int                                            `json:"consent_expiry_days"`
-		ConsentMode       string                                         `json:"consent_mode"`
-		Regulation        Regulation                                     `json:"regulation"`
-		ShowBranding      bool                                           `json:"show_branding"`
-		Categories        []coredata.CookieBannerVersionSnapshotCategory `json:"categories"`
-		Texts             map[string]string                              `json:"texts"`
+		BannerID                 gid.GID                                        `json:"banner_id"`
+		Version                  int                                            `json:"version"`
+		Language                 string                                         `json:"language"`
+		DefaultLanguage          string                                         `json:"default_language"`
+		PrivacyPolicyURL         string                                         `json:"privacy_policy_url,omitempty"`
+		CookiePolicyURL          string                                         `json:"cookie_policy_url"`
+		ConsentExpiryDays        int                                            `json:"consent_expiry_days"`
+		ConsentMode              string                                         `json:"consent_mode"`
+		Regulation               Regulation                                     `json:"regulation"`
+		Layout                   Layout                                         `json:"layout"`
+		ShowBranding             bool                                           `json:"show_branding"`
+		ResourceReportingEnabled bool                                           `json:"resource_reporting_enabled"`
+		TCF                      *BannerTCF                                     `json:"tcf,omitempty"`
+		Categories               []coredata.CookieBannerVersionSnapshotCategory `json:"categories"`
+		Texts                    map[string]string                              `json:"texts"`
+	}
+
+	// BannerTCF is omitted from GET config when the hidden TCF capability is
+	// off, or when the request is not GDPR / UK GDPR. Nested keys are our
+	// config; `gvl` is IAB vendor-list.json shape.
+	BannerTCF struct {
+		CmpID       *int          `json:"cmp_id,omitempty"`
+		CmpVersion  *int          `json:"cmp_version,omitempty"`
+		PublisherCC string        `json:"publisher_cc,omitempty"`
+		GVL         *BannerTCFGVL `json:"gvl,omitempty"`
+	}
+
+	// BannerTCFGVL is a vendor-list.json-shaped object with vendors reduced to
+	// the banner’s disclosed IAB IDs. Nested keys follow the IAB GVL schema
+	// (camelCase) so @iabtechlabtcf/core can construct a GVL from it.
+	BannerTCFGVL struct {
+		GVLSpecificationVersion int                        `json:"gvlSpecificationVersion"`
+		VendorListVersion       int                        `json:"vendorListVersion"`
+		TCFPolicyVersion        int                        `json:"tcfPolicyVersion"`
+		LastUpdated             string                     `json:"lastUpdated,omitempty"`
+		Purposes                json.RawMessage            `json:"purposes,omitempty"`
+		SpecialPurposes         json.RawMessage            `json:"specialPurposes,omitempty"`
+		Features                json.RawMessage            `json:"features,omitempty"`
+		SpecialFeatures         json.RawMessage            `json:"specialFeatures,omitempty"`
+		Stacks                  json.RawMessage            `json:"stacks,omitempty"`
+		DataCategories          json.RawMessage            `json:"dataCategories,omitempty"`
+		Vendors                 map[string]json.RawMessage `json:"vendors"`
 	}
 
 	UpsertCookieBannerTranslationRequest struct {
@@ -219,7 +303,23 @@ type (
 		Version     int                          `json:"version"`
 		Action      coredata.CookieConsentAction `json:"action"`
 		ConsentData json.RawMessage              `json:"consent_data"`
+		TC          *string                      `json:"tc,omitempty"`
 		CreatedAt   time.Time                    `json:"created_at"`
+	}
+
+	CommonGVLCatalog struct {
+		VendorListVersion *int
+		TCFPolicyVersion  *int
+	}
+
+	AddCookieBannerGVLVendorRequest struct {
+		CookieBannerID gid.GID
+		IABVendorID    int
+	}
+
+	RemoveCookieBannerGVLVendorRequest struct {
+		CookieBannerID gid.GID
+		IABVendorID    int
 	}
 )
 
@@ -246,6 +346,31 @@ func (r *UpdateCookieBannerRequest) Validate() error {
 	v.Check(r.ConsentExpiryDays, "consent_expiry_days", validator.Min(1))
 	v.Check(r.DefaultLanguage, "default_language", validator.OneOfSlice(SupportedLanguages))
 
+	if r.PublisherCountryCode != nil {
+		code := strings.ToUpper(strings.TrimSpace(*r.PublisherCountryCode))
+		r.PublisherCountryCode = &code
+	}
+
+	v.Check(r.PublisherCountryCode, "publisher_country_code", publisherCountryCode())
+
+	return v.Error()
+}
+
+func (r *AddCookieBannerGVLVendorRequest) Validate() error {
+	v := validator.New()
+
+	v.Check(r.CookieBannerID, "cookie_banner_id", validator.Required(), validator.GID(coredata.CookieBannerEntityType))
+	v.Check(r.IABVendorID, "iab_vendor_id", validator.Required(), validator.Min(1))
+
+	return v.Error()
+}
+
+func (r *RemoveCookieBannerGVLVendorRequest) Validate() error {
+	v := validator.New()
+
+	v.Check(r.CookieBannerID, "cookie_banner_id", validator.Required(), validator.GID(coredata.CookieBannerEntityType))
+	v.Check(r.IABVendorID, "iab_vendor_id", validator.Required(), validator.Min(1))
+
 	return v.Error()
 }
 
@@ -268,6 +393,12 @@ func (r *UpdateCookieCategoryRequest) Validate() error {
 	v.Check(r.Name, "name", validator.SafeTextNoNewLine(255))
 	v.Check(r.Slug, "slug", validator.Slug(100))
 	v.Check(r.Description, "description", validator.SafeText(1000))
+
+	if r.TCFPurposeIDs != nil {
+		v.CheckEach(*r.TCFPurposeIDs, "tcf_purpose_ids", func(index int, item any) {
+			v.Check(item, fmt.Sprintf("tcf_purpose_ids.%d", index), validator.Min(1), validator.Max(11))
+		})
+	}
 
 	return v.Error()
 }
@@ -298,6 +429,7 @@ func (r *RecordConsentRequest) Validate() error {
 	v.Check(r.Version, "version", validator.Required(), validator.Min(1))
 	v.Check(r.VisitorID, "visitor_id", validator.Required(), validator.NotEmpty())
 	v.Check(r.Action, "action", validator.Required(), validator.OneOfSlice(coredata.CookieConsentActions()))
+	v.Check(r.TC, "tc", validator.MaxLen(MaxTCStringLength))
 
 	return v.Error()
 }
@@ -366,7 +498,7 @@ func (r *CreateTrackerPatternRequest) Validate() error {
 			return s
 		}(),
 	))
-	v.Check(r.Pattern, "pattern", validator.Required(), validator.SafeTextNoNewLine(255))
+	v.Check(r.Pattern, "pattern", validator.Required(), validator.SafeTextNoNewLine(MaxTrackerIdentifierLength))
 	v.Check(string(r.MatchType), "match_type", validator.Required(), validator.OneOfSlice(
 		func() []string {
 			types := coredata.TrackerPatternMatchTypes()
@@ -401,7 +533,6 @@ func (r *CreateTrackerPatternRequest) Validate() error {
 
 		return nil
 	})
-	v.Check(r.DisplayName, "display_name", validator.Required(), validator.SafeTextNoNewLine(255))
 	v.Check(r.Description, "description", validator.SafeText(1000))
 
 	return v.Error()
@@ -476,6 +607,22 @@ func CanonicalizeOrigin(raw string) string {
 	return u.Scheme + "://" + host
 }
 
+func IsReflectableOrigin(raw string) bool {
+	if raw == "" || raw == "null" {
+		return false
+	}
+
+	return validator.Origin()(raw) == nil
+}
+
+func storedConsentOrigin(raw string) *string {
+	if !IsReflectableOrigin(raw) {
+		return nil
+	}
+
+	return &raw
+}
+
 func (s *Service) ensureDraftVersion(
 	ctx context.Context,
 	tx pg.Tx,
@@ -484,11 +631,18 @@ func (s *Service) ensureDraftVersion(
 	categories coredata.CookieCategories,
 	allPatterns coredata.TrackerPatterns,
 ) (*coredata.CookieBannerVersion, error) {
-	snapshot := buildSnapshot(banner, categories, allPatterns)
+	var links coredata.CookieBannerGVLVendors
+
+	iabVendorIDs, err := links.LoadIABVendorIDsByCookieBannerID(ctx, tx, scope, banner.ID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot load cookie banner gvl vendor ids: %w", err)
+	}
+
+	snapshot := buildSnapshot(banner, categories, allPatterns, iabVendorIDs)
 
 	var latest coredata.CookieBannerVersion
 
-	err := latest.LoadLatestByCookieBannerID(ctx, tx, scope, banner.ID)
+	err = latest.LoadLatestByCookieBannerID(ctx, tx, scope, banner.ID)
 	if err == nil {
 		if latestSnapshot, snapErr := latest.GetSnapshot(); snapErr == nil && snapshotsEqual(snapshot, latestSnapshot) {
 			return &latest, nil
@@ -611,19 +765,28 @@ func (s *Service) CreateCookieBanner(
 			now := time.Now()
 
 			banner = &coredata.CookieBanner{
-				ID:                gid.New(scope.GetTenantID(), coredata.CookieBannerEntityType),
-				OrganizationID:    req.OrganizationID,
-				Name:              req.Name,
-				Origin:            CanonicalizeOrigin(req.Origin),
-				State:             coredata.CookieBannerStateActive,
-				PrivacyPolicyURL:  req.PrivacyPolicyURL,
-				CookiePolicyURL:   req.CookiePolicyURL,
-				ConsentExpiryDays: req.ConsentExpiryDays,
-				ShowBranding:      s.showBranding,
-				DefaultLanguage:   "en",
-				CreatedAt:         now,
-				UpdatedAt:         now,
+				ID:                   gid.New(scope.GetTenantID(), coredata.CookieBannerEntityType),
+				OrganizationID:       req.OrganizationID,
+				Name:                 req.Name,
+				Origin:               CanonicalizeOrigin(req.Origin),
+				State:                coredata.CookieBannerStateActive,
+				PrivacyPolicyURL:     req.PrivacyPolicyURL,
+				CookiePolicyURL:      req.CookiePolicyURL,
+				ConsentExpiryDays:    req.ConsentExpiryDays,
+				ShowBranding:         s.showBranding,
+				Capabilities:         coredata.DefaultCookieBannerCapabilities(),
+				DefaultLanguage:      "en",
+				PublisherCountryCode: tcfPublisherCC,
+				CreatedAt:            now,
+				UpdatedAt:            now,
 			}
+
+			domain, err := s.ensureCMPDomain(ctx, tx, banner.OrganizationID, scope.GetTenantID(), banner.Origin, now)
+			if err != nil {
+				return err
+			}
+
+			banner.CMPDomainID = &domain.ID
 
 			if err := banner.Insert(ctx, tx, scope); err != nil {
 				if errors.Is(err, coredata.ErrResourceAlreadyExists) {
@@ -640,6 +803,11 @@ func (s *Service) CreateCookieBanner(
 					gcmConsentTypes = []string{}
 				}
 
+				tcfPurposeIDs := dc.TCFPurposeIDs
+				if tcfPurposeIDs == nil {
+					tcfPurposeIDs = []int{}
+				}
+
 				category := &coredata.CookieCategory{
 					ID:              gid.New(scope.GetTenantID(), coredata.CookieCategoryEntityType),
 					OrganizationID:  banner.OrganizationID,
@@ -650,6 +818,7 @@ func (s *Service) CreateCookieBanner(
 					Kind:            dc.Kind,
 					Rank:            dc.Rank,
 					GCMConsentTypes: gcmConsentTypes,
+					TCFPurposeIDs:   tcfPurposeIDs,
 					PostHogConsent:  dc.PostHogConsent,
 					CreatedAt:       now,
 					UpdatedAt:       now,
@@ -672,7 +841,6 @@ func (s *Service) CreateCookieBanner(
 						TrackerType:      coredata.TrackerTypeCookie,
 						Pattern:          "probo_consent",
 						MatchType:        coredata.TrackerPatternMatchTypeExact,
-						DisplayName:      "probo_consent",
 						MaxAgeSeconds:    &consentMaxAge,
 						Description:      "Stores your cookie consent preferences for this website.",
 						Source:           new(coredata.CookieSourceScript),
@@ -779,7 +947,7 @@ func (s *Service) GetCookieBannersByIDs(
 	err := s.pg.WithConn(
 		ctx,
 		func(ctx context.Context, conn pg.Querier) error {
-			if err := banners.LoadByIDs(ctx, conn, scope, bannerIDs); err != nil {
+			if err := banners.LoadByIDs(ctx, conn, scope, bannerIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 				return fmt.Errorf("cannot load cookie banners by ids: %w", err)
 			}
 
@@ -791,6 +959,285 @@ func (s *Service) GetCookieBannersByIDs(
 	}
 
 	return banners, nil
+}
+
+func (s *Service) ListCommonGVLVendors(
+	ctx context.Context,
+	cursor *page.Cursor[coredata.CommonGVLVendorOrderField],
+	filter *coredata.CommonGVLVendorFilter,
+) (coredata.CommonGVLVendors, error) {
+	var vendors coredata.CommonGVLVendors
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := vendors.Load(ctx, conn, cursor, filter); err != nil {
+				return fmt.Errorf("cannot list common gvl vendors: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return vendors, nil
+}
+
+func (s *Service) CountCommonGVLVendors(
+	ctx context.Context,
+	filter *coredata.CommonGVLVendorFilter,
+) (int, error) {
+	var count int
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			var vendors coredata.CommonGVLVendors
+
+			var err error
+
+			count, err = vendors.Count(ctx, conn, filter)
+			if err != nil {
+				return fmt.Errorf("cannot count common gvl vendors: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+func (s *Service) GetCommonGVLCatalog(ctx context.Context) (*CommonGVLCatalog, error) {
+	catalog := &CommonGVLCatalog{}
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			var state coredata.CommonGVLState
+			if err := state.Load(ctx, conn); err != nil {
+				if errors.Is(err, coredata.ErrResourceNotFound) {
+					return nil
+				}
+
+				return fmt.Errorf("cannot load common gvl state: %w", err)
+			}
+
+			if state.LatestVendorListVersion == nil {
+				return nil
+			}
+
+			var snapshot coredata.CommonGVLSnapshot
+			if err := snapshot.LoadByVendorListVersion(ctx, conn, *state.LatestVendorListVersion); err != nil {
+				if errors.Is(err, coredata.ErrResourceNotFound) {
+					return nil
+				}
+
+				return fmt.Errorf("cannot load common gvl snapshot: %w", err)
+			}
+
+			catalog.VendorListVersion = state.LatestVendorListVersion
+			catalog.TCFPolicyVersion = new(snapshot.TCFPolicyVersion)
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return catalog, nil
+}
+
+func (s *Service) ListCookieBannerGVLVendors(
+	ctx context.Context,
+	scope coredata.Scoper,
+	bannerID gid.GID,
+	cursor *page.Cursor[coredata.CommonGVLVendorOrderField],
+) (coredata.CommonGVLVendors, error) {
+	var vendors coredata.CommonGVLVendors
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := vendors.LoadByCookieBannerID(ctx, conn, scope, bannerID, cursor); err != nil {
+				return fmt.Errorf("cannot list cookie banner gvl vendors: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return vendors, nil
+}
+
+func (s *Service) ListCookieBannerGVLVendorIDs(
+	ctx context.Context,
+	scope coredata.Scoper,
+	bannerID gid.GID,
+) ([]int, error) {
+	var ids []int
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			var links coredata.CookieBannerGVLVendors
+
+			loaded, err := links.LoadIABVendorIDsByCookieBannerID(ctx, conn, scope, bannerID)
+			if err != nil {
+				return fmt.Errorf("cannot list cookie banner gvl vendor ids: %w", err)
+			}
+
+			ids = loaded
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return ids, nil
+}
+
+func (s *Service) CountCookieBannerGVLVendors(
+	ctx context.Context,
+	scope coredata.Scoper,
+	bannerID gid.GID,
+) (int, error) {
+	var count int
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			var vendors coredata.CommonGVLVendors
+
+			var err error
+
+			count, err = vendors.CountByCookieBannerID(ctx, conn, scope, bannerID)
+			if err != nil {
+				return fmt.Errorf("cannot count cookie banner gvl vendors: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+func (s *Service) AddCookieBannerGVLVendor(
+	ctx context.Context,
+	scope coredata.Scoper,
+	req AddCookieBannerGVLVendorRequest,
+) (*coredata.CommonGVLVendor, error) {
+	if err := req.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	var vendor coredata.CommonGVLVendor
+
+	err := s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, tx pg.Tx) error {
+			var banner coredata.CookieBanner
+			if err := banner.LoadByID(ctx, tx, scope, req.CookieBannerID); err != nil {
+				if errors.Is(err, coredata.ErrResourceNotFound) {
+					return ErrBannerNotFound
+				}
+
+				return fmt.Errorf("cannot load cookie banner: %w", err)
+			}
+
+			if !banner.Capabilities.TCF {
+				return ErrTCFNotEnabled
+			}
+
+			if err := vendor.LoadByIABVendorID(ctx, tx, req.IABVendorID); err != nil {
+				if errors.Is(err, coredata.ErrResourceNotFound) {
+					return ErrGVLVendorNotFound
+				}
+
+				return fmt.Errorf("cannot load common gvl vendor: %w", err)
+			}
+
+			if vendor.IsDeleted(time.Now()) {
+				return ErrGVLVendorDeleted
+			}
+
+			link := coredata.CookieBannerGVLVendor{
+				CookieBannerID: banner.ID,
+				IABVendorID:    vendor.IABVendorID,
+				OrganizationID: banner.OrganizationID,
+				CreatedAt:      time.Now(),
+			}
+
+			if err := link.Upsert(ctx, tx, scope); err != nil {
+				return fmt.Errorf("cannot add cookie banner gvl vendor: %w", err)
+			}
+
+			if _, err := s.ensureDraftVersionForBanner(ctx, tx, scope, banner.ID); err != nil {
+				return fmt.Errorf("cannot ensure draft version: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &vendor, nil
+}
+
+func (s *Service) RemoveCookieBannerGVLVendor(
+	ctx context.Context,
+	scope coredata.Scoper,
+	req RemoveCookieBannerGVLVendorRequest,
+) error {
+	if err := req.Validate(); err != nil {
+		return fmt.Errorf("invalid request: %w", err)
+	}
+
+	return s.pg.WithTx(
+		ctx,
+		func(ctx context.Context, tx pg.Tx) error {
+			var banner coredata.CookieBanner
+			if err := banner.LoadByID(ctx, tx, scope, req.CookieBannerID); err != nil {
+				if errors.Is(err, coredata.ErrResourceNotFound) {
+					return ErrBannerNotFound
+				}
+
+				return fmt.Errorf("cannot load cookie banner: %w", err)
+			}
+
+			// Removal stays available even when TCF is off, so vendors linked
+			// while it was on can still be cleaned up. Gating it too would leave
+			// those rows undeletable while ensureDraftVersion keeps folding them
+			// into every new snapshot.
+			var link coredata.CookieBannerGVLVendor
+			if err := link.Delete(ctx, tx, scope, banner.ID, req.IABVendorID); err != nil {
+				return fmt.Errorf("cannot remove cookie banner gvl vendor: %w", err)
+			}
+
+			if _, err := s.ensureDraftVersionForBanner(ctx, tx, scope, banner.ID); err != nil {
+				return fmt.Errorf("cannot ensure draft version: %w", err)
+			}
+
+			return nil
+		},
+	)
 }
 
 func (s *Service) GetActiveCookieBanner(
@@ -904,10 +1351,14 @@ func (s *Service) UpdateCookieBanner(
 			cookiePolicyChanged := req.CookiePolicyURL != nil && *req.CookiePolicyURL != banner.CookiePolicyURL
 			expiryChanged := req.ConsentExpiryDays != nil && *req.ConsentExpiryDays != banner.ConsentExpiryDays
 			defaultLangChanged := req.DefaultLanguage != nil && *req.DefaultLanguage != banner.DefaultLanguage
+			publisherCCChanged := req.PublisherCountryCode != nil && *req.PublisherCountryCode != banner.PublisherCountryCode
+			capabilitiesChanged := req.Capabilities != nil &&
+				req.Capabilities.Apply(banner.Capabilities) != banner.Capabilities
+			forceOptInChanged := req.ForceOptIn != nil && *req.ForceOptIn != banner.ForceOptIn
 
 			snapshotChanged := privacyChanged || cookiePolicyChanged || expiryChanged || defaultLangChanged
 
-			if !nameChanged && !snapshotChanged {
+			if !nameChanged && !snapshotChanged && !capabilitiesChanged && !publisherCCChanged && !forceOptInChanged {
 				return nil
 			}
 
@@ -931,6 +1382,18 @@ func (s *Service) UpdateCookieBanner(
 				banner.DefaultLanguage = *req.DefaultLanguage
 			}
 
+			if req.PublisherCountryCode != nil {
+				banner.PublisherCountryCode = *req.PublisherCountryCode
+			}
+
+			if req.Capabilities != nil {
+				banner.Capabilities = req.Capabilities.Apply(banner.Capabilities)
+			}
+
+			if req.ForceOptIn != nil {
+				banner.ForceOptIn = *req.ForceOptIn
+			}
+
 			banner.UpdatedAt = time.Now()
 
 			if err := banner.Update(ctx, tx, scope); err != nil {
@@ -944,6 +1407,21 @@ func (s *Service) UpdateCookieBanner(
 			if snapshotChanged {
 				if _, err := s.ensureDraftVersionForBanner(ctx, tx, scope, banner.ID); err != nil {
 					return fmt.Errorf("cannot ensure draft version: %w", err)
+				}
+			}
+
+			if nameChanged && banner.Capabilities.Corsless {
+				var published coredata.CookieBannerVersion
+
+				err := published.LoadLatestPublishedByCookieBannerID(ctx, tx, scope, banner.ID)
+				if err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
+					return fmt.Errorf("cannot load latest published version: %w", err)
+				}
+
+				if err == nil {
+					if err := banner.SetPolicyGenerationRequested(ctx, tx); err != nil {
+						return fmt.Errorf("cannot request tracker policy generation: %w", err)
+					}
 				}
 			}
 
@@ -1189,6 +1667,7 @@ func (s *Service) CreateCookieCategory(
 				Kind:            coredata.CookieCategoryKindNormal,
 				Rank:            req.Rank,
 				GCMConsentTypes: []string{},
+				TCFPurposeIDs:   []int{},
 				CreatedAt:       now,
 				UpdatedAt:       now,
 			}
@@ -1253,7 +1732,7 @@ func (s *Service) GetCookieCategoriesByIDs(
 	err := s.pg.WithConn(
 		ctx,
 		func(ctx context.Context, conn pg.Querier) error {
-			if err := categories.LoadByIDs(ctx, conn, scope, categoryIDs); err != nil {
+			if err := categories.LoadByIDs(ctx, conn, scope, categoryIDs); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 				return fmt.Errorf("cannot load cookie categories by ids: %w", err)
 			}
 
@@ -1350,9 +1829,10 @@ func (s *Service) UpdateCookieCategory(
 			slugChanged := req.Slug != nil && *req.Slug != category.Slug
 			descChanged := req.Description != nil && *req.Description != category.Description
 			gcmChanged := req.GCMConsentTypes != nil && !slices.Equal(*req.GCMConsentTypes, category.GCMConsentTypes)
+			tcfChanged := req.TCFPurposeIDs != nil && !slices.Equal(*req.TCFPurposeIDs, category.TCFPurposeIDs)
 			posthogChanged := req.PostHogConsent != nil && *req.PostHogConsent != category.PostHogConsent
 
-			if !nameChanged && !slugChanged && !descChanged && !gcmChanged && !posthogChanged {
+			if !nameChanged && !slugChanged && !descChanged && !gcmChanged && !tcfChanged && !posthogChanged {
 				return nil
 			}
 
@@ -1370,6 +1850,10 @@ func (s *Service) UpdateCookieCategory(
 
 			if req.GCMConsentTypes != nil {
 				category.GCMConsentTypes = *req.GCMConsentTypes
+			}
+
+			if req.TCFPurposeIDs != nil {
+				category.TCFPurposeIDs = *req.TCFPurposeIDs
 			}
 
 			if posthogChanged {
@@ -1537,6 +2021,34 @@ func (s *Service) GetCookieBannerVersion(
 	return &version, nil
 }
 
+func (s *Service) GetLatestPublishedCookieBannerVersion(
+	ctx context.Context,
+	scope coredata.Scoper,
+	bannerID gid.GID,
+) (*coredata.CookieBannerVersion, error) {
+	var version coredata.CookieBannerVersion
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := version.LoadLatestPublishedByCookieBannerID(ctx, conn, scope, bannerID); err != nil {
+				if errors.Is(err, coredata.ErrResourceNotFound) {
+					return ErrVersionNotFound
+				}
+
+				return fmt.Errorf("cannot load latest published cookie banner version: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &version, nil
+}
+
 func (s *Service) ListCookieBannerVersionsForBanner(
 	ctx context.Context,
 	scope coredata.Scoper,
@@ -1684,7 +2196,10 @@ func (s *Service) GetActiveBannerConfig(
 	regulation Regulation,
 	sdkVersion string,
 ) (*BannerConfig, error) {
-	var config *BannerConfig
+	var (
+		config     *BannerConfig
+		forceOptIn bool
+	)
 
 	err := s.pg.WithConn(
 		ctx,
@@ -1755,7 +2270,14 @@ func (s *Service) GetActiveBannerConfig(
 			}
 
 			resolved := resolveTranslations(translations, categories)
+			forceOptIn = banner.ForceOptIn
 			config = buildBannerConfig(&banner, &version, &snapshot, resolved, lang)
+
+			if banner.Capabilities.TCF && tcfServesGVL(regulation) {
+				if err := s.attachTCFVendors(ctx, conn, config, snapshot.IABVendorIDs, banner.PublisherCountryCode); err != nil {
+					return err
+				}
+			}
 
 			return nil
 		},
@@ -1765,11 +2287,22 @@ func (s *Service) GetActiveBannerConfig(
 	}
 
 	config.Regulation = regulation
+	config.ConsentMode = ConsentModeForBanner(regulation, forceOptIn)
+	config.Layout = LayoutForBanner(regulation, forceOptIn)
 
-	config.ConsentMode = ConsentModeForRegulation(regulation)
-	if !isLegacySDK(sdkVersion) {
-		remapTextsForConsentMode(config.Texts, config.ConsentMode)
+	if IsUSStatePrivacyRegulation(regulation) && !IsCaliforniaPrivacyRegulation(regulation) {
+		applyUSStatePrivacyBannerTexts(config)
 	}
+
+	if IsCanadianOptOutPrivacyRegulation(regulation) {
+		applyCanadianPrivacyBannerTexts(config)
+	}
+
+	if IsCaliforniaPrivacyRegulation(regulation) {
+		applyCCPABannerTexts(config)
+	}
+
+	applyBannerTextCompat(config, sdkVersion)
 
 	return config, nil
 }
@@ -1824,82 +2357,83 @@ func buildBannerConfig(
 		}
 	}
 
+	mergeTCFTexts(resolvedLang, texts)
+
 	var privacyPolicyURL string
 	if snapshot.PrivacyPolicyURL != nil {
 		privacyPolicyURL = *snapshot.PrivacyPolicyURL
 	}
 
 	return &BannerConfig{
-		BannerID:          banner.ID,
-		Version:           version.Version,
-		Language:          resolvedLang,
-		DefaultLanguage:   defaultLang,
-		PrivacyPolicyURL:  privacyPolicyURL,
-		CookiePolicyURL:   snapshot.CookiePolicyURL,
-		ConsentExpiryDays: snapshot.ConsentExpiryDays,
-		ShowBranding:      banner.ShowBranding,
-		Categories:        categories,
-		Texts:             texts,
+		BannerID:                 banner.ID,
+		Version:                  version.Version,
+		Language:                 resolvedLang,
+		DefaultLanguage:          defaultLang,
+		PrivacyPolicyURL:         privacyPolicyURL,
+		CookiePolicyURL:          snapshot.CookiePolicyURL,
+		ConsentExpiryDays:        snapshot.ConsentExpiryDays,
+		ShowBranding:             banner.ShowBranding,
+		ResourceReportingEnabled: banner.Capabilities.ResourceReporting,
+		Categories:               categories,
+		Texts:                    texts,
 	}
 }
 
-// remapTextsForConsentMode overrides the generic banner text keys with
-// mode-specific variants so the client renders the appropriate copy
-// without needing consent-mode awareness itself.
-func remapTextsForConsentMode(texts map[string]string, consentMode string) {
-	if texts == nil {
-		return
+func (s *Service) attachTCFVendors(
+	ctx context.Context,
+	conn pg.Querier,
+	config *BannerConfig,
+	iabVendorIDs []int,
+	publisherCC string,
+) error {
+	if config.TCF == nil {
+		config.TCF = &BannerTCF{}
 	}
 
-	if consentMode == ConsentModeOptOut {
-		remapTextKey(texts, "banner_title_opt_out", "banner_title")
-		remapTextKey(texts, "banner_description_opt_out", "banner_description")
-		remapTextKey(texts, "button_acknowledge", "button_accept_all")
-		remapTextKey(texts, "button_opt_out", "button_reject_all")
-		texts["button_customize"] = ""
-	}
-}
+	cmpID := s.tcfCmpID
+	cmpVersion := tcfCmpVersion
+	config.TCF.CmpID = &cmpID
+	config.TCF.CmpVersion = &cmpVersion
 
-// isLegacySDK returns true when the SDK version is <= 0.2.x.
-// Empty or unparseable versions are treated as current.
-func isLegacySDK(version string) bool {
-	if version == "" {
-		return false
+	if publisherCC == "" {
+		publisherCC = tcfPublisherCC
 	}
 
-	major, minor, ok := parseMajorMinor(version)
-	if !ok {
-		return false
+	config.TCF.PublisherCC = publisherCC
+
+	var snapshot *coredata.CommonGVLSnapshot
+
+	var state coredata.CommonGVLState
+	if err := state.Load(ctx, conn); err != nil {
+		if !errors.Is(err, coredata.ErrResourceNotFound) {
+			return fmt.Errorf("cannot load common gvl state: %w", err)
+		}
+	} else if state.LatestVendorListVersion != nil {
+		var loaded coredata.CommonGVLSnapshot
+		if err := loaded.LoadByVendorListVersion(ctx, conn, *state.LatestVendorListVersion); err != nil {
+			if !errors.Is(err, coredata.ErrResourceNotFound) {
+				return fmt.Errorf("cannot load common gvl snapshot: %w", err)
+			}
+		} else {
+			snapshot = &loaded
+		}
 	}
 
-	return major == 0 && minor <= 2
-}
-
-func parseMajorMinor(version string) (major, minor int, ok bool) {
-	v := strings.TrimPrefix(version, "v")
-
-	parts := strings.SplitN(v, ".", 3)
-	if len(parts) < 2 {
-		return 0, 0, false
+	if snapshot == nil {
+		return nil
 	}
 
-	maj, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return 0, 0, false
+	var vendors coredata.CommonGVLVendors
+	if err := vendors.LoadByIABVendorIDs(ctx, conn, iabVendorIDs); err != nil {
+		return fmt.Errorf("cannot load tcf vendors: %w", err)
 	}
 
-	min, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return 0, 0, false
+	config.TCF.GVL = buildTCFGVL(snapshot, vendors, iabVendorIDs)
+	if config.TCF.GVL.VendorListVersion == 0 && state.LatestVendorListVersion != nil {
+		config.TCF.GVL.VendorListVersion = *state.LatestVendorListVersion
 	}
 
-	return maj, min, true
-}
-
-func remapTextKey(texts map[string]string, src, dst string) {
-	if v, ok := texts[src]; ok && v != "" {
-		texts[dst] = v
-	}
+	return nil
 }
 
 func (s *Service) SetShowBranding(
@@ -2079,6 +2613,7 @@ func (s *Service) GetVisitorConsent(
 				Version:     version.Version,
 				Action:      record.Action,
 				ConsentData: record.ConsentData,
+				TC:          record.TC,
 				CreatedAt:   record.CreatedAt,
 			}
 
@@ -2090,6 +2625,14 @@ func (s *Service) GetVisitorConsent(
 	}
 
 	return consent, nil
+}
+
+func optionalNonEmptyString(value *string) *string {
+	if value == nil || *value == "" {
+		return nil
+	}
+
+	return value
 }
 
 func (s *Service) RecordConsent(
@@ -2135,6 +2678,17 @@ func (s *Service) RecordConsent(
 				return ErrVersionNotPublished
 			}
 
+			if err := validateConsentTC(banner.Capabilities.TCF, req.Regulation, req.TC, s.tcfCmpID); err != nil {
+				return fmt.Errorf("invalid request: %w", err)
+			}
+
+			var consentMode *coredata.CookieConsentMode
+
+			if req.Regulation != nil {
+				mode := coredata.CookieConsentMode(ConsentModeForBanner(*req.Regulation, banner.ForceOptIn))
+				consentMode = &mode
+			}
+
 			record = &coredata.CookieConsentRecord{
 				ID:                    gid.New(scope.GetTenantID(), coredata.CookieConsentRecordEntityType),
 				OrganizationID:        banner.OrganizationID,
@@ -2149,7 +2703,10 @@ func (s *Service) RecordConsent(
 				Regulation:            req.Regulation,
 				RegulationSource:      &req.RegulationSource,
 				CountryCode:           req.CountryCode,
-				ConsentMode:           req.ConsentMode,
+				SubdivisionCode:       req.SubdivisionCode,
+				ConsentMode:           consentMode,
+				TC:                    optionalNonEmptyString(req.TC),
+				Origin:                storedConsentOrigin(req.Origin),
 				CreatedAt:             time.Now(),
 			}
 
@@ -2189,7 +2746,9 @@ func (s *Service) ReportDetectedTrackers(
 	bannerID gid.GID,
 	req ReportDetectedTrackersRequest,
 ) error {
-	return s.pg.WithTx(
+	countedHits := make(map[gid.GID]bool)
+
+	err := s.pg.WithTx(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
 			scope := coredata.NewScopeFromObjectID(bannerID)
@@ -2203,18 +2762,25 @@ func (s *Service) ReportDetectedTrackers(
 				return fmt.Errorf("cannot load cookie banner: %w", err)
 			}
 
+			if !banner.Capabilities.ResourceReporting {
+				req.Resources = nil
+			}
+
+			if banner.ForceOptIn {
+				req.Presentation = coredata.CookieBannerPresentationOptIn
+			}
+
 			var uncategorised coredata.CookieCategory
 			if err := uncategorised.LoadUncategorisedByCookieBannerID(ctx, tx, scope, banner.ID); err != nil {
 				return fmt.Errorf("cannot load uncategorised category: %w", err)
 			}
 
 			inserted := 0
+			sourcePromotion := false
 			now := time.Now()
 
-			var matchedPatternIDs []gid.GID
-
 			for _, dc := range req.Cookies {
-				if err := s.reportDetectedTracker(
+				promote, err := s.reportDetectedTracker(
 					ctx,
 					tx,
 					scope,
@@ -2226,17 +2792,27 @@ func (s *Service) ReportDetectedTrackers(
 						Identifier:    dc.Name,
 						MaxAgeSeconds: dc.MaxAgeSeconds,
 						Source:        &dc.Source,
+						ObservedBy:    coredata.DetectedTrackerObserverSDK,
 						InitiatorURL:  dc.InitiatorURL,
+						CookieDomain:  dc.CookieDomain,
+						HostOnly:      dc.HostOnly,
+						Hit:           dc.Hit,
+						Granted:       categoryGrantedForHit(req.Presentation, req.ConsentAction, dc.CategoryGranted),
 					},
 					&inserted,
-					&matchedPatternIDs,
-				); err != nil {
+					countedHits,
+				)
+				if err != nil {
 					return err
+				}
+
+				if promote {
+					sourcePromotion = true
 				}
 			}
 
 			for _, ds := range req.Storage {
-				if err := s.reportDetectedTracker(
+				promote, err := s.reportDetectedTracker(
 					ctx,
 					tx,
 					scope,
@@ -2248,19 +2824,26 @@ func (s *Service) ReportDetectedTrackers(
 						Identifier:   ds.Key,
 						ValueSize:    ds.ValueSize,
 						Source:       ds.Source,
+						ObservedBy:   coredata.DetectedTrackerObserverSDK,
 						InitiatorURL: ds.InitiatorURL,
+						Hit:          ds.Hit,
+						Granted:      categoryGrantedForHit(req.Presentation, req.ConsentAction, ds.CategoryGranted),
 					},
 					&inserted,
-					&matchedPatternIDs,
-				); err != nil {
+					countedHits,
+				)
+				if err != nil {
 					return err
+				}
+
+				if promote {
+					sourcePromotion = true
 				}
 			}
 
+			resources := make([]coredata.TrackerResource, 0, len(req.Resources))
 			for _, dr := range req.Resources {
-				wasInserted, err := s.reportDetectedResource(
-					ctx,
-					tx,
+				resource, err := trackerResourceFromItem(
 					scope,
 					&banner,
 					uncategorised.ID,
@@ -2271,17 +2854,20 @@ func (s *Service) ReportDetectedTrackers(
 					return err
 				}
 
-				if wasInserted {
-					inserted++
-				}
+				resources = append(resources, resource)
 			}
 
-			if len(matchedPatternIDs) > 0 {
-				var patterns coredata.TrackerPatterns
-				if err := patterns.UpdateLastMatchedAt(ctx, tx, scope, matchedPatternIDs, now); err != nil {
-					return fmt.Errorf("cannot update tracker pattern last_matched_at: %w", err)
-				}
+			resourceInserted, err := s.upsertTrackerResources(
+				ctx,
+				tx,
+				scope,
+				resources,
+			)
+			if err != nil {
+				return err
 			}
+
+			inserted += resourceInserted
 
 			if inserted > 0 {
 				if err := banner.SetPatternAnalysisRequested(ctx, tx); err != nil {
@@ -2289,9 +2875,29 @@ func (s *Service) ReportDetectedTrackers(
 				}
 			}
 
+			if sourcePromotion {
+				if err := s.requestCMPSourcePromotion(ctx, tx, &banner, now); err != nil {
+					return err
+				}
+			}
+
 			return nil
 		},
 	)
+	if err != nil {
+		return err
+	}
+
+	s.recordAnalytics(
+		bannerID,
+		req.Family,
+		req.Presentation,
+		req.ConsentAction,
+		req.PageView,
+		countedHits,
+	)
+
+	return nil
 }
 
 type detectedTrackerInfo struct {
@@ -2299,8 +2905,19 @@ type detectedTrackerInfo struct {
 	Identifier    string
 	MaxAgeSeconds *int
 	Source        *coredata.CookieSource
+	ObservedBy    coredata.DetectedTrackerObserver
 	ValueSize     *int
 	InitiatorURL  *string
+	CookieDomain  *string
+	HostOnly      *bool
+	HTTPOnly      *bool
+	Secure        *bool
+	SameSite      *coredata.CookieSameSite
+	Partitioned   *bool
+	SetByURL      *string
+	ScanID        *gid.GID
+	Hit           bool
+	Granted       bool
 }
 
 func (s *Service) reportDetectedTracker(
@@ -2312,23 +2929,76 @@ func (s *Service) reportDetectedTracker(
 	now time.Time,
 	info detectedTrackerInfo,
 	inserted *int,
-	matchedPatternIDs *[]gid.GID,
-) error {
+	countedHits map[gid.GID]bool,
+) (bool, error) {
+	patternID, promote, err := s.persistDetectedTracker(
+		ctx,
+		tx,
+		scope,
+		banner,
+		uncategorisedID,
+		now,
+		info,
+		inserted,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	if info.Hit && patternID != nil {
+		if _, seen := countedHits[*patternID]; !seen {
+			countedHits[*patternID] = info.Granted
+		}
+	}
+
+	return promote, nil
+}
+
+// persistDetectedTracker writes the pattern and the detected row on tx.
+// The pattern id is nil when the identifier is skipped. Pattern hits are
+// recorded by the caller, after this returns.
+func (s *Service) persistDetectedTracker(
+	ctx context.Context,
+	tx pg.Tx,
+	scope coredata.Scoper,
+	banner *coredata.CookieBanner,
+	uncategorisedID gid.GID,
+	now time.Time,
+	info detectedTrackerInfo,
+	inserted *int,
+) (*gid.GID, bool, error) {
+	if len(info.Identifier) > MaxTrackerIdentifierLength {
+		return nil, false, nil
+	}
+
+	// PostgreSQL INTEGER (int4) is the column type. A cookie Max-Age
+	// like 251610986978 decodes into Go's 64-bit int and then fails
+	// the upsert for the whole batch. Drop the field and keep the row.
+	info.MaxAgeSeconds = int4OrNil(info.MaxAgeSeconds)
+	info.ValueSize = int4OrNil(info.ValueSize)
+
 	var matchedPattern coredata.TrackerPattern
 
 	err := matchedPattern.FindMatchingPattern(ctx, tx, scope, banner.ID, info.TrackerType, info.Identifier)
 	if err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
-		return fmt.Errorf("cannot find matching tracker pattern: %w", err)
+		return nil, false, fmt.Errorf("cannot find matching tracker pattern: %w", err)
+	}
+
+	if s.afterPatternLookup != nil {
+		s.afterPatternLookup(info.Source)
 	}
 
 	if err == nil && matchedPattern.Excluded {
-		return nil
+		return nil, false, nil
 	}
 
-	var patternID *gid.GID
+	var (
+		patternID     *gid.GID
+		needsMetadata bool
+	)
+
 	if err == nil {
 		patternID = &matchedPattern.ID
-		*matchedPatternIDs = append(*matchedPatternIDs, matchedPattern.ID)
 
 		// A glob (or exact) pattern already covers this
 		// identifier, so no new exact pattern will be created
@@ -2339,28 +3009,20 @@ func (s *Service) reportDetectedTracker(
 		// otherwise a pattern that started life as PRE_EXISTING
 		// (or EXTENSION) never advances even when subsequent
 		// SCRIPT-source detections confirm it as a real page
-		// tracker — last_matched_at would move forward but
-		// source would stay stale. shouldPromoteSource is a
-		// no-op when info.Source is nil or weaker, so storage
-		// items without a source and weaker re-detections cost
+		// tracker. shouldPromoteSource is a no-op when
+		// info.Source is nil or weaker, so storage items
+		// without a source and weaker re-detections cost
 		// nothing.
-		if shouldPromoteSource(matchedPattern.Source, info.Source) {
-			matchedPattern.Source = info.Source
-			matchedPattern.UpdatedAt = now
-
-			if err := matchedPattern.Update(ctx, tx, scope); err != nil {
-				return fmt.Errorf("cannot promote source on matched tracker pattern %q: %w", matchedPattern.Pattern, err)
-			}
-
-			// A stronger source can unblock mapping: the detection
-			// upserted below carries a fresh initiator domain that
-			// matchByDomain/matchBySiblingOrigin can now use. Re-arm
-			// mapping so the worker revisits the pattern.
-			if err := matchedPattern.SetMappingRequested(ctx, tx); err != nil {
-				return fmt.Errorf("cannot request mapping after source promotion on tracker pattern %q: %w", matchedPattern.Pattern, err)
-			}
+		needsMetadata, err = applyIncomingPatternMetadata(ctx, tx, scope, &matchedPattern, info, now)
+		if err != nil {
+			return nil, false, err
 		}
 	} else {
+		var mappingRequestedAt *time.Time
+		if info.Source == nil || *info.Source != coredata.CookieSourceExtension {
+			mappingRequestedAt = &now
+		}
+
 		newPattern := &coredata.TrackerPattern{
 			ID:                 gid.New(scope.GetTenantID(), coredata.TrackerPatternEntityType),
 			OrganizationID:     banner.OrganizationID,
@@ -2369,19 +3031,17 @@ func (s *Service) reportDetectedTracker(
 			TrackerType:        info.TrackerType,
 			Pattern:            info.Identifier,
 			MatchType:          coredata.TrackerPatternMatchTypeExact,
-			DisplayName:        info.Identifier,
 			Description:        "",
 			MaxAgeSeconds:      info.MaxAgeSeconds,
 			Source:             info.Source,
-			LastMatchedAt:      &now,
-			MappingRequestedAt: &now,
+			MappingRequestedAt: mappingRequestedAt,
 			CreatedAt:          now,
 			UpdatedAt:          now,
 		}
 
 		wasInserted, err := newPattern.InsertIfNotExists(ctx, tx, scope)
 		if err != nil {
-			return fmt.Errorf("cannot insert tracker pattern: %w", err)
+			return nil, false, fmt.Errorf("cannot insert tracker pattern: %w", err)
 		}
 
 		if wasInserted {
@@ -2390,10 +3050,19 @@ func (s *Service) reportDetectedTracker(
 		} else {
 			var existingPattern coredata.TrackerPattern
 			if err := existingPattern.FindMatchingPattern(ctx, tx, scope, banner.ID, info.TrackerType, info.Identifier); err != nil {
-				return fmt.Errorf("cannot load existing tracker pattern: %w", err)
+				return nil, false, fmt.Errorf("cannot load existing tracker pattern: %w", err)
+			}
+
+			if existingPattern.Excluded {
+				return nil, false, nil
 			}
 
 			patternID = &existingPattern.ID
+
+			needsMetadata, err = applyIncomingPatternMetadata(ctx, tx, scope, &existingPattern, info, now)
+			if err != nil {
+				return nil, false, err
+			}
 		}
 	}
 
@@ -2406,64 +3075,226 @@ func (s *Service) reportDetectedTracker(
 	}
 
 	tracker := &coredata.DetectedTracker{
-		ID:               gid.New(scope.GetTenantID(), coredata.DetectedTrackerEntityType),
-		CookieBannerID:   banner.ID,
-		TrackerPatternID: patternID,
-		TrackerType:      info.TrackerType,
-		Identifier:       info.Identifier,
-		MaxAgeSeconds:    info.MaxAgeSeconds,
-		Source:           info.Source,
-		ValueSize:        info.ValueSize,
-		InitiatorURL:     info.InitiatorURL,
-		InitiatorDomain:  initiatorDomain,
-		LastDetectedAt:   now,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ID:                 gid.New(scope.GetTenantID(), coredata.DetectedTrackerEntityType),
+		CookieBannerID:     banner.ID,
+		TrackerPatternID:   patternID,
+		TrackerType:        info.TrackerType,
+		Identifier:         info.Identifier,
+		MaxAgeSeconds:      info.MaxAgeSeconds,
+		Source:             info.Source,
+		ObservedBy:         info.ObservedBy,
+		ValueSize:          info.ValueSize,
+		InitiatorURL:       info.InitiatorURL,
+		InitiatorDomain:    initiatorDomain,
+		CookieDomain:       info.CookieDomain,
+		HostOnly:           info.HostOnly,
+		HTTPOnly:           info.HTTPOnly,
+		Secure:             info.Secure,
+		SameSite:           info.SameSite,
+		Partitioned:        info.Partitioned,
+		SetByURL:           info.SetByURL,
+		CookieBannerScanID: info.ScanID,
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	}
 
-	if _, err := tracker.Upsert(ctx, tx, scope); err != nil {
-		return fmt.Errorf("cannot upsert detected tracker: %w", err)
+	// Scanner rows are upserted even when the pattern did not change, so
+	// cookie_banner_scan_id and the cookie attributes refresh on the next scan.
+	wrote := false
+
+	if needsMetadata || info.ObservedBy == coredata.DetectedTrackerObserverScanner {
+		if _, err := tracker.Upsert(ctx, tx, scope); err != nil {
+			return nil, false, fmt.Errorf("cannot upsert detected tracker: %w", err)
+		}
+
+		wrote = true
+	} else if insertedRow, err := tracker.InsertIfNotExists(ctx, tx, scope); err != nil {
+		return nil, false, fmt.Errorf("cannot insert detected tracker: %w", err)
+	} else {
+		wrote = insertedRow
 	}
 
-	return nil
+	return patternID, wrote && sourcePromotionRelevant(info), nil
 }
 
-func (s *Service) reportDetectedResource(
+// applyIncomingPatternMetadata promotes source and fills max-age on
+// an already-persisted pattern when the incoming detection is
+// richer. Used both when FindMatchingPattern hits and when
+// InsertIfNotExists loses a first-insert race, so a PRE_EXISTING
+// winner still advances to SCRIPT on the same request.
+func applyIncomingPatternMetadata(
 	ctx context.Context,
 	tx pg.Tx,
+	scope coredata.Scoper,
+	pattern *coredata.TrackerPattern,
+	info detectedTrackerInfo,
+	now time.Time,
+) (bool, error) {
+	promoted := shouldPromoteSource(pattern.Source, info.Source)
+	if promoted {
+		pattern.Source = info.Source
+		// The banner's own detection replaces evidence borrowed from a sibling.
+		pattern.SourceCookieBannerID = nil
+	}
+
+	filledMaxAge := pattern.MatchType == coredata.TrackerPatternMatchTypeExact &&
+		pattern.MaxAgeSeconds == nil && info.MaxAgeSeconds != nil
+	if filledMaxAge {
+		pattern.MaxAgeSeconds = info.MaxAgeSeconds
+	}
+
+	needsMetadata := promoted || filledMaxAge
+	if !needsMetadata {
+		return false, nil
+	}
+
+	pattern.UpdatedAt = now
+
+	if err := pattern.Update(ctx, tx, scope); err != nil {
+		return false, fmt.Errorf("cannot promote source on matched tracker pattern %q: %w", pattern.Pattern, err)
+	}
+
+	if promoted {
+		if err := pattern.SetMappingRequested(ctx, tx); err != nil {
+			return false, fmt.Errorf("cannot request mapping after source promotion on tracker pattern %q: %w", pattern.Pattern, err)
+		}
+	}
+
+	return true, nil
+}
+
+// int4OrNil keeps a value only when it fits in PostgreSQL INTEGER.
+// Zero and negative durations are treated as unknown, same as the
+// SDK omitting Max-Age.
+func int4OrNil(v *int) *int {
+	if v == nil || *v <= 0 || *v > math.MaxInt32 {
+		return nil
+	}
+
+	return v
+}
+
+func trackerResourceFromItem(
 	scope coredata.Scoper,
 	banner *coredata.CookieBanner,
 	uncategorisedID gid.GID,
 	now time.Time,
 	item DetectedResourceItem,
-) (bool, error) {
-	u, err := url.Parse(item.URL.String())
+) (coredata.TrackerResource, error) {
+	parsed, err := url.Parse(item.URL.String())
 	if err != nil {
-		return false, fmt.Errorf("cannot parse resource URL: %w", err)
+		return coredata.TrackerResource{}, fmt.Errorf("cannot parse resource URL: %w", err)
 	}
 
-	origin := u.Scheme + "://" + u.Host
+	origin := url.URL{Scheme: parsed.Scheme, Host: parsed.Host}
 
-	path := u.Path
+	return newTrackerResource(
+		scope,
+		banner,
+		uncategorisedID,
+		now,
+		item.ResourceType,
+		origin.String(),
+		parsed.Path,
+		nil,
+	), nil
+}
+
+func newTrackerResource(
+	scope coredata.Scoper,
+	banner *coredata.CookieBanner,
+	uncategorisedID gid.GID,
+	now time.Time,
+	resourceType coredata.TrackerResourceType,
+	origin string,
+	path string,
+	scanID *gid.GID,
+) coredata.TrackerResource {
 	if path == "" {
 		path = "/"
 	}
 
-	resource := &coredata.TrackerResource{
-		ID:               gid.New(scope.GetTenantID(), coredata.TrackerResourceEntityType),
-		OrganizationID:   banner.OrganizationID,
-		CookieBannerID:   banner.ID,
-		CookieCategoryID: uncategorisedID,
-		ResourceType:     item.ResourceType,
-		Origin:           origin,
-		Path:             path,
-		DisplayName:      u.Host + path,
-		Description:      "",
-		LastDetectedAt:   &now,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+	host := origin
+	if parsed, err := url.Parse(origin); err == nil && parsed.Host != "" {
+		host = parsed.Host
 	}
 
+	return coredata.TrackerResource{
+		ID:                 gid.New(scope.GetTenantID(), coredata.TrackerResourceEntityType),
+		OrganizationID:     banner.OrganizationID,
+		CookieBannerID:     banner.ID,
+		CookieCategoryID:   uncategorisedID,
+		ResourceType:       resourceType,
+		Origin:             origin,
+		Path:               path,
+		DisplayName:        host + path,
+		Description:        "",
+		CookieBannerScanID: scanID,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+}
+
+// orderTrackerResources returns resources in lock order. An empty path is
+// "/", the value stored on the row, so two reports of one resource cannot
+// take its lock in opposite orders.
+func orderTrackerResources(resources []coredata.TrackerResource) []coredata.TrackerResource {
+	ordered := slices.Clone(resources)
+	for i := range ordered {
+		if ordered[i].Path == "" {
+			ordered[i].Path = "/"
+		}
+	}
+
+	slices.SortFunc(ordered, func(a, b coredata.TrackerResource) int {
+		return cmp.Or(
+			cmp.Compare(a.ResourceType, b.ResourceType),
+			cmp.Compare(a.Origin, b.Origin),
+			cmp.Compare(a.Path, b.Path),
+		)
+	})
+
+	return slices.CompactFunc(ordered, sameTrackerResourceLock)
+}
+
+func sameTrackerResourceLock(a, b coredata.TrackerResource) bool {
+	return a.ResourceType == b.ResourceType && a.Origin == b.Origin && a.Path == b.Path
+}
+
+// upsertTrackerResources writes the resources in lock order. A nil
+// scan ID on a resource leaves an existing row's scan stamp untouched,
+// which is what SDK reports need.
+func (s *Service) upsertTrackerResources(
+	ctx context.Context,
+	tx pg.Tx,
+	scope coredata.Scoper,
+	resources []coredata.TrackerResource,
+) (int, error) {
+	inserted := 0
+	ordered := orderTrackerResources(resources)
+
+	for i := range ordered {
+		wasInserted, err := s.upsertTrackerResource(ctx, tx, scope, &ordered[i])
+		if err != nil {
+			return 0, err
+		}
+
+		if wasInserted {
+			inserted++
+		}
+	}
+
+	return inserted, nil
+}
+
+// upsertTrackerResource writes one tracker resource. A nil scan ID leaves
+// an existing row's scan stamp untouched, which is what SDK reports need.
+func (s *Service) upsertTrackerResource(
+	ctx context.Context,
+	tx pg.Tx,
+	scope coredata.Scoper,
+	resource *coredata.TrackerResource,
+) (bool, error) {
 	inserted, err := resource.Upsert(ctx, tx, scope)
 	if err != nil {
 		return false, fmt.Errorf("cannot upsert tracker resource: %w", err)
@@ -2505,7 +3336,6 @@ func (s *Service) CreateTrackerPattern(
 				TrackerType:      req.TrackerType,
 				Pattern:          req.Pattern,
 				MatchType:        req.MatchType,
-				DisplayName:      req.DisplayName,
 				MaxAgeSeconds:    req.MaxAgeSeconds,
 				Description:      req.Description,
 				Source:           req.Source,
@@ -2760,13 +3590,30 @@ func (s *Service) MoveTrackerPatternToCategory(
 
 			// A manual move is the user's signal that this is a
 			// real tracker. Enqueue the tracker-mapping worker so
-			// it can promote the pattern to an org ThirdParty (or
-			// link an existing one) — never EXTENSION-sourced
-			// patterns, and never patterns we already promoted.
-			// SetMappingRequested is idempotent: it short-circuits
-			// when mapping_requested_at is already non-NULL.
-			if pattern.ThirdPartyID == nil &&
-				(pattern.Source == nil || *pattern.Source != coredata.CookieSourceExtension) {
+			// it can resolve the catalog vendor — never
+			// EXTENSION-sourced patterns, and never patterns whose
+			// catalog row already has a vendor or a terminal
+			// attribution. An unmatched / undetermined catalog
+			// link is not resolved: sibling and domain signals
+			// still need a chance to backfill. SetMappingRequested
+			// is idempotent: it short-circuits when
+			// mapping_requested_at is already non-NULL.
+			shouldEnqueueMapping := pattern.Source == nil ||
+				*pattern.Source != coredata.CookieSourceExtension
+
+			if shouldEnqueueMapping && pattern.CommonTrackerPatternID != nil {
+				var commonPattern coredata.CommonTrackerPattern
+				if err := commonPattern.LoadByID(ctx, tx, *pattern.CommonTrackerPatternID); err != nil {
+					if !errors.Is(err, coredata.ErrResourceNotFound) {
+						return fmt.Errorf("cannot load common tracker pattern: %w", err)
+					}
+				} else if commonPattern.Attribution.IsTerminal() ||
+					commonPattern.CommonThirdPartyID != nil {
+					shouldEnqueueMapping = false
+				}
+			}
+
+			if shouldEnqueueMapping {
 				if err := pattern.SetMappingRequested(ctx, tx); err != nil {
 					return fmt.Errorf("cannot enqueue tracker mapping after move: %w", err)
 				}
@@ -2876,41 +3723,6 @@ func (s *Service) GetCommonTrackerPatternsByIDs(
 	return patterns, nil
 }
 
-// LoadDistinctThirdPartyIDsByCookieBannerID returns the distinct
-// org-scoped third-party IDs referenced by tracker patterns of the
-// banner. The companion
-// LoadDistinctCommonTrackerPatternIDsByCookieBannerID covers the
-// indirect mapping through common_tracker_patterns.
-func (s *Service) LoadDistinctThirdPartyIDsByCookieBannerID(
-	ctx context.Context,
-	scope coredata.Scoper,
-	cookieBannerID gid.GID,
-) ([]gid.GID, error) {
-	var ids []gid.GID
-
-	err := s.pg.WithConn(
-		ctx,
-		func(ctx context.Context, conn pg.Querier) error {
-			var (
-				patterns coredata.TrackerPatterns
-				err      error
-			)
-
-			ids, err = patterns.LoadDistinctThirdPartyIDsByCookieBannerID(ctx, conn, scope, cookieBannerID)
-			if err != nil {
-				return fmt.Errorf("cannot load distinct third party ids: %w", err)
-			}
-
-			return nil
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return ids, nil
-}
-
 func (s *Service) LoadDistinctCommonTrackerPatternIDsByCookieBannerID(
 	ctx context.Context,
 	scope coredata.Scoper,
@@ -2941,6 +3753,38 @@ func (s *Service) LoadDistinctCommonTrackerPatternIDsByCookieBannerID(
 	return ids, nil
 }
 
+func (s *Service) LoadObserversByTrackerPatternIDs(
+	ctx context.Context,
+	scope coredata.Scoper,
+	trackerPatternIDs []gid.GID,
+) (map[gid.GID][]coredata.DetectedTrackerObserver, error) {
+	var observers map[gid.GID][]coredata.DetectedTrackerObserver
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			var err error
+
+			observers, err = new(coredata.DetectedTrackers).LoadObserversByTrackerPatternIDs(
+				ctx,
+				conn,
+				scope,
+				trackerPatternIDs,
+			)
+			if err != nil {
+				return fmt.Errorf("cannot load detected tracker observers: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return observers, nil
+}
+
 func (s *Service) CountDetectedTrackersByPatternID(
 	ctx context.Context,
 	scope coredata.Scoper,
@@ -2959,6 +3803,112 @@ func (s *Service) CountDetectedTrackersByPatternID(
 			count, err = trackers.CountByTrackerPatternID(ctx, conn, scope, trackerPatternID)
 			if err != nil {
 				return fmt.Errorf("cannot count detected trackers: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+func (s *Service) ListDetectedTrackersForScan(
+	ctx context.Context,
+	scope coredata.Scoper,
+	scanID gid.GID,
+	filter *coredata.DetectedTrackerFilter,
+	cursor *page.Cursor[coredata.DetectedTrackerOrderField],
+) (coredata.DetectedTrackers, error) {
+	var trackers coredata.DetectedTrackers
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := trackers.LoadByCookieBannerScanID(ctx, conn, scope, scanID, filter, cursor); err != nil {
+				return fmt.Errorf("cannot list detected trackers for scan: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return trackers, nil
+}
+
+func (s *Service) CountDetectedTrackersForScan(
+	ctx context.Context,
+	scope coredata.Scoper,
+	scanID gid.GID,
+	filter *coredata.DetectedTrackerFilter,
+) (int, error) {
+	var count int
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			var err error
+
+			count, err = new(coredata.DetectedTrackers).CountByCookieBannerScan(ctx, conn, scope, scanID, filter)
+			if err != nil {
+				return fmt.Errorf("cannot count detected trackers for scan: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+func (s *Service) ListTrackerResourcesForScan(
+	ctx context.Context,
+	scope coredata.Scoper,
+	scanID gid.GID,
+	cursor *page.Cursor[coredata.TrackerResourceOrderField],
+) (coredata.TrackerResources, error) {
+	var resources coredata.TrackerResources
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := resources.LoadByCookieBannerScanID(ctx, conn, scope, scanID, cursor); err != nil {
+				return fmt.Errorf("cannot list tracker resources for scan: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return resources, nil
+}
+
+func (s *Service) CountTrackerResourcesForScan(
+	ctx context.Context,
+	scope coredata.Scoper,
+	scanID gid.GID,
+) (int, error) {
+	var count int
+
+	err := s.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			var err error
+
+			count, err = new(coredata.TrackerResources).CountByCookieBannerScanID(ctx, conn, scope, scanID)
+			if err != nil {
+				return fmt.Errorf("cannot count tracker resources for scan: %w", err)
 			}
 
 			return nil

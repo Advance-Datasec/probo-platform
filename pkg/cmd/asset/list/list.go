@@ -1,21 +1,26 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package list
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -24,11 +29,11 @@ import (
 )
 
 const listQuery = `
-query($id: ID!, $first: Int, $after: CursorKey, $orderBy: AssetOrder, $filter: AssetFilter) {
+query AssetList($id: ID!, $first: Int, $after: CursorKey, $orderBy: AssetOrder) {
   node(id: $id) {
     __typename
     ... on Organization {
-      assets(first: $first, after: $after, orderBy: $orderBy, filter: $filter) {
+      assets(first: $first, after: $after, orderBy: $orderBy) {
         totalCount
         edges {
           node {
@@ -59,6 +64,7 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	var (
 		flagOrg      string
 		flagLimit    int
+		flagAfter    string
 		flagOrderBy  string
 		flagOrderDir string
 		flagOutput   *string
@@ -79,30 +85,18 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
-			cfg, err := f.Config()
+			if err := cmdutil.ValidateLimit(flagLimit); err != nil {
+				return err
+			}
+
+			client, hc, err := f.GraphQLClient(cmdutil.ConsoleEndpoint)
 			if err != nil {
 				return err
 			}
 
-			host, hc, err := cfg.DefaultHost()
+			flagOrg, err = cmdutil.ResolveOrganization(flagOrg, hc.Organization)
 			if err != nil {
 				return err
-			}
-
-			client := api.NewClient(
-				host,
-				hc.Token,
-				"/api/console/v1/graphql",
-				cfg.HTTPTimeoutDuration(),
-				cmdutil.TokenRefreshOption(cfg, host, hc),
-			)
-
-			if flagOrg == "" {
-				flagOrg = hc.Organization
-			}
-
-			if flagOrg == "" {
-				return fmt.Errorf("organization is required; pass --org or set a default with 'prb auth login'")
 			}
 
 			variables := map[string]any{
@@ -120,77 +114,46 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				}
 			}
 
-			assets, totalCount, err := api.Paginate(
+			assets, totalCount, nextCursor, err := api.Paginate(
 				client,
 				listQuery,
 				variables,
 				flagLimit,
-				func(data json.RawMessage) (*api.Connection[asset], error) {
-					var resp struct {
-						Node *struct {
-							Typename string                `json:"__typename"`
-							Assets   api.Connection[asset] `json:"assets"`
-						} `json:"node"`
-					}
-					if err := json.Unmarshal(data, &resp); err != nil {
-						return nil, err
-					}
-
-					if resp.Node == nil {
-						return nil, fmt.Errorf("organization %s not found", flagOrg)
-					}
-
-					if resp.Node.Typename != "Organization" {
-						return nil, fmt.Errorf("expected Organization node, got %s", resp.Node.Typename)
-					}
-
-					return &resp.Node.Assets, nil
-				},
+				flagAfter,
+				api.NodeConnection[asset]("assets", "Organization", fmt.Sprintf("organization %s not found", flagOrg)),
 			)
 			if err != nil {
 				return err
 			}
 
-			if *flagOutput == cmdutil.OutputJSON {
-				return cmdutil.PrintJSON(f.IOStreams.Out, assets)
-			}
-
-			if len(assets) == 0 {
-				_, _ = fmt.Fprintln(f.IOStreams.Out, "No assets found.")
-				return nil
-			}
-
-			rows := make([][]string, 0, len(assets))
-			for _, a := range assets {
-				rows = append(rows, []string{
-					a.ID,
-					a.Name,
-					a.AssetType,
-					fmt.Sprintf("%d", a.Amount),
-				})
-			}
-
-			t := cmdutil.NewTable("ID", "NAME", "TYPE", "AMOUNT").Rows(rows...)
-
-			_, _ = fmt.Fprintln(f.IOStreams.Out, t)
-
-			if totalCount > len(assets) {
-				_, _ = fmt.Fprintf(
-					f.IOStreams.ErrOut,
-					"\nShowing %d of %d assets\n",
-					len(assets),
-					totalCount,
-				)
-			}
-
-			return nil
+			return cmdutil.PrintList(
+				f.IOStreams,
+				*flagOutput,
+				assets,
+				totalCount,
+				cmdutil.ListView[asset]{
+					Empty:      "No assets found.",
+					Noun:       "assets",
+					NextCursor: nextCursor,
+					Headers:    []string{"ID", "NAME", "TYPE", "AMOUNT"},
+					Row: func(a asset) ([]string, error) {
+						return []string{
+							a.ID,
+							a.Name,
+							a.AssetType,
+							fmt.Sprintf("%d", a.Amount),
+						}, nil
+					},
+				},
+			)
 		},
 	}
 
-	cmd.Flags().StringVar(&flagOrg, "org", "", "Organization ID")
+	cmdutil.AddOrganizationFlag(cmd, &flagOrg, "Organization ID")
 	cmd.Flags().IntVarP(&flagLimit, "limit", "L", 30, "Maximum number of assets to list")
+	cmdutil.AddAfterFlag(cmd, &flagAfter)
 	cmd.Flags().StringVar(&flagOrderBy, "order-by", "", "Order by field (CREATED_AT, AMOUNT)")
-	cmd.Flags().StringVar(&flagOrderDir, "order-direction", "DESC", "Sort direction (ASC, DESC)")
+	cmdutil.AddOrderDirectionFlag(cmd, &flagOrderDir, "DESC")
 	flagOutput = cmdutil.AddOutputFlag(cmd)
 
 	return cmd

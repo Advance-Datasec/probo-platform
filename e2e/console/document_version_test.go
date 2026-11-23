@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_test
 
@@ -273,9 +279,79 @@ func requestDocumentSignature(t *testing.T, owner *testutil.Client, versionID, s
 	require.NoError(t, err)
 }
 
-func TestDocumentVersion_PublishVersion(t *testing.T) {
+type (
+	documentVersionActors struct {
+		owner  *testutil.Client
+		viewer *testutil.Client
+	}
+)
+
+func TestDocumentVersion(t *testing.T) {
 	t.Parallel()
+
+	// Shared owner/viewer clients are intentional: each parallel subtest creates
+	// its own documents and mutable resources in this organization. net/http
+	// Client and cookiejar.Jar are safe for concurrent use; the full suite runs
+	// without race instrumentation for speed while ./e2e/internal/... is
+	// race-gated in CI.
 	owner := testutil.NewClient(t, testutil.RoleOwner)
+	viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
+	actors := documentVersionActors{owner: owner, viewer: viewer}
+
+	cases := []struct {
+		name string
+		run  func(*testing.T, documentVersionActors)
+	}{
+		{name: "PublishVersion", run: documentVersionPublishVersion},
+		{name: "PublishInitialMinorVersion", run: documentVersionPublishInitialMinorVersion},
+		{name: "AutoCreateDraft", run: documentVersionAutoCreateDraft},
+		{name: "RequestSignature", run: documentVersionRequestSignature},
+		{name: "BulkPublish", run: documentVersionBulkPublish},
+		{name: "BulkPublishRequestsApproval", run: documentVersionBulkPublishRequestsApproval},
+		{name: "BulkPublishSkipsPendingApproval", run: documentVersionBulkPublishSkipsPendingApproval},
+		{name: "BulkPublishMinorSkipsPendingApproval", run: documentVersionBulkPublishMinorSkipsPendingApproval},
+		{name: "BulkRequestSignatures", run: documentVersionBulkRequestSignatures},
+		{name: "AutoCreateDraftOnClassificationOrTypeUpdate", run: documentVersionAutoCreateDraftOnClassificationOrTypeUpdate},
+		{name: "ViewerCannotUpdateDocument", run: documentVersionViewerCannotUpdateDocument},
+		{name: "BulkDelete", run: documentVersionBulkDelete},
+		{name: "VoidApproval", run: documentVersionVoidApproval},
+		{name: "RejectApproval", run: documentVersionRejectApproval},
+		{name: "PublishBlockedWhenPendingApproval", run: documentVersionPublishBlockedWhenPendingApproval},
+		{name: "PublishApproverIDsContract", run: documentVersionPublishApproverIDsContract},
+		{name: "DefaultApprovers", run: documentDefaultApprovers},
+		{name: "ExportPDFSignatures", run: documentVersionExportPDFSignatures},
+		{name: "MajorPublishCancelsSignatureRequests", run: documentVersionMajorPublishCancelsSignatureRequests},
+		{name: "MinorPublishKeepsSignatureRequests", run: documentVersionMinorPublishKeepsSignatureRequests},
+		{name: "MajorApprovalPublishCancelsSignatureRequests", run: documentVersionMajorApprovalPublishCancelsSignatureRequests},
+		{name: "RequestSignatureIsIdempotentWithinVersion", run: documentVersionRequestSignatureIsIdempotentWithinVersion},
+		{name: "RequestSignatureDeduplicatesAcrossMinors", run: documentVersionRequestSignatureDeduplicatesAcrossMinors},
+		{name: "MinorPublishMovesSignatureRequestsToNewVersion", run: documentVersionMinorPublishMovesSignatureRequestsToNewVersion},
+		{name: "SignDocument", run: documentVersionSignDocument},
+		{name: "SignDocumentWithoutRequestFails", run: documentVersionSignDocumentWithoutRequestFails},
+		{name: "SignDocumentTwiceFails", run: documentVersionSignDocumentTwiceFails},
+		{name: "ArchiveVoidsPendingQuorum", run: documentVersionArchiveVoidsPendingQuorum},
+		{name: "ArchiveCancelsPendingSignatures", run: documentVersionArchiveCancelsPendingSignatures},
+		{name: "UnarchiveRestoresEditableDraft", run: documentVersionUnarchiveRestoresEditableDraft},
+		{name: "SignArchivedDocumentFails", run: documentVersionSignArchivedDocumentFails},
+	}
+
+	for _, tc := range cases {
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				t.Parallel()
+
+				tc.run(
+					t,
+					actors,
+				)
+			},
+		)
+	}
+}
+
+func documentVersionPublishVersion(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	docID, _ := createTestDocument(t, owner)
 	approveTestDocument(t, owner, docID)
@@ -325,9 +401,8 @@ func TestDocumentVersion_PublishVersion(t *testing.T) {
 	assert.Equal(t, 0, result.Node.Versions.Edges[0].Node.Minor)
 }
 
-func TestDocumentVersion_PublishInitialMinorVersion(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionPublishInitialMinorVersion(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	docID, _ := createTestDocument(t, owner)
 
@@ -380,21 +455,19 @@ func TestDocumentVersion_PublishInitialMinorVersion(t *testing.T) {
 
 	var updateResult struct {
 		UpdateDocument struct {
-			DocumentVersion *struct {
-				Status string `json:"status"`
-				Major  int    `json:"major"`
-				Minor  int    `json:"minor"`
-			} `json:"documentVersion"`
+			Document struct {
+				Content struct {
+					Prosemirror string `json:"prosemirror"`
+				} `json:"content"`
+			} `json:"document"`
 		} `json:"updateDocument"`
 	}
 
 	err = owner.Execute(`
 		mutation($input: UpdateDocumentInput!) {
 			updateDocument(input: $input) {
-				documentVersion {
-					status
-					major
-					minor
+				document {
+					content { prosemirror }
 				}
 			}
 		}
@@ -405,10 +478,7 @@ func TestDocumentVersion_PublishInitialMinorVersion(t *testing.T) {
 		},
 	}, &updateResult)
 	require.NoError(t, err)
-	require.NotNil(t, updateResult.UpdateDocument.DocumentVersion)
-	assert.Equal(t, "DRAFT", updateResult.UpdateDocument.DocumentVersion.Status)
-	assert.Equal(t, 0, updateResult.UpdateDocument.DocumentVersion.Major)
-	assert.Equal(t, 2, updateResult.UpdateDocument.DocumentVersion.Minor)
+	assert.Contains(t, updateResult.UpdateDocument.Document.Content.Prosemirror, "Updated content for 0.2")
 
 	err = owner.Execute(publishMutation, map[string]any{
 		"input": map[string]any{
@@ -428,25 +498,26 @@ func TestDocumentVersion_PublishInitialMinorVersion(t *testing.T) {
 	assert.Equal(t, 2, publishResult.PublishDocument.DocumentVersion.Minor)
 }
 
-func TestDocumentVersion_AutoCreateDraft(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionAutoCreateDraft(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	// Create and approve a document (auto-publishes on approval)
 	docID, _ := createTestDocument(t, owner)
 	approveTestDocument(t, owner, docID)
 
-	// Updating content should auto-create a draft
+	// Updating content writes the live document and leaves published snapshots unchanged.
 	query := `
 		mutation UpdateDocument($input: UpdateDocumentInput!) {
 			updateDocument(input: $input) {
 				document {
 					id
+					content {
+						prosemirror
+						markdown
+					}
 				}
 				documentVersion {
 					id
-					status
-					content
 				}
 			}
 		}
@@ -455,12 +526,14 @@ func TestDocumentVersion_AutoCreateDraft(t *testing.T) {
 	var result struct {
 		UpdateDocument struct {
 			Document struct {
-				ID string `json:"id"`
+				ID      string `json:"id"`
+				Content struct {
+					Prosemirror string `json:"prosemirror"`
+					Markdown    string `json:"markdown"`
+				} `json:"content"`
 			} `json:"document"`
 			DocumentVersion *struct {
-				ID      string `json:"id"`
-				Status  string `json:"status"`
-				Content string `json:"content"`
+				ID string `json:"id"`
 			} `json:"documentVersion"`
 		} `json:"updateDocument"`
 	}
@@ -473,80 +546,13 @@ func TestDocumentVersion_AutoCreateDraft(t *testing.T) {
 	}, &result)
 	require.NoError(t, err)
 
-	require.NotNil(t, result.UpdateDocument.DocumentVersion)
-	assert.Equal(t, "DRAFT", result.UpdateDocument.DocumentVersion.Status)
+	assert.Nil(t, result.UpdateDocument.DocumentVersion)
+	assert.Contains(t, result.UpdateDocument.Document.Content.Prosemirror, "Updated content")
+	assert.Contains(t, result.UpdateDocument.Document.Content.Markdown, "Updated content")
 }
 
-func TestDocumentVersion_AutoDeleteDraft(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
-
-	// Create and approve a document (auto-publishes on approval)
-	docID, _ := createTestDocument(t, owner)
-	approveTestDocument(t, owner, docID)
-
-	// First update to create a draft
-	query := `
-		mutation UpdateDocument($input: UpdateDocumentInput!) {
-			updateDocument(input: $input) {
-				document {
-					id
-				}
-				documentVersion {
-					id
-					status
-				}
-			}
-		}
-	`
-
-	var createResult struct {
-		UpdateDocument struct {
-			Document struct {
-				ID string `json:"id"`
-			} `json:"document"`
-			DocumentVersion *struct {
-				ID     string `json:"id"`
-				Status string `json:"status"`
-			} `json:"documentVersion"`
-		} `json:"updateDocument"`
-	}
-
-	err := owner.Execute(query, map[string]any{
-		"input": map[string]any{
-			"id":      docID,
-			"content": testutil.ProseMirrorTextDoc("Updated content"),
-		},
-	}, &createResult)
-	require.NoError(t, err)
-	require.NotNil(t, createResult.UpdateDocument.DocumentVersion)
-
-	// Now revert content to match the published version — draft should be auto-deleted
-	var revertResult struct {
-		UpdateDocument struct {
-			Document struct {
-				ID string `json:"id"`
-			} `json:"document"`
-			DocumentVersion *struct {
-				ID string `json:"id"`
-			} `json:"documentVersion"`
-		} `json:"updateDocument"`
-	}
-
-	err = owner.Execute(query, map[string]any{
-		"input": map[string]any{
-			"id":      docID,
-			"content": testutil.ProseMirrorTextDoc("Initial content"),
-		},
-	}, &revertResult)
-	require.NoError(t, err)
-
-	assert.Nil(t, revertResult.UpdateDocument.DocumentVersion)
-}
-
-func TestDocumentVersion_RequestSignature(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionRequestSignature(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	// Create and approve a document (auto-publishes on approval)
 	docID, _ := createTestDocument(t, owner)
@@ -671,9 +677,8 @@ func createTestDocumentWithApprovers(t *testing.T, owner *testutil.Client, appro
 	return result.CreateDocument.DocumentEdge.Node.ID
 }
 
-func TestDocumentVersion_BulkPublish(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionBulkPublish(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	// Create multiple draft documents (no default approvers — should publish directly)
 	docID1, _ := createTestDocument(t, owner)
@@ -715,9 +720,8 @@ func TestDocumentVersion_BulkPublish(t *testing.T) {
 	}
 }
 
-func TestDocumentVersion_BulkPublishRequestsApproval(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionBulkPublishRequestsApproval(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	approverID := getOwnerProfileID(t, owner)
 
@@ -764,9 +768,8 @@ func TestDocumentVersion_BulkPublishRequestsApproval(t *testing.T) {
 	assert.Equal(t, 0, dv.Minor)
 }
 
-func TestDocumentVersion_BulkPublishSkipsPendingApproval(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionBulkPublishSkipsPendingApproval(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	approverID := getOwnerProfileID(t, owner)
 
@@ -815,9 +818,8 @@ func TestDocumentVersion_BulkPublishSkipsPendingApproval(t *testing.T) {
 	assert.Empty(t, result.BulkPublishDocuments.DocumentVersions)
 }
 
-func TestDocumentVersion_BulkPublishMinorSkipsPendingApproval(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionBulkPublishMinorSkipsPendingApproval(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	// Create and publish a document first (need a published version for minor publish)
 	docID, _ := createTestDocument(t, owner)
@@ -883,9 +885,8 @@ func TestDocumentVersion_BulkPublishMinorSkipsPendingApproval(t *testing.T) {
 	assert.Empty(t, result.BulkPublishDocuments.DocumentVersions)
 }
 
-func TestDocumentVersion_BulkRequestSignatures(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionBulkRequestSignatures(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	// Create and approve a document (auto-publishes on approval)
 	docID, _ := createTestDocument(t, owner)
@@ -934,27 +935,22 @@ func TestDocumentVersion_BulkRequestSignatures(t *testing.T) {
 	}
 }
 
-func TestDocumentVersion_AutoCreateDraftOnClassificationOrTypeUpdate(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
-
+func documentVersionAutoCreateDraftOnClassificationOrTypeUpdate(t *testing.T, actors documentVersionActors) {
 	t.Run("documentType update creates draft", func(t *testing.T) {
 		t.Parallel()
+
+		owner := actors.owner.ForTest(t)
 
 		// Create and approve a document (auto-publishes on approval)
 		docID, _ := createTestDocument(t, owner)
 		approveTestDocument(t, owner, docID)
 
-		// Updating documentType should auto-create a draft
 		query := `
 			mutation UpdateDocument($input: UpdateDocumentInput!) {
 				updateDocument(input: $input) {
 					document {
 						id
-					}
-					documentVersion {
-						id
-						status
+						documentType
 					}
 				}
 			}
@@ -963,12 +959,9 @@ func TestDocumentVersion_AutoCreateDraftOnClassificationOrTypeUpdate(t *testing.
 		var result struct {
 			UpdateDocument struct {
 				Document struct {
-					ID string `json:"id"`
+					ID           string `json:"id"`
+					DocumentType string `json:"documentType"`
 				} `json:"document"`
-				DocumentVersion *struct {
-					ID     string `json:"id"`
-					Status string `json:"status"`
-				} `json:"documentVersion"`
 			} `json:"updateDocument"`
 		}
 
@@ -980,27 +973,24 @@ func TestDocumentVersion_AutoCreateDraftOnClassificationOrTypeUpdate(t *testing.
 		}, &result)
 		require.NoError(t, err)
 
-		require.NotNil(t, result.UpdateDocument.DocumentVersion)
-		assert.Equal(t, "DRAFT", result.UpdateDocument.DocumentVersion.Status)
+		assert.Equal(t, "PROCEDURE", result.UpdateDocument.Document.DocumentType)
 	})
 
 	t.Run("classification update creates draft", func(t *testing.T) {
 		t.Parallel()
 
+		owner := actors.owner.ForTest(t)
+
 		// Create and approve a document (auto-publishes on approval)
 		docID, _ := createTestDocument(t, owner)
 		approveTestDocument(t, owner, docID)
 
-		// Updating classification should auto-create a draft
 		query := `
 			mutation UpdateDocument($input: UpdateDocumentInput!) {
 				updateDocument(input: $input) {
 					document {
 						id
-					}
-					documentVersion {
-						id
-						status
+						classification
 					}
 				}
 			}
@@ -1009,12 +999,9 @@ func TestDocumentVersion_AutoCreateDraftOnClassificationOrTypeUpdate(t *testing.
 		var result struct {
 			UpdateDocument struct {
 				Document struct {
-					ID string `json:"id"`
+					ID             string `json:"id"`
+					Classification string `json:"classification"`
 				} `json:"document"`
-				DocumentVersion *struct {
-					ID     string `json:"id"`
-					Status string `json:"status"`
-				} `json:"documentVersion"`
 			} `json:"updateDocument"`
 		}
 
@@ -1026,15 +1013,13 @@ func TestDocumentVersion_AutoCreateDraftOnClassificationOrTypeUpdate(t *testing.
 		}, &result)
 		require.NoError(t, err)
 
-		require.NotNil(t, result.UpdateDocument.DocumentVersion)
-		assert.Equal(t, "DRAFT", result.UpdateDocument.DocumentVersion.Status)
+		assert.Equal(t, "CONFIDENTIAL", result.UpdateDocument.Document.Classification)
 	})
 }
 
-func TestDocumentVersion_ViewerCannotUpdateDocument(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
-	viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
+func documentVersionViewerCannotUpdateDocument(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
+	viewer := actors.viewer.ForTest(t)
 
 	// Create and approve a document (auto-publishes on approval)
 	docID, _ := createTestDocument(t, owner)
@@ -1056,9 +1041,8 @@ func TestDocumentVersion_ViewerCannotUpdateDocument(t *testing.T) {
 	testutil.RequireForbiddenError(t, err, "viewer should not be able to update document")
 }
 
-func TestDocumentVersion_BulkDelete(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionBulkDelete(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	// Create multiple documents to delete
 	docID1, _ := createTestDocument(t, owner)
@@ -1090,9 +1074,8 @@ func TestDocumentVersion_BulkDelete(t *testing.T) {
 	assert.Contains(t, result.BulkDeleteDocuments.DeletedDocumentIds, docID2)
 }
 
-func TestDocumentVersion_VoidApproval(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionVoidApproval(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	docID, _ := createTestDocument(t, owner)
 	approverID := getOwnerProfileID(t, owner)
@@ -1149,7 +1132,7 @@ func TestDocumentVersion_VoidApproval(t *testing.T) {
 
 	versionID := versionResult.Node.Versions.Edges[0].Node.ID
 
-	// Void approval — version should revert to 0.1
+	// Void keeps the snapshot number and marks the row voided.
 	var voidResult struct {
 		VoidDocumentVersionApproval struct {
 			ApprovalQuorum struct {
@@ -1180,9 +1163,9 @@ func TestDocumentVersion_VoidApproval(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "VOIDED", voidResult.VoidDocumentVersionApproval.ApprovalQuorum.Status)
-	assert.Equal(t, "DRAFT", voidResult.VoidDocumentVersionApproval.DocumentVersion.Status)
-	assert.Equal(t, 0, voidResult.VoidDocumentVersionApproval.DocumentVersion.Major)
-	assert.Equal(t, 1, voidResult.VoidDocumentVersionApproval.DocumentVersion.Minor)
+	assert.Equal(t, "VOIDED", voidResult.VoidDocumentVersionApproval.DocumentVersion.Status)
+	assert.Equal(t, 1, voidResult.VoidDocumentVersionApproval.DocumentVersion.Major)
+	assert.Equal(t, 0, voidResult.VoidDocumentVersionApproval.DocumentVersion.Minor)
 
 	// Verify decisions are VOIDED after voiding
 	var quorumResult struct {
@@ -1243,9 +1226,8 @@ func TestDocumentVersion_VoidApproval(t *testing.T) {
 	}
 }
 
-func TestDocumentVersion_RejectApproval(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionRejectApproval(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	docID, _ := createTestDocument(t, owner)
 	approverID := getOwnerProfileID(t, owner)
@@ -1317,7 +1299,7 @@ func TestDocumentVersion_RejectApproval(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Verify version reverted to 0.1 DRAFT
+	// The refused snapshot keeps its number so the next publish can reuse it.
 	err = owner.Execute(`
 		query($id: ID!) {
 			node(id: $id) {
@@ -1331,9 +1313,9 @@ func TestDocumentVersion_RejectApproval(t *testing.T) {
 	`, map[string]any{"id": docID}, &versionResult)
 	require.NoError(t, err)
 	require.NotEmpty(t, versionResult.Node.Versions.Edges)
-	assert.Equal(t, "DRAFT", versionResult.Node.Versions.Edges[0].Node.Status)
-	assert.Equal(t, 0, versionResult.Node.Versions.Edges[0].Node.Major)
-	assert.Equal(t, 1, versionResult.Node.Versions.Edges[0].Node.Minor)
+	assert.Equal(t, "REJECTED", versionResult.Node.Versions.Edges[0].Node.Status)
+	assert.Equal(t, 1, versionResult.Node.Versions.Edges[0].Node.Major)
+	assert.Equal(t, 0, versionResult.Node.Versions.Edges[0].Node.Minor)
 
 	// Verify decisions are VOIDED after reject
 	var quorumResult struct {
@@ -1391,9 +1373,8 @@ func TestDocumentVersion_RejectApproval(t *testing.T) {
 	assert.Equal(t, "REJECTED", decisions[0].Node.State, "rejecting approver's decision should be REJECTED")
 }
 
-func TestDocumentVersion_PublishBlockedWhenPendingApproval(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionPublishBlockedWhenPendingApproval(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	docID, _ := createTestDocument(t, owner)
 	approverID := getOwnerProfileID(t, owner)
@@ -1418,6 +1399,8 @@ func TestDocumentVersion_PublishBlockedWhenPendingApproval(t *testing.T) {
 	t.Run("publish major blocked", func(t *testing.T) {
 		t.Parallel()
 
+		owner := actors.owner.ForTest(t)
+
 		_, err := owner.Do(`
 			mutation($input: PublishDocumentInput!) {
 				publishDocument(input: $input) {
@@ -1437,6 +1420,8 @@ func TestDocumentVersion_PublishBlockedWhenPendingApproval(t *testing.T) {
 
 	t.Run("publish minor blocked", func(t *testing.T) {
 		t.Parallel()
+
+		owner := actors.owner.ForTest(t)
 
 		_, err := owner.Do(`
 			mutation($input: PublishDocumentInput!) {
@@ -1459,9 +1444,7 @@ func TestDocumentVersion_PublishBlockedWhenPendingApproval(t *testing.T) {
 // be an explicit choice when publishing: required for a major version (empty
 // list publishes directly, non-empty requests approval) and rejected for a minor
 // version (which ignores approvers).
-func TestDocumentVersion_PublishApproverIDsContract(t *testing.T) {
-	t.Parallel()
-
+func documentVersionPublishApproverIDsContract(t *testing.T, actors documentVersionActors) {
 	const publishMutation = `
 		mutation($input: PublishDocumentInput!) {
 			publishDocument(input: $input) {
@@ -1484,7 +1467,7 @@ func TestDocumentVersion_PublishApproverIDsContract(t *testing.T) {
 
 	t.Run("major publish without approver_ids is rejected", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := actors.owner.ForTest(t)
 		docID, _ := createTestDocument(t, owner)
 
 		_, err := owner.Do(publishMutation, map[string]any{
@@ -1499,7 +1482,7 @@ func TestDocumentVersion_PublishApproverIDsContract(t *testing.T) {
 
 	t.Run("major publish with empty approver_ids publishes directly", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := actors.owner.ForTest(t)
 		docID, _ := createTestDocument(t, owner)
 
 		var result publishResult
@@ -1519,7 +1502,7 @@ func TestDocumentVersion_PublishApproverIDsContract(t *testing.T) {
 
 	t.Run("major publish with approver_ids requests approval", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := actors.owner.ForTest(t)
 		docID, _ := createTestDocument(t, owner)
 
 		var result publishResult
@@ -1539,7 +1522,7 @@ func TestDocumentVersion_PublishApproverIDsContract(t *testing.T) {
 
 	t.Run("minor publish without approver_ids is allowed", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := actors.owner.ForTest(t)
 		docID, _ := createTestDocument(t, owner)
 		publishMajorDocumentVersion(t, owner, docID)
 		updateDocumentContent(t, owner, docID, "Updated content for minor")
@@ -1560,7 +1543,7 @@ func TestDocumentVersion_PublishApproverIDsContract(t *testing.T) {
 
 	t.Run("minor publish with approver_ids is rejected", func(t *testing.T) {
 		t.Parallel()
-		owner := testutil.NewClient(t, testutil.RoleOwner)
+		owner := actors.owner.ForTest(t)
 		docID, _ := createTestDocument(t, owner)
 		publishMajorDocumentVersion(t, owner, docID)
 		updateDocumentContent(t, owner, docID, "Updated content for rejected minor")
@@ -1577,14 +1560,15 @@ func TestDocumentVersion_PublishApproverIDsContract(t *testing.T) {
 	})
 }
 
-func TestDocument_DefaultApprovers(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentDefaultApprovers(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	approverID := getOwnerProfileID(t, owner)
 
 	t.Run("create document with default approvers", func(t *testing.T) {
 		t.Parallel()
+
+		owner := actors.owner.ForTest(t)
 
 		var result struct {
 			CreateDocument struct {
@@ -1628,6 +1612,8 @@ func TestDocument_DefaultApprovers(t *testing.T) {
 
 	t.Run("update document with default approvers", func(t *testing.T) {
 		t.Parallel()
+
+		owner := actors.owner.ForTest(t)
 
 		docID, _ := createTestDocument(t, owner)
 
@@ -1682,172 +1668,59 @@ func TestDocument_DefaultApprovers(t *testing.T) {
 
 		assert.Empty(t, result.UpdateDocument.Document.DefaultApprovers)
 	})
-}
 
-func TestDocumentVersion_DeleteDraft(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+	t.Run("major publish with explicit approvers updates default approvers, even when empty", func(t *testing.T) {
+		t.Parallel()
 
-	const query = `
-		mutation DeleteDocumentDraft($input: DeleteDocumentDraftInput!) {
-			deleteDocumentDraft(input: $input) {
-				document {
-					id
-				}
-			}
+		owner := actors.owner.ForTest(t)
+
+		docID := createTestDocumentWithApprovers(t, owner, []string{approverID})
+
+		var result struct {
+			PublishDocument struct {
+				Document struct {
+					DefaultApprovers []struct {
+						ID string `json:"id"`
+					} `json:"defaultApprovers"`
+				} `json:"document"`
+				DocumentVersion struct {
+					Status string `json:"status"`
+				} `json:"documentVersion"`
+			} `json:"publishDocument"`
 		}
-	`
 
-	t.Run(
-		"delete draft after publishing",
-		func(t *testing.T) {
-			t.Parallel()
-
-			docID, _ := createTestDocument(t, owner)
-			approveTestDocument(t, owner, docID)
-
-			// Create a draft by updating content
-			updateQuery := `
-				mutation UpdateDocument($input: UpdateDocumentInput!) {
-					updateDocument(input: $input) {
-						document { id }
-						documentVersion { id status }
-					}
+		err := owner.Execute(`
+			mutation($input: PublishDocumentInput!) {
+				publishDocument(input: $input) {
+					document { defaultApprovers { id } }
+					documentVersion { status }
 				}
-			`
-
-			var updateResult struct {
-				UpdateDocument struct {
-					Document struct {
-						ID string `json:"id"`
-					} `json:"document"`
-					DocumentVersion *struct {
-						ID     string `json:"id"`
-						Status string `json:"status"`
-					} `json:"documentVersion"`
-				} `json:"updateDocument"`
 			}
+		`, map[string]any{
+			"input": map[string]any{
+				"minor":       false,
+				"documentId":  docID,
+				"approverIds": []string{},
+				"changelog":   "Direct publish clearing approvers",
+			},
+		}, &result)
+		require.NoError(t, err)
 
-			err := owner.Execute(updateQuery, map[string]any{
-				"input": map[string]any{
-					"id":      docID,
-					"content": testutil.ProseMirrorTextDoc("Draft content"),
-				},
-			}, &updateResult)
-			require.NoError(t, err)
-			require.NotNil(t, updateResult.UpdateDocument.DocumentVersion)
-			assert.Equal(t, "DRAFT", updateResult.UpdateDocument.DocumentVersion.Status)
-
-			// Now delete the draft
-			var result struct {
-				DeleteDocumentDraft struct {
-					Document struct {
-						ID string `json:"id"`
-					} `json:"document"`
-				} `json:"deleteDocumentDraft"`
-			}
-
-			err = owner.Execute(query, map[string]any{
-				"input": map[string]any{"documentId": docID},
-			}, &result)
-			require.NoError(t, err)
-			assert.Equal(t, docID, result.DeleteDocumentDraft.Document.ID)
-		},
-	)
-
-	t.Run(
-		"cannot delete initial v0.1 draft",
-		func(t *testing.T) {
-			t.Parallel()
-
-			docID, _ := createTestDocument(t, owner)
-
-			var result struct{}
-
-			err := owner.Execute(query, map[string]any{
-				"input": map[string]any{"documentId": docID},
-			}, &result)
-			require.Error(t, err)
-		},
-	)
-
-	t.Run(
-		"cannot delete when latest is published",
-		func(t *testing.T) {
-			t.Parallel()
-
-			docID, _ := createTestDocument(t, owner)
-			approveTestDocument(t, owner, docID)
-
-			var result struct{}
-
-			err := owner.Execute(query, map[string]any{
-				"input": map[string]any{"documentId": docID},
-			}, &result)
-			require.Error(t, err)
-		},
-	)
-
-	t.Run(
-		"viewer cannot delete draft",
-		func(t *testing.T) {
-			t.Parallel()
-
-			viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
-
-			docID, _ := createTestDocument(t, owner)
-			approveTestDocument(t, owner, docID)
-
-			// Create a draft
-			updateQuery := `
-				mutation UpdateDocument($input: UpdateDocumentInput!) {
-					updateDocument(input: $input) {
-						document { id }
-						documentVersion { id }
-					}
-				}
-			`
-
-			var updateResult struct {
-				UpdateDocument struct {
-					Document struct {
-						ID string `json:"id"`
-					} `json:"document"`
-					DocumentVersion *struct {
-						ID string `json:"id"`
-					} `json:"documentVersion"`
-				} `json:"updateDocument"`
-			}
-
-			err := owner.Execute(updateQuery, map[string]any{
-				"input": map[string]any{
-					"id":      docID,
-					"content": testutil.ProseMirrorTextDoc("Draft content"),
-				},
-			}, &updateResult)
-			require.NoError(t, err)
-
-			var result struct{}
-
-			err = viewer.Execute(query, map[string]any{
-				"input": map[string]any{"documentId": docID},
-			}, &result)
-			testutil.RequireForbiddenError(t, err, "viewer should not be able to delete document draft")
-		},
-	)
+		assert.Equal(t, "PUBLISHED", result.PublishDocument.DocumentVersion.Status)
+		assert.Empty(t, result.PublishDocument.Document.DefaultApprovers)
+	})
 }
 
-func TestDocumentVersion_ExportPDFSignatures(t *testing.T) {
-	t.Parallel()
-
-	owner := testutil.NewClient(t, testutil.RoleOwner)
-
+func documentVersionExportPDFSignatures(t *testing.T, actors documentVersionActors) {
 	t.Run(
-		"can export draft with signatures",
+		"can export a published snapshot with signatures",
 		func(t *testing.T) {
 			t.Parallel()
 
-			_, docVersionID := createTestDocument(t, owner)
+			owner := actors.owner.ForTest(t)
+
+			docID, _ := createTestDocument(t, owner)
+			docVersionID := publishMajorDocumentVersion(t, owner, docID)
 
 			var result struct {
 				ExportDocumentVersionPDF struct {
@@ -1877,6 +1750,8 @@ func TestDocumentVersion_ExportPDFSignatures(t *testing.T) {
 		"can export published with signatures",
 		func(t *testing.T) {
 			t.Parallel()
+
+			owner := actors.owner.ForTest(t)
 
 			docID, _ := createTestDocument(t, owner)
 			approveTestDocument(t, owner, docID)
@@ -1937,10 +1812,9 @@ func TestDocumentVersion_ExportPDFSignatures(t *testing.T) {
 // TestDocumentVersion_MajorPublishCancelsSignatureRequests verifies that
 // publishing a new major version directly (no approvers) cancels the still
 // pending signature requests attached to the previous major version.
-func TestDocumentVersion_MajorPublishCancelsSignatureRequests(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
-	signer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
+func documentVersionMajorPublishCancelsSignatureRequests(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
+	signer := actors.viewer.ForTest(t)
 
 	docID, _ := createTestDocument(t, owner)
 
@@ -1959,10 +1833,9 @@ func TestDocumentVersion_MajorPublishCancelsSignatureRequests(t *testing.T) {
 // TestDocumentVersion_MinorPublishKeepsSignatureRequests verifies that
 // publishing a minor version stays within the same major and therefore keeps
 // pending signature requests intact.
-func TestDocumentVersion_MinorPublishKeepsSignatureRequests(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
-	signer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
+func documentVersionMinorPublishKeepsSignatureRequests(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
+	signer := actors.viewer.ForTest(t)
 
 	docID, _ := createTestDocument(t, owner)
 
@@ -1981,10 +1854,9 @@ func TestDocumentVersion_MinorPublishKeepsSignatureRequests(t *testing.T) {
 // that on the approval path the pending signature requests from the previous
 // major are cancelled only once the quorum succeeds and the new major is
 // actually published, not while the approval is still pending.
-func TestDocumentVersion_MajorApprovalPublishCancelsSignatureRequests(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
-	signer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
+func documentVersionMajorApprovalPublishCancelsSignatureRequests(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
+	signer := actors.viewer.ForTest(t)
 
 	docID, _ := createTestDocument(t, owner)
 	approveTestDocument(t, owner, docID)
@@ -2007,10 +1879,9 @@ func TestDocumentVersion_MajorApprovalPublishCancelsSignatureRequests(t *testing
 // TestDocumentVersion_RequestSignatureIsIdempotentWithinVersion verifies that
 // requesting a signature twice for the same signatory on the same version does
 // not create a duplicate signature row.
-func TestDocumentVersion_RequestSignatureIsIdempotentWithinVersion(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
-	signer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
+func documentVersionRequestSignatureIsIdempotentWithinVersion(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
+	signer := actors.viewer.ForTest(t)
 
 	docID, _ := createTestDocument(t, owner)
 	signerID := signer.GetProfileID().String()
@@ -2026,10 +1897,9 @@ func TestDocumentVersion_RequestSignatureIsIdempotentWithinVersion(t *testing.T)
 // re-requesting a signature on a newer minor of the same major reuses the
 // signatory's existing signature instead of creating a second one, so the
 // person is not listed twice in the major's export.
-func TestDocumentVersion_RequestSignatureDeduplicatesAcrossMinors(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
-	signer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
+func documentVersionRequestSignatureDeduplicatesAcrossMinors(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
+	signer := actors.viewer.ForTest(t)
 
 	docID, _ := createTestDocument(t, owner)
 	signerID := signer.GetProfileID().String()
@@ -2105,10 +1975,9 @@ func requestedSignatureVersions(
 // requests from the previous version onto the newly published version. The same
 // signature row is reused (its ID is preserved), so its notification schedule
 // (count and last-notified time) is kept intact rather than reset.
-func TestDocumentVersion_MinorPublishMovesSignatureRequestsToNewVersion(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
-	signer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
+func documentVersionMinorPublishMovesSignatureRequestsToNewVersion(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
+	signer := actors.viewer.ForTest(t)
 
 	docID, _ := createTestDocument(t, owner)
 
@@ -2173,6 +2042,40 @@ func signDocumentVersion(t *testing.T, signer *testutil.Client, versionID string
 		result.SignDocument.DocumentVersionSignature.SignedAt
 }
 
+func archiveDocument(t *testing.T, owner *testutil.Client, docID string) {
+	t.Helper()
+
+	_, err := owner.Do(`
+		mutation($input: ArchiveDocumentInput!) {
+			archiveDocument(input: $input) {
+				document { id }
+			}
+		}
+	`, map[string]any{
+		"input": map[string]any{
+			"documentId": docID,
+		},
+	})
+	require.NoError(t, err)
+}
+
+func unarchiveDocument(t *testing.T, owner *testutil.Client, docID string) {
+	t.Helper()
+
+	_, err := owner.Do(`
+		mutation($input: UnarchiveDocumentInput!) {
+			unarchiveDocument(input: $input) {
+				document { id status }
+			}
+		}
+	`, map[string]any{
+		"input": map[string]any{
+			"documentId": docID,
+		},
+	})
+	require.NoError(t, err)
+}
+
 // signDocumentVersionMutation is the raw mutation used by the negative-path
 // signing tests so they can assert the request is rejected.
 const signDocumentVersionMutation = `
@@ -2187,9 +2090,8 @@ const signDocumentVersionMutation = `
 // signed by the signatory, transitioning REQUESTED -> SIGNED and recording the
 // signing time. Signing exercises the electronic-signature integration end to
 // end: PDF export, upload, and esign create-and-accept.
-func TestDocumentVersion_SignDocument(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionSignDocument(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	docID, _ := createTestDocument(t, owner)
 	approveTestDocument(t, owner, docID)
@@ -2208,9 +2110,8 @@ func TestDocumentVersion_SignDocument(t *testing.T) {
 
 // TestDocumentVersion_SignDocumentWithoutRequestFails verifies that a version
 // cannot be signed unless a signature was first requested for the signatory.
-func TestDocumentVersion_SignDocumentWithoutRequestFails(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionSignDocumentWithoutRequestFails(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	docID, _ := createTestDocument(t, owner)
 	approveTestDocument(t, owner, docID)
@@ -2226,9 +2127,8 @@ func TestDocumentVersion_SignDocumentWithoutRequestFails(t *testing.T) {
 
 // TestDocumentVersion_SignDocumentTwiceFails verifies that an already-signed
 // signature cannot be signed again.
-func TestDocumentVersion_SignDocumentTwiceFails(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionSignDocumentTwiceFails(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	docID, _ := createTestDocument(t, owner)
 	approveTestDocument(t, owner, docID)
@@ -2246,13 +2146,174 @@ func TestDocumentVersion_SignDocumentTwiceFails(t *testing.T) {
 	})
 }
 
+func documentVersionArchiveVoidsPendingQuorum(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
+
+	docID, _ := createTestDocument(t, owner)
+	requestDocumentApproval(t, owner, docID, []string{getOwnerProfileID(t, owner)})
+
+	archiveDocument(t, owner, docID)
+
+	var result struct {
+		Node struct {
+			Status   string `json:"status"`
+			Versions struct {
+				Edges []struct {
+					Node struct {
+						Status          string `json:"status"`
+						Major           int    `json:"major"`
+						Minor           int    `json:"minor"`
+						ApprovalQuorums struct {
+							Edges []struct {
+								Node struct {
+									Status    string `json:"status"`
+									Decisions struct {
+										Edges []struct {
+											Node struct {
+												State string `json:"state"`
+											} `json:"node"`
+										} `json:"edges"`
+									} `json:"decisions"`
+								} `json:"node"`
+							} `json:"edges"`
+						} `json:"approvalQuorums"`
+					} `json:"node"`
+				} `json:"edges"`
+			} `json:"versions"`
+		} `json:"node"`
+	}
+
+	err := owner.Execute(`
+		query($id: ID!) {
+			node(id: $id) {
+				... on Document {
+					status
+					versions(first: 1, orderBy: { field: CREATED_AT, direction: DESC }) {
+						edges {
+							node {
+								status
+								major
+								minor
+								approvalQuorums(first: 1, orderBy: { field: CREATED_AT, direction: DESC }) {
+									edges {
+										node {
+											status
+											decisions(first: 10) {
+												edges { node { state } }
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	`, map[string]any{"id": docID}, &result)
+	require.NoError(t, err)
+	require.NotEmpty(t, result.Node.Versions.Edges)
+
+	version := result.Node.Versions.Edges[0].Node
+	assert.Equal(t, "ARCHIVED", result.Node.Status)
+	assert.Equal(t, "VOIDED", version.Status)
+	assert.Equal(t, 1, version.Major)
+	assert.Equal(t, 0, version.Minor)
+	require.NotEmpty(t, version.ApprovalQuorums.Edges)
+	assert.Equal(t, "VOIDED", version.ApprovalQuorums.Edges[0].Node.Status)
+
+	for _, edge := range version.ApprovalQuorums.Edges[0].Node.Decisions.Edges {
+		assert.Equal(t, "VOIDED", edge.Node.State)
+	}
+}
+
+func documentVersionArchiveCancelsPendingSignatures(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
+
+	docID, _ := createTestDocument(t, owner)
+	approveTestDocument(t, owner, docID)
+
+	publishedVersionID := latestDocumentVersionID(t, owner, docID)
+	requestDocumentSignature(t, owner, publishedVersionID, getOwnerProfileID(t, owner))
+
+	archiveDocument(t, owner, docID)
+
+	var result struct {
+		Node struct {
+			Signatures struct {
+				Edges []struct {
+					Node struct {
+						State string `json:"state"`
+					} `json:"node"`
+				} `json:"edges"`
+			} `json:"signatures"`
+		} `json:"node"`
+	}
+
+	err := owner.Execute(`
+		query($id: ID!) {
+			node(id: $id) {
+				... on DocumentVersion {
+					signatures(first: 10) {
+						edges { node { state } }
+					}
+				}
+			}
+		}
+	`, map[string]any{"id": publishedVersionID}, &result)
+	require.NoError(t, err)
+	assert.Empty(t, result.Node.Signatures.Edges)
+}
+
+func documentVersionUnarchiveRestoresEditableDraft(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
+
+	docID, _ := createTestDocument(t, owner)
+	requestDocumentApproval(t, owner, docID, []string{getOwnerProfileID(t, owner)})
+
+	archiveDocument(t, owner, docID)
+	unarchiveDocument(t, owner, docID)
+
+	var result struct {
+		Node struct {
+			Status   string `json:"status"`
+			Versions struct {
+				Edges []struct {
+					Node struct {
+						Status string `json:"status"`
+					} `json:"node"`
+				} `json:"edges"`
+			} `json:"versions"`
+		} `json:"node"`
+	}
+
+	err := owner.Execute(`
+		query($id: ID!) {
+			node(id: $id) {
+				... on Document {
+					status
+					versions(first: 1, orderBy: { field: CREATED_AT, direction: DESC }) {
+						edges { node { status } }
+					}
+				}
+			}
+		}
+	`, map[string]any{"id": docID}, &result)
+	require.NoError(t, err)
+	require.NotEmpty(t, result.Node.Versions.Edges)
+
+	assert.Equal(t, "ACTIVE", result.Node.Status)
+	assert.Equal(t, "VOIDED", result.Node.Versions.Edges[0].Node.Status)
+
+	updateDocumentContent(t, owner, docID, "Updated after unarchive")
+}
+
 // TestDocumentVersion_SignArchivedDocumentFails verifies that a document
 // archived after its signature was requested can no longer be signed. This
 // guards the archived/published preconditions that are re-validated inside the
 // signing transaction so a state change between request and sign is honored.
-func TestDocumentVersion_SignArchivedDocumentFails(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
+func documentVersionSignArchivedDocumentFails(t *testing.T, actors documentVersionActors) {
+	owner := actors.owner.ForTest(t)
 
 	docID, _ := createTestDocument(t, owner)
 	approveTestDocument(t, owner, docID)
@@ -2262,18 +2323,33 @@ func TestDocumentVersion_SignArchivedDocumentFails(t *testing.T) {
 
 	requestDocumentSignature(t, owner, publishedVersionID, ownerProfileID)
 
-	_, err := owner.Do(`
-		mutation($input: ArchiveDocumentInput!) {
-			archiveDocument(input: $input) {
-				document { id }
+	archiveDocument(t, owner, docID)
+
+	var signatureResult struct {
+		Node struct {
+			Signatures struct {
+				Edges []struct {
+					Node struct {
+						ID string `json:"id"`
+					} `json:"node"`
+				} `json:"edges"`
+			} `json:"signatures"`
+		} `json:"node"`
+	}
+
+	err := owner.Execute(`
+		query($id: ID!) {
+			node(id: $id) {
+				... on DocumentVersion {
+					signatures(first: 10) {
+						edges { node { id } }
+					}
+				}
 			}
 		}
-	`, map[string]any{
-		"input": map[string]any{
-			"documentId": docID,
-		},
-	})
+	`, map[string]any{"id": publishedVersionID}, &signatureResult)
 	require.NoError(t, err)
+	assert.Empty(t, signatureResult.Node.Signatures.Edges)
 
 	_ = owner.ExecuteShouldFail(signDocumentVersionMutation, map[string]any{
 		"input": map[string]any{

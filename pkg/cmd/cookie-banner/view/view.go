@@ -1,22 +1,29 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package view
 
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
@@ -25,7 +32,7 @@ import (
 )
 
 const viewQuery = `
-query($id: ID!) {
+query CookieBannerView($id: ID!, $days: Int) {
   node(id: $id) {
     __typename
     ... on CookieBanner {
@@ -37,7 +44,22 @@ query($id: ID!) {
       privacyPolicyUrl
       consentExpiryDays
       showBranding
+      forceOptIn
+      capabilities {
+        resourceReporting
+        tcf
+        corsless
+      }
       defaultLanguage
+      publisherCountryCode
+      tcfCmpId
+      dailyPageLoads(days: $days) {
+        day
+        pageLoads {
+          family
+          count
+        }
+      }
       createdAt
       updatedAt
     }
@@ -56,14 +78,32 @@ type viewResponse struct {
 		PrivacyPolicyUrl  *string `json:"privacyPolicyUrl"`
 		ConsentExpiryDays int     `json:"consentExpiryDays"`
 		ShowBranding      bool    `json:"showBranding"`
-		DefaultLanguage   string  `json:"defaultLanguage"`
-		CreatedAt         string  `json:"createdAt"`
-		UpdatedAt         string  `json:"updatedAt"`
+		ForceOptIn        bool    `json:"forceOptIn"`
+		Capabilities      struct {
+			ResourceReporting bool `json:"resourceReporting"`
+			TCF               bool `json:"tcf"`
+			Corsless          bool `json:"corsless"`
+		} `json:"capabilities"`
+		DefaultLanguage      string `json:"defaultLanguage"`
+		PublisherCountryCode string `json:"publisherCountryCode"`
+		TcfCmpId             int    `json:"tcfCmpId"`
+		DailyPageLoads       []struct {
+			Day       string `json:"day"`
+			PageLoads []struct {
+				Family string `json:"family"`
+				Count  int    `json:"count"`
+			} `json:"pageLoads"`
+		} `json:"dailyPageLoads"`
+		CreatedAt string `json:"createdAt"`
+		UpdatedAt string `json:"updatedAt"`
 	} `json:"node"`
 }
 
 func NewCmdView(f *cmdutil.Factory) *cobra.Command {
-	var flagOutput *string
+	var (
+		flagDays   int
+		flagOutput *string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "view <id>",
@@ -72,6 +112,10 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := cmdutil.ValidateOutputFlag(flagOutput); err != nil {
 				return err
+			}
+
+			if flagDays < 1 || flagDays > 90 {
+				return fmt.Errorf("--days must be between 1 and 90")
 			}
 
 			cfg, err := f.Config()
@@ -92,7 +136,13 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 				cmdutil.TokenRefreshOption(cfg, host, hc),
 			)
 
-			data, err := client.Do(viewQuery, map[string]any{"id": args[0]})
+			data, err := client.Do(
+				viewQuery,
+				map[string]any{
+					"id":   args[0],
+					"days": flagDays,
+				},
+			)
 			if err != nil {
 				return err
 			}
@@ -121,11 +171,39 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Origin:"), v.Origin)
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("State:"), v.State)
 			_, _ = fmt.Fprintf(out, "%s%d days\n", label.Render("Consent Expiry:"), v.ConsentExpiryDays)
+
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Default Language:"), v.DefaultLanguage)
+			if v.Capabilities.TCF {
+				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Publisher Country:"), v.PublisherCountryCode)
+				_, _ = fmt.Fprintf(out, "%s%d\n", label.Render("TCF CMP ID:"), v.TcfCmpId)
+			}
+
+			_, _ = fmt.Fprintf(out, "%s%t\n", label.Render("Force Opt-In:"), v.ForceOptIn)
+			_, _ = fmt.Fprintf(out, "%s%t\n", label.Render("Resource Reporting:"), v.Capabilities.ResourceReporting)
+			_, _ = fmt.Fprintf(out, "%s%t\n", label.Render("CORSless:"), v.Capabilities.Corsless)
 
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Cookie Policy:"), v.CookiePolicyUrl)
 			if v.PrivacyPolicyUrl != nil && *v.PrivacyPolicyUrl != "" {
 				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Privacy Policy:"), *v.PrivacyPolicyUrl)
+			}
+
+			_, _ = fmt.Fprintf(out, "%s\n", label.Render(fmt.Sprintf("Daily (%d days):", flagDays)))
+
+			for _, day := range v.DailyPageLoads {
+				total := 0
+
+				parts := make([]string, 0, len(day.PageLoads))
+				for _, load := range day.PageLoads {
+					total += load.Count
+					parts = append(parts, fmt.Sprintf("%s %d", load.Family, load.Count))
+				}
+
+				detail := "none"
+				if total > 0 {
+					detail = fmt.Sprintf("%d  %s", total, strings.Join(parts, ", "))
+				}
+
+				_, _ = fmt.Fprintf(out, "%s%s  %s\n", label.Render(""), cmdutil.FormatUTCDay(day.Day), detail)
 			}
 
 			_, _ = fmt.Fprintln(out)
@@ -136,6 +214,7 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 		},
 	}
 
+	cmd.Flags().IntVar(&flagDays, "days", 7, "Number of UTC days of page loads, today included (at most 90)")
 	flagOutput = cmdutil.AddOutputFlag(cmd)
 
 	return cmd

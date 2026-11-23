@@ -1,21 +1,26 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package list
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -24,7 +29,7 @@ import (
 )
 
 const listQuery = `
-query($id: ID!, $first: Int, $after: CursorKey, $orderBy: DocumentOrder, $filter: DocumentFilter) {
+query DocumentList($id: ID!, $first: Int, $after: CursorKey, $orderBy: DocumentOrder, $filter: DocumentFilter) {
   node(id: $id) {
     __typename
     ... on Organization {
@@ -33,17 +38,10 @@ query($id: ID!, $first: Int, $after: CursorKey, $orderBy: DocumentOrder, $filter
         edges {
           node {
             id
+            title
             status
-            trustCenterVisibility
-            versions(first: 1) {
-              edges {
-                node {
-                  title
-                  documentType
-                  classification
-                }
-              }
-            }
+            documentType
+            classification
           }
         }
         pageInfo {
@@ -57,24 +55,18 @@ query($id: ID!, $first: Int, $after: CursorKey, $orderBy: DocumentOrder, $filter
 `
 
 type document struct {
-	ID                    string `json:"id"`
-	Status                string `json:"status"`
-	TrustCenterVisibility string `json:"trustCenterVisibility"`
-	Versions              struct {
-		Edges []struct {
-			Node struct {
-				Title          string `json:"title"`
-				DocumentType   string `json:"documentType"`
-				Classification string `json:"classification"`
-			} `json:"node"`
-		} `json:"edges"`
-	} `json:"versions"`
+	ID             string `json:"id"`
+	Title          string `json:"title"`
+	Status         string `json:"status"`
+	DocumentType   string `json:"documentType"`
+	Classification string `json:"classification"`
 }
 
 func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	var (
 		flagOrg            string
 		flagLimit          int
+		flagAfter          string
 		flagOrderBy        string
 		flagOrderDir       string
 		flagQuery          string
@@ -82,6 +74,7 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 		flagDocumentType   string
 		flagClassification string
 		flagStatus         string
+		flagPublished      bool
 		flagOutput         *string
 	)
 
@@ -95,29 +88,18 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
-			cfg, err := f.Config()
+			if err := cmdutil.ValidateLimit(flagLimit); err != nil {
+				return err
+			}
+
+			client, hc, err := f.GraphQLClient(cmdutil.ConsoleEndpoint)
 			if err != nil {
 				return err
 			}
 
-			host, hc, err := cfg.DefaultHost()
+			flagOrg, err = cmdutil.ResolveOrganization(flagOrg, hc.Organization)
 			if err != nil {
 				return err
-			}
-
-			client := api.NewClient(
-				host,
-				hc.Token,
-				"/api/console/v1/graphql",
-				cfg.HTTPTimeoutDuration(),
-			)
-
-			if flagOrg == "" {
-				flagOrg = hc.Organization
-			}
-
-			if flagOrg == "" {
-				return fmt.Errorf("organization is required; pass --org or set a default with 'prb auth login'")
 			}
 
 			variables := map[string]any{
@@ -129,14 +111,6 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 					"order-by",
 					flagOrderBy,
 					[]string{"TITLE", "CREATED_AT", "UPDATED_AT", "DOCUMENT_TYPE"},
-				); err != nil {
-					return err
-				}
-
-				if err := cmdutil.ValidateEnum(
-					"order-direction",
-					flagOrderDir,
-					[]string{"ASC", "DESC"},
 				); err != nil {
 					return err
 				}
@@ -200,98 +174,61 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				filter["status"] = []string{flagStatus}
 			}
 
+			if cmd.Flags().Changed("published") {
+				filter["published"] = flagPublished
+			}
+
 			if len(filter) > 0 {
 				variables["filter"] = filter
 			}
 
-			documents, totalCount, err := api.Paginate(
+			documents, totalCount, nextCursor, err := api.Paginate(
 				client,
 				listQuery,
 				variables,
 				flagLimit,
-				func(data json.RawMessage) (*api.Connection[document], error) {
-					var resp struct {
-						Node *struct {
-							Typename  string                   `json:"__typename"`
-							Documents api.Connection[document] `json:"documents"`
-						} `json:"node"`
-					}
-					if err := json.Unmarshal(data, &resp); err != nil {
-						return nil, err
-					}
-
-					if resp.Node == nil {
-						return nil, fmt.Errorf("organization %s not found", flagOrg)
-					}
-
-					if resp.Node.Typename != "Organization" {
-						return nil, fmt.Errorf("expected Organization node, got %s", resp.Node.Typename)
-					}
-
-					return &resp.Node.Documents, nil
-				},
+				flagAfter,
+				api.NodeConnection[document]("documents", "Organization", fmt.Sprintf("organization %s not found", flagOrg)),
 			)
 			if err != nil {
 				return err
 			}
 
-			if *flagOutput == cmdutil.OutputJSON {
-				return cmdutil.PrintJSON(f.IOStreams.Out, documents)
-			}
-
-			if len(documents) == 0 {
-				_, _ = fmt.Fprintln(f.IOStreams.Out, "No documents found.")
-				return nil
-			}
-
-			rows := make([][]string, 0, len(documents))
-			for _, doc := range documents {
-				title := ""
-				docType := ""
-				classification := ""
-
-				if len(doc.Versions.Edges) > 0 {
-					v := doc.Versions.Edges[0].Node
-					title = v.Title
-					docType = v.DocumentType
-					classification = v.Classification
-				}
-
-				rows = append(rows, []string{
-					doc.ID,
-					title,
-					docType,
-					classification,
-					doc.Status,
-				})
-			}
-
-			t := cmdutil.NewTable("ID", "TITLE", "TYPE", "CLASSIFICATION", "STATUS").Rows(rows...)
-
-			_, _ = fmt.Fprintln(f.IOStreams.Out, t)
-
-			if totalCount > len(documents) {
-				_, _ = fmt.Fprintf(
-					f.IOStreams.ErrOut,
-					"\nShowing %d of %d documents\n",
-					len(documents),
-					totalCount,
-				)
-			}
-
-			return nil
+			return cmdutil.PrintList(
+				f.IOStreams,
+				*flagOutput,
+				documents,
+				totalCount,
+				cmdutil.ListView[document]{
+					Empty:      "No documents found.",
+					Noun:       "documents",
+					NextCursor: nextCursor,
+					Headers:    []string{"ID", "TITLE", "TYPE", "CLASSIFICATION", "STATUS"},
+					Row: func(doc document) ([]string, error) {
+						return []string{
+							doc.ID,
+							doc.Title,
+							doc.DocumentType,
+							doc.Classification,
+							doc.Status,
+						}, nil
+					},
+				},
+			)
 		},
 	}
 
-	cmd.Flags().StringVar(&flagOrg, "org", "", "Organization ID")
+	cmdutil.AddOrganizationFlag(cmd, &flagOrg, "Organization ID")
 	cmd.Flags().IntVarP(&flagLimit, "limit", "L", 30, "Maximum number of documents to list")
+	cmdutil.AddAfterFlag(cmd, &flagAfter)
 	cmd.Flags().StringVar(&flagOrderBy, "order-by", "", "Order by field (TITLE, CREATED_AT, UPDATED_AT, DOCUMENT_TYPE)")
-	cmd.Flags().StringVar(&flagOrderDir, "order-direction", "DESC", "Sort direction (ASC, DESC)")
+	cmdutil.AddOrderDirectionFlag(cmd, &flagOrderDir, "DESC")
 	cmd.Flags().StringVarP(&flagQuery, "query", "q", "", "Search query")
 	cmd.Flags().StringVar(&flagWriteMode, "write-mode", "", "Filter by write mode (AUTHORED, GENERATED)")
 	cmd.Flags().StringVar(&flagDocumentType, "document-type", "", "Filter by document type (OTHER, GOVERNANCE, POLICY, PROCEDURE, PLAN, REGISTER, RECORD, REPORT, TEMPLATE, STATEMENT_OF_APPLICABILITY)")
 	cmd.Flags().StringVar(&flagClassification, "classification", "", "Filter by classification (PUBLIC, INTERNAL, CONFIDENTIAL, SECRET)")
 	cmd.Flags().StringVar(&flagStatus, "status", "", "Filter by status (ACTIVE, ARCHIVED)")
+	cmd.Flags().BoolVar(&flagPublished, "published", false, "Filter by whether a document has a published version")
 	flagOutput = cmdutil.AddOutputFlag(cmd)
 
 	return cmd

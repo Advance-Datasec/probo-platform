@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -78,6 +84,8 @@ type CommonThirdPartyFilter struct {
 	keyword          *string
 	state            *CommonThirdPartyEnrichmentState
 	enrichmentStatus *string
+	review           *CommonThirdPartyReview
+	excludedReview   *CommonThirdPartyReview
 }
 
 func NewCommonThirdPartyFilter(name *string) *CommonThirdPartyFilter {
@@ -96,6 +104,10 @@ func (f *CommonThirdPartyFilter) WithCategory(category *ThirdPartyCategory) *Com
 	return f
 }
 
+// WithKeyword matches a substring of the name or slug. Both are stable
+// identifiers rather than generated prose, so unlike the catalog pattern
+// filter's keyword this selection does not drift as enrichment runs, and no
+// pattern-only variant is needed.
 func (f *CommonThirdPartyFilter) WithKeyword(keyword *string) *CommonThirdPartyFilter {
 	f.keyword = keyword
 	return f
@@ -111,6 +123,22 @@ func (f *CommonThirdPartyFilter) WithState(state *CommonThirdPartyEnrichmentStat
 // match.
 func (f *CommonThirdPartyFilter) WithEnrichmentStatus(status *string) *CommonThirdPartyFilter {
 	f.enrichmentStatus = status
+	return f
+}
+
+// WithReview restricts the result to one review state. Use it to work
+// through a backlog: UNREVIEWED is the set nobody has judged.
+func (f *CommonThirdPartyFilter) WithReview(review *CommonThirdPartyReview) *CommonThirdPartyFilter {
+	f.review = review
+	return f
+}
+
+// WithoutReview excludes one review state. Callers that offer a row as a
+// vendor — the catalog import and the identification agent's search — pass
+// REJECTED here, so a row a human ruled out stops being offered without
+// being deleted.
+func (f *CommonThirdPartyFilter) WithoutReview(review *CommonThirdPartyReview) *CommonThirdPartyFilter {
+	f.excludedReview = review
 	return f
 }
 
@@ -155,6 +183,18 @@ func (f *CommonThirdPartyFilter) SQLFragment() string {
 			enrichment->>'status' = @filter_enrichment_status
 		ELSE TRUE
 	END
+	AND
+	CASE
+		WHEN @filter_review::text IS NOT NULL THEN
+			review = @filter_review::common_third_party_review
+		ELSE TRUE
+	END
+	AND
+	CASE
+		WHEN @filter_excluded_review::text IS NOT NULL THEN
+			review <> @filter_excluded_review::common_third_party_review
+		ELSE TRUE
+	END
 )`
 }
 
@@ -168,6 +208,8 @@ func (f *CommonThirdPartyFilter) SQLArguments() pgx.StrictNamedArgs {
 		"filter_state_enriched":    false,
 		"filter_state_unenriched":  false,
 		"filter_enrichment_status": nil,
+		"filter_review":            nil,
+		"filter_excluded_review":   nil,
 	}
 
 	if f.ids != nil {
@@ -199,6 +241,14 @@ func (f *CommonThirdPartyFilter) SQLArguments() pgx.StrictNamedArgs {
 
 	if f.enrichmentStatus != nil {
 		args["filter_enrichment_status"] = *f.enrichmentStatus
+	}
+
+	if f.review != nil {
+		args["filter_review"] = string(*f.review)
+	}
+
+	if f.excludedReview != nil {
+		args["filter_excluded_review"] = string(*f.excludedReview)
 	}
 
 	return args

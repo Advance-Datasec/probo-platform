@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package saferedirect_test
 
@@ -131,6 +137,41 @@ func TestSafeRedirect_Validate(t *testing.T) {
 			expectedURL:     "/dashboard",
 			expectedIsValid: true,
 		},
+		{
+			name:            "tab collapsing to protocol-relative URL",
+			allowedHost:     saferedirect.StaticHosts("example.com"),
+			redirectURL:     "/\t/evil.com",
+			expectedURL:     "",
+			expectedIsValid: false,
+		},
+		{
+			name:            "newline in path",
+			allowedHost:     saferedirect.StaticHosts("example.com"),
+			redirectURL:     "/\n/evil.com",
+			expectedURL:     "",
+			expectedIsValid: false,
+		},
+		{
+			name:            "carriage return in path",
+			allowedHost:     saferedirect.StaticHosts("example.com"),
+			redirectURL:     "/\r/evil.com",
+			expectedURL:     "",
+			expectedIsValid: false,
+		},
+		{
+			name:            "null byte in path",
+			allowedHost:     saferedirect.StaticHosts("example.com"),
+			redirectURL:     "/dashboard\x00/evil.com",
+			expectedURL:     "",
+			expectedIsValid: false,
+		},
+		{
+			name:            "tab past a leading segment",
+			allowedHost:     saferedirect.StaticHosts("example.com"),
+			redirectURL:     "/foo/\t/evil.com",
+			expectedURL:     "",
+			expectedIsValid: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -200,6 +241,13 @@ func TestSafeRedirect_GetSafeRedirectURL(t *testing.T) {
 			name:        "path traversal backslash bypass",
 			allowedHost: saferedirect.StaticHosts("example.com"),
 			redirectURL: "/../\\evil.com/phishing",
+			fallbackURL: "/home",
+			expectedURL: "/home",
+		},
+		{
+			name:        "tab collapsing to protocol-relative URL",
+			allowedHost: saferedirect.StaticHosts("example.com"),
+			redirectURL: "/\t/evil.com",
 			fallbackURL: "/home",
 			expectedURL: "/home",
 		},
@@ -274,6 +322,14 @@ func TestSafeRedirect_Redirect(t *testing.T) {
 			name:           "path traversal backslash bypass",
 			allowedHost:    saferedirect.StaticHosts("example.com"),
 			redirectURL:    "/../\\evil.com/phishing",
+			fallbackURL:    "/home",
+			expectedStatus: http.StatusFound,
+			expectedURL:    "/home",
+		},
+		{
+			name:           "tab collapsing to protocol-relative URL",
+			allowedHost:    saferedirect.StaticHosts("example.com"),
+			redirectURL:    "/\t/evil.com",
 			fallbackURL:    "/home",
 			expectedStatus: http.StatusFound,
 			expectedURL:    "/home",
@@ -430,6 +486,89 @@ func TestStaticHosts(t *testing.T) {
 
 		if !fn(context.Background(), "example.com") {
 			t.Error("expected example.com to be allowed")
+		}
+	})
+}
+
+func TestOrigins(t *testing.T) {
+	t.Parallel()
+
+	t.Run("extracts hosts including ports", func(t *testing.T) {
+		t.Parallel()
+
+		fn := saferedirect.Origins(
+			"http://localhost:5174",
+			"https://app.example.com",
+		)
+		if !fn(context.Background(), "localhost:5174") {
+			t.Error("expected localhost:5174 to be allowed")
+		}
+
+		if !fn(context.Background(), "app.example.com") {
+			t.Error("expected app.example.com to be allowed")
+		}
+
+		if fn(context.Background(), "evil.com") {
+			t.Error("expected evil.com to be rejected")
+		}
+	})
+
+	t.Run("ignores invalid and empty origins", func(t *testing.T) {
+		t.Parallel()
+
+		fn := saferedirect.Origins("", "not a url", "http://localhost:5173")
+		if !fn(context.Background(), "localhost:5173") {
+			t.Error("expected localhost:5173 to be allowed")
+		}
+
+		if fn(context.Background(), "") {
+			t.Error("expected empty host to be rejected")
+		}
+	})
+}
+
+func TestAny(t *testing.T) {
+	t.Parallel()
+
+	t.Run("allows when any function matches", func(t *testing.T) {
+		t.Parallel()
+
+		fn := saferedirect.Any(
+			saferedirect.StaticHosts("a.com"),
+			saferedirect.StaticHosts("b.com"),
+		)
+		if !fn(context.Background(), "a.com") {
+			t.Error("expected a.com to be allowed")
+		}
+
+		if !fn(context.Background(), "b.com") {
+			t.Error("expected b.com to be allowed")
+		}
+
+		if fn(context.Background(), "c.com") {
+			t.Error("expected c.com to be rejected")
+		}
+	})
+
+	t.Run("skips nil functions", func(t *testing.T) {
+		t.Parallel()
+
+		fn := saferedirect.Any(nil, saferedirect.StaticHosts("example.com"), nil)
+		if !fn(context.Background(), "example.com") {
+			t.Error("expected example.com to be allowed")
+		}
+
+		if fn(context.Background(), "other.com") {
+			t.Error("expected other.com to be rejected")
+		}
+	})
+
+	t.Run("rejects when no functions provided", func(t *testing.T) {
+		t.Parallel()
+
+		fn := saferedirect.Any()
+		if fn(context.Background(), "example.com") {
+			t.Error("expected example.com to be rejected")
 		}
 	})
 }

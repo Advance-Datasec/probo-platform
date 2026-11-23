@@ -1,24 +1,36 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
-import { Card, Field, Input, Textarea } from "@probo/ui";
+import { Card } from "@probo/ui/src/v2/Card/Card";
+import { Field } from "@probo/ui/src/v2/form/Field";
+import { Textarea } from "@probo/ui/src/v2/form/Textarea";
+import { TextField } from "@probo/ui/src/v2/form/TextField";
+import { Heading } from "@probo/ui/src/v2/typography/Heading";
+import { Text } from "@probo/ui/src/v2/typography/Text";
 import { Controller, useFormContext, useWatch } from "react-hook-form";
+import { useTranslation } from "react-i18next";
+
+import { cookieBannerTranslationsPage } from "../../../variants";
+import type { TranslationFormValues } from "../_lib/translationDefaults";
 
 import { BannerPreview } from "./BannerPreview";
-import { TRANSLATION_LABELS } from "./translationDefaults";
-import type { TranslationFormValues } from "./TranslationEditor";
 
 interface BannerTranslationSectionProps {
   showBranding: boolean;
@@ -27,8 +39,9 @@ interface BannerTranslationSectionProps {
 export function BannerTranslationSection({
   showBranding,
 }: BannerTranslationSectionProps) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation("organizations/cookie-banners");
   const { control } = useFormContext<TranslationFormValues>();
+  const { section, split, fields, pair, preview } = cookieBannerTranslationsPage();
 
   const bannerTitle = useWatch({ control, name: "banner_title" });
   const bannerDescription = useWatch({ control, name: "banner_description" });
@@ -45,17 +58,23 @@ export function BannerTranslationSection({
   });
 
   return (
-    <div className="space-y-4">
-      <h3 className="font-medium text-lg">{__("Banner")}</h3>
-      <div className="grid grid-cols-2 gap-6">
-        <Card className="border p-4">
-          <div className="space-y-4">
+    <section className={section()}>
+      <Heading level={2} size={4} weight="medium" highContrast>
+        {t("bannerTranslationSection.title")}
+      </Heading>
+      <div className={split()}>
+        <Card size={2} variant="soft">
+          <div className={fields()}>
             <Controller
               control={control}
               name="banner_title"
               render={({ field }) => (
-                <Field label={__(TRANSLATION_LABELS.banner_title)}>
-                  <Input {...field} />
+                <Field label={t("translationEditor.labels.bannerTitle")}>
+                  <TextField
+                    name={field.name}
+                    value={field.value}
+                    onValueChange={field.onChange}
+                  />
                 </Field>
               )}
             />
@@ -63,21 +82,30 @@ export function BannerTranslationSection({
               control={control}
               name="banner_description"
               render={({ field }) => (
-                <Field
-                  label={__(TRANSLATION_LABELS.banner_description)}
-                >
-                  <p className="text-xs text-txt-secondary mb-2">{"Use {{cookie_policy_link}} and {{privacy_policy_link}} to insert policy links."}</p>
-                  <Textarea {...field} rows={3} />
+                <Field label={t("translationEditor.labels.bannerDescription")}>
+                  <Textarea
+                    name={field.name}
+                    rows={3}
+                    value={field.value}
+                    onChange={field.onChange}
+                  />
                 </Field>
               )}
             />
-            <div className="grid grid-cols-2 gap-4">
+            <Text size={1} color="faint">
+              {t("bannerTranslationSection.policyLinkHelp")}
+            </Text>
+            <div className={pair()}>
               <Controller
                 control={control}
                 name="button_accept_all"
                 render={({ field }) => (
-                  <Field label={__(TRANSLATION_LABELS.button_accept_all)}>
-                    <Input {...field} />
+                  <Field label={t("translationEditor.labels.acceptAllButton")}>
+                    <TextField
+                      name={field.name}
+                      value={field.value}
+                      onValueChange={field.onChange}
+                    />
                   </Field>
                 )}
               />
@@ -85,8 +113,12 @@ export function BannerTranslationSection({
                 control={control}
                 name="button_reject_all"
                 render={({ field }) => (
-                  <Field label={__(TRANSLATION_LABELS.button_reject_all)}>
-                    <Input {...field} />
+                  <Field label={t("translationEditor.labels.rejectAllButton")}>
+                    <TextField
+                      name={field.name}
+                      value={field.value}
+                      onValueChange={field.onChange}
+                    />
                   </Field>
                 )}
               />
@@ -95,20 +127,26 @@ export function BannerTranslationSection({
               control={control}
               name="button_customize"
               render={({ field }) => (
-                <Field label={__(TRANSLATION_LABELS.button_customize)}>
-                  <Input {...field} />
+                <Field label={t("translationEditor.labels.customizeButton")}>
+                  <TextField
+                    name={field.name}
+                    value={field.value}
+                    onValueChange={field.onChange}
+                  />
                 </Field>
               )}
             />
-            <div className="grid grid-cols-2 gap-4">
+            <div className={pair()}>
               <Controller
                 control={control}
                 name="cookie_policy_link_text"
                 render={({ field }) => (
-                  <Field
-                    label={__(TRANSLATION_LABELS.cookie_policy_link_text)}
-                  >
-                    <Input {...field} />
+                  <Field label={t("translationEditor.labels.cookiePolicyLinkText")}>
+                    <TextField
+                      name={field.name}
+                      value={field.value}
+                      onValueChange={field.onChange}
+                    />
                   </Field>
                 )}
               />
@@ -116,18 +154,19 @@ export function BannerTranslationSection({
                 control={control}
                 name="privacy_policy_link_text"
                 render={({ field }) => (
-                  <Field
-                    label={__(TRANSLATION_LABELS.privacy_policy_link_text)}
-                  >
-                    <Input {...field} />
+                  <Field label={t("translationEditor.labels.privacyPolicyLinkText")}>
+                    <TextField
+                      name={field.name}
+                      value={field.value}
+                      onValueChange={field.onChange}
+                    />
                   </Field>
                 )}
               />
             </div>
           </div>
         </Card>
-
-        <div className="flex items-start justify-center rounded-lg border border-border-low bg-[repeating-conic-gradient(#e5e7eb_0%_25%,transparent_0%_50%)] bg-size-[20px_20px] p-6">
+        <div className={preview()}>
           <BannerPreview
             bannerTitle={bannerTitle}
             bannerDescription={bannerDescription}
@@ -140,6 +179,6 @@ export function BannerTranslationSection({
           />
         </div>
       </div>
-    </div>
+    </section>
   );
 }

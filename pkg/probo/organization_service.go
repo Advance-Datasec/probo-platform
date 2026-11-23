@@ -1,24 +1,30 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"mime"
-	"net/mail"
 	"path/filepath"
 	"time"
 
@@ -42,10 +48,6 @@ type (
 		Name               *string
 		File               *File
 		HorizontalLogoFile *File
-		Description        **string
-		WebsiteURL         **string
-		Email              **string
-		HeadquarterAddress **string
 	}
 
 	UpdateOrganizationContextRequest struct {
@@ -63,10 +65,6 @@ func (uor *UpdateOrganizationRequest) Validate() error {
 
 	v.Check(uor.ID, "id", validator.Required(), validator.GID(coredata.OrganizationEntityType))
 	v.Check(uor.Name, "name", validator.SafeTextNoNewLine(TitleMaxLength))
-	v.Check(uor.Description, "description", validator.SafeText(ContentMaxLength))
-	v.Check(uor.WebsiteURL, "website_url", validator.SafeText(2048))
-	v.Check(uor.Email, "email", validator.SafeText(255))
-	v.Check(uor.HeadquarterAddress, "headquarter_address", validator.SafeText(2048))
 	v.Check(uor.File, "file", validator.NotEmpty())
 	v.Check(uor.HorizontalLogoFile, "horizontal_logo_file", validator.NotEmpty())
 
@@ -110,6 +108,27 @@ func (s OrganizationService) Get(
 	return organization, nil
 }
 
+// Exists reports whether the organization is present. The lookup is
+// deliberately cross-tenant: identity federation discovery is public, and the
+// caller has no identity to scope by. Only the boolean escapes, so no
+// organization data is reachable without a scope.
+func (s OrganizationService) Exists(
+	ctx context.Context,
+	scope coredata.Scoper,
+	organizationID gid.GID,
+) (bool, error) {
+	_, err := s.Get(ctx, scope, organizationID)
+	if err != nil {
+		if errors.Is(err, coredata.ErrResourceNotFound) {
+			return false, nil
+		}
+
+		return false, err
+	}
+
+	return true, nil
+}
+
 func (s OrganizationService) GetByIDs(
 	ctx context.Context, scope coredata.Scoper,
 	organizationIDs ...gid.GID,
@@ -124,7 +143,7 @@ func (s OrganizationService) GetByIDs(
 				conn,
 				scope,
 				organizationIDs,
-			); err != nil {
+			); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 				return fmt.Errorf("cannot load organizations by ids: %w", err)
 			}
 
@@ -247,28 +266,6 @@ func (s OrganizationService) Update(
 
 			if req.Name != nil {
 				organization.Name = *req.Name
-			}
-
-			if req.Description != nil {
-				organization.Description = *req.Description
-			}
-
-			if req.WebsiteURL != nil {
-				organization.WebsiteURL = *req.WebsiteURL
-			}
-
-			if req.Email != nil {
-				if *req.Email != nil {
-					if _, err := mail.ParseAddress(**req.Email); err != nil {
-						return fmt.Errorf("invalid email address: %w", err)
-					}
-				}
-
-				organization.Email = *req.Email
-			}
-
-			if req.HeadquarterAddress != nil {
-				organization.HeadquarterAddress = *req.HeadquarterAddress
 			}
 
 			if err := organization.Update(ctx, scope, tx); err != nil {

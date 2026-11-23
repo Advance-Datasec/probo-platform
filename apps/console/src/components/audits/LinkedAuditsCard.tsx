@@ -1,19 +1,24 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { getAuditStateVariant, sprintf } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
+import { getAuditStateVariant } from "@probo/helpers";
 import {
   Badge,
   Button,
@@ -31,12 +36,14 @@ import {
 } from "@probo/ui";
 import { clsx } from "clsx";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useFragment } from "react-relay";
 import { graphql } from "relay-runtime";
 
 import type { LinkedAuditsCardFragment$key } from "#/__generated__/core/LinkedAuditsCardFragment.graphql";
 import { useOrganizationId } from "#/hooks/useOrganizationId";
 
+import { useAuditFrameworkNames } from "./AuditFrameworkNames";
 import { LinkedAuditsDialog } from "./LinkedAuditsDialog";
 
 const linkedAuditFragment = graphql`
@@ -44,10 +51,7 @@ const linkedAuditFragment = graphql`
     id
     name
     state
-    framework {
-      id
-      name
-    }
+    ...AuditFrameworkNames_audit
   }
 `;
 
@@ -72,7 +76,7 @@ type Props<Params> = {
 };
 
 export function LinkedAuditsCard<Params>(props: Props<Params>) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [limit, setLimit] = useState<number | null>(4);
   const audits = useMemo(() => {
     return limit ? props.audits.slice(0, limit) : props.audits;
@@ -110,7 +114,7 @@ export function LinkedAuditsCard<Params>(props: Props<Params>) {
     <Wrapper padded className="space-y-[10px]">
       {variant === "card" && (
         <div className="flex justify-between">
-          <div className="text-lg font-semibold">{__("Audits")}</div>
+          <div className="text-lg font-semibold">{t("linkedAuditsCard.title")}</div>
           {!props.readOnly && (
             <LinkedAuditsDialog
               disabled={props.disabled}
@@ -119,7 +123,7 @@ export function LinkedAuditsCard<Params>(props: Props<Params>) {
               onUnlink={onDetach}
             >
               <Button variant="tertiary" icon={IconPlusLarge}>
-                {__("Link audit")}
+                {t("linkedAuditsCard.actions.link")}
               </Button>
             </LinkedAuditsDialog>
           )}
@@ -128,8 +132,8 @@ export function LinkedAuditsCard<Params>(props: Props<Params>) {
       <Table className={clsx(variant === "card" && "bg-invert")}>
         <Thead>
           <Tr>
-            <Th>{__("Name")}</Th>
-            <Th>{__("State")}</Th>
+            <Th>{t("linkedAuditsCard.columns.name")}</Th>
+            <Th>{t("linkedAuditsCard.columns.state")}</Th>
             {!props.readOnly && <Th></Th>}
           </Tr>
         </Thead>
@@ -140,7 +144,7 @@ export function LinkedAuditsCard<Params>(props: Props<Params>) {
                 colSpan={props.readOnly ? 2 : 3}
                 className="text-center text-txt-secondary"
               >
-                {__("No audits linked")}
+                {t("linkedAuditsCard.empty")}
               </Td>
             </Tr>
           )}
@@ -160,7 +164,7 @@ export function LinkedAuditsCard<Params>(props: Props<Params>) {
               onUnlink={onDetach}
             >
               <TrButton colspan={3} icon={IconPlusLarge}>
-                {__("Link audit")}
+                {t("linkedAuditsCard.actions.link")}
               </TrButton>
             </LinkedAuditsDialog>
           )}
@@ -173,7 +177,9 @@ export function LinkedAuditsCard<Params>(props: Props<Params>) {
           className="mt-3 mx-auto"
           icon={IconChevronDown}
         >
-          {sprintf(__("Show %s more"), props.audits.length - limit)}
+          {t("linkedAuditsCard.actions.showMore", {
+            count: props.audits.length - limit,
+          })}
         </Button>
       )}
     </Wrapper>
@@ -187,14 +193,15 @@ function AuditRow(props: {
 }) {
   const audit = useFragment(linkedAuditFragment, props.audit);
   const organizationId = useOrganizationId();
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
+  const { label: frameworkLabel } = useAuditFrameworkNames(audit);
 
   return (
-    <Tr to={`/organizations/${organizationId}/audits/${audit.id}`}>
+    <Tr to={`/organizations/${organizationId}/governance/audits/${audit.id}`}>
       <Td>
         <div className="flex flex-col">
-          <div className="font-medium">{audit.framework?.name}</div>
-          {audit.name && (
+          <div className="font-medium">{frameworkLabel || audit.name}</div>
+          {frameworkLabel && audit.name && (
             <div className="text-sm text-txt-secondary">{audit.name}</div>
           )}
         </div>
@@ -211,7 +218,7 @@ function AuditRow(props: {
             onClick={() => props.onClick(audit.id)}
             icon={IconTrashCan}
           >
-            {__("Unlink")}
+            {t("linkedAuditsCard.actions.unlink")}
           </Button>
         </Td>
       )}

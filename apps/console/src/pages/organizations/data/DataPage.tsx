@@ -1,20 +1,25 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { faviconUrl } from "@probo/helpers";
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
 import {
   ActionDropdown,
   Avatar,
@@ -32,6 +37,7 @@ import {
   Thead,
   Tr,
 } from "@probo/ui";
+import { useTranslation } from "react-i18next";
 import {
   graphql,
   type PreloadedQuery,
@@ -105,7 +111,7 @@ type Props = {
 };
 
 export default function DataPage(props: Props) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const organizationId = useOrganizationId();
   const navigate = useNavigate();
 
@@ -136,7 +142,7 @@ export default function DataPage(props: Props) {
     });
   };
 
-  usePageTitle(__("Data"));
+  usePageTitle(t("dataPage.pageTitle"));
 
   const hasAnyAction
     = dataEntries.some(({ canDelete, canUpdate }) => canUpdate || canDelete);
@@ -144,19 +150,17 @@ export default function DataPage(props: Props) {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={__("Data")}
-        description={__(
-          "Manage your organization's data assets and their classifications.",
-        )}
+        title={t("dataPage.title")}
+        description={t("dataPage.description")}
       >
         <div className="flex gap-2">
           {data.dataListDocument?.id && (
             <Button variant="secondary" asChild>
               <Link
-                to={`/organizations/${organizationId}/documents/${data.dataListDocument.id}`}
+                to={`/organizations/${organizationId}/governance/documents/${data.dataListDocument.id}`}
               >
                 <IconPageTextLine size={16} />
-                {__("Document")}
+                {t("dataPage.actions.document")}
               </Link>
             </Button>
           )}
@@ -166,12 +170,12 @@ export default function DataPage(props: Props) {
               defaultApproverIds={defaultApproverIds}
               onPublished={(documentId) => {
                 void navigate(
-                  `/organizations/${organizationId}/documents/${documentId}`,
+                  `/organizations/${organizationId}/governance/documents/${documentId}`,
                 );
               }}
             >
               <Button variant="secondary" icon={IconUpload}>
-                {__("Publish")}
+                {t("dataPage.actions.publish")}
               </Button>
             </PublishDataListDialog>
           )}
@@ -181,7 +185,7 @@ export default function DataPage(props: Props) {
               organizationId={organizationId}
               onCreated={() => pagination.refetch({})}
             >
-              <Button icon={IconPlusLarge}>{__("Add data")}</Button>
+              <Button icon={IconPlusLarge}>{t("dataPage.actions.add")}</Button>
             </CreateDatumDialog>
           )}
         </div>
@@ -189,10 +193,10 @@ export default function DataPage(props: Props) {
       <SortableTable {...pagination} refetch={refetch} pageSize={10}>
         <Thead>
           <Tr>
-            <Th>{__("Name")}</Th>
-            <Th>{__("Classification")}</Th>
-            <Th>{__("Owner")}</Th>
-            <Th>{__("Third parties")}</Th>
+            <Th>{t("dataPage.columns.name")}</Th>
+            <Th>{t("dataPage.columns.classification")}</Th>
+            <Th>{t("dataPage.columns.owner")}</Th>
+            <Th>{t("dataPage.columns.thirdParties")}</Th>
             {hasAnyAction && <Th></Th>}
           </Tr>
         </Thead>
@@ -221,10 +225,10 @@ function DataRow({
   hasAnyAction: boolean;
 }) {
   const organizationId = useOrganizationId();
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const deleteDatum = useDeleteDatum(entry, connectionId);
   const thirdParties = entry.thirdParties?.edges.map(edge => edge.node) ?? [];
-  const detailUrl = `/organizations/${organizationId}/data/${entry.id}`;
+  const detailUrl = `/organizations/${organizationId}/registries/data/${entry.id}`;
 
   return (
     <Tr to={detailUrl}>
@@ -232,7 +236,7 @@ function DataRow({
       <Td>
         <Badge variant="info">{entry.dataClassification}</Badge>
       </Td>
-      <Td>{entry.owner?.fullName ?? __("Unassigned")}</Td>
+      <Td>{entry.owner?.fullName ?? t("dataPage.unassigned")}</Td>
       <Td>
         {thirdParties.length > 0
           ? (
@@ -260,7 +264,7 @@ function DataRow({
               </div>
             )
           : (
-              <span className="text-txt-secondary text-sm">{__("None")}</span>
+              <span className="text-txt-secondary text-sm">{t("dataPage.none")}</span>
             )}
       </Td>
       {hasAnyAction && (
@@ -272,7 +276,7 @@ function DataRow({
                 variant="danger"
                 icon={IconTrashCan}
               >
-                {__("Delete")}
+                {t("dataPage.actions.delete")}
               </DropdownItem>
             )}
           </ActionDropdown>

@@ -21,4 +21,4 @@ else
 fi
 
 # Execute probod with the generated config
-exec ./probod -cfg-file "$CONFIG_FILE" "$@"
+exec probod -cfg-file "$CONFIG_FILE" "$@"

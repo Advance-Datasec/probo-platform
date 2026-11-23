@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -64,6 +70,9 @@ type (
 		EnterpriseOrganization   *string       `db:"enterprise_organization"`
 		Division                 *string       `db:"division"`
 		ManagerValue             *string       `db:"manager_value"`
+		ActivatedAt              *time.Time    `db:"activated_at"`
+		DeactivatedAt            *time.Time    `db:"deactivated_at"`
+		SCIMRemovedAt            *time.Time    `db:"scim_removed_at"`
 		CreatedAt                time.Time     `db:"created_at"`
 		UpdatedAt                time.Time     `db:"updated_at"`
 	}
@@ -71,10 +80,21 @@ type (
 	MembershipProfiles []*MembershipProfile
 )
 
+func (p MembershipProfile) createdAtSortKey() string {
+	rank := "1"
+	if p.State == ProfileStateDeactivated {
+		rank = "0"
+	}
+
+	createdAt := p.CreatedAt.UTC()
+
+	return rank + createdAt.Format("20060102150405") + fmt.Sprintf("%06d", createdAt.Nanosecond()/1000)
+}
+
 func (p MembershipProfile) CursorKey(orderBy MembershipProfileOrderField) page.CursorKey {
 	switch orderBy {
 	case MembershipProfileOrderFieldCreatedAt:
-		return page.NewCursorKey(p.ID, p.CreatedAt)
+		return page.NewCursorKey(p.ID, p.createdAtSortKey())
 	case MembershipProfileOrderFieldFullName:
 		return page.NewCursorKey(p.ID, p.FullName)
 	case MembershipProfileOrderFieldEmailAddress:
@@ -90,6 +110,26 @@ func (p MembershipProfile) CursorKey(orderBy MembershipProfileOrderField) page.C
 	panic(fmt.Sprintf("unsupported order by: %s", orderBy))
 }
 
+func (p *MembershipProfile) MarkPending(now time.Time) {
+	p.State = ProfileStatePending
+	p.ActivatedAt = nil
+	p.DeactivatedAt = nil
+	p.UpdatedAt = now
+}
+
+func (p *MembershipProfile) MarkActive(now time.Time) {
+	p.State = ProfileStateActive
+	p.ActivatedAt = &now
+	p.DeactivatedAt = nil
+	p.UpdatedAt = now
+}
+
+func (p *MembershipProfile) MarkDeactivated(now time.Time) {
+	p.State = ProfileStateDeactivated
+	p.DeactivatedAt = &now
+	p.UpdatedAt = now
+}
+
 func (p *MembershipProfile) AuthorizationAttributes(
 	ctx context.Context,
 	conn pg.Querier,
@@ -99,7 +139,8 @@ func (p *MembershipProfile) AuthorizationAttributes(
 SELECT
     id,
     organization_id,
-    identity_id
+    identity_id,
+    source
 FROM
     iam_membership_profiles
 WHERE
@@ -123,9 +164,10 @@ WHERE
 			id             gid.GID
 			organizationID gid.GID
 			identityID     gid.GID
+			source         ProfileSource
 		)
 
-		err = rows.Scan(&id, &organizationID, &identityID)
+		err = rows.Scan(&id, &organizationID, &identityID, &source)
 		if err != nil {
 			return nil, fmt.Errorf("cannot scan profile authorization attributes: %w", err)
 		}
@@ -133,6 +175,7 @@ WHERE
 		attrsByID[id] = policy.Attributes{
 			"organization_id": organizationID.String(),
 			"identity_id":     identityID.String(),
+			"source":          source.String(),
 		}
 	}
 
@@ -183,6 +226,9 @@ SELECT
     p.enterprise_organization,
     p.division,
     p.manager_value,
+    p.activated_at,
+    p.deactivated_at,
+    p.scim_removed_at,
     p.created_at,
     p.updated_at
 FROM
@@ -215,6 +261,95 @@ LIMIT 1;
 	}
 
 	*p = profile
+
+	return nil
+}
+
+func (p *MembershipProfile) LoadByOrganizationIDAndEmail(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	organizationID gid.GID,
+	email mail.Addr,
+) error {
+	q := `
+SELECT
+    p.id,
+    p.identity_id,
+    p.organization_id,
+    i.email_address,
+    p.source,
+    p.state,
+    p.full_name,
+    p.kind,
+    p.additional_email_addresses,
+    p.position,
+    p.contract_start_date,
+    p.contract_end_date,
+    '' AS organization_name,
+    p.user_name,
+    p.external_id,
+    p.nickname,
+    p.locale,
+    p.timezone,
+    p.profile_url,
+    p.preferred_language,
+    p.given_name,
+    p.family_name,
+    p.formatted_name,
+    p.middle_name,
+    p.honorific_prefix,
+    p.honorific_suffix,
+    p.employee_number,
+    p.department,
+    p.cost_center,
+    p.enterprise_organization,
+    p.division,
+    p.manager_value,
+    p.activated_at,
+    p.deactivated_at,
+    p.scim_removed_at,
+    p.created_at,
+    p.updated_at
+FROM
+    iam_membership_profiles p
+INNER JOIN identities i
+    ON i.id = p.identity_id
+WHERE
+    p.%s
+    AND p.organization_id = @organization_id
+    AND p.state = @state
+    AND (
+        i.email_address = @email::citext
+        OR @email::citext = ANY(p.additional_email_addresses)
+    )
+LIMIT 2;
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"organization_id": organizationID,
+		"email":           email,
+		"state":           ProfileStateActive,
+	}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query profile: %w", err)
+	}
+
+	profiles, err := pgx.CollectRows(rows, pgx.RowToStructByName[MembershipProfile])
+	if err != nil {
+		return fmt.Errorf("cannot collect profile: %w", err)
+	}
+
+	if len(profiles) != 1 {
+		return ErrResourceNotFound
+	}
+
+	*p = profiles[0]
 
 	return nil
 }
@@ -260,6 +395,9 @@ SELECT
     p.enterprise_organization,
     p.division,
     p.manager_value,
+    p.activated_at,
+    p.deactivated_at,
+    p.scim_removed_at,
     p.created_at,
     p.updated_at
 FROM
@@ -341,6 +479,9 @@ SELECT
     p.enterprise_organization,
     p.division,
     p.manager_value,
+    p.activated_at,
+    p.deactivated_at,
+    p.scim_removed_at,
     p.created_at,
     p.updated_at
 FROM
@@ -421,6 +562,9 @@ SELECT
     p.enterprise_organization,
     p.division,
     p.manager_value,
+    p.activated_at,
+    p.deactivated_at,
+    p.scim_removed_at,
     p.created_at,
     p.updated_at
 FROM
@@ -445,6 +589,84 @@ WHERE
 	profiles, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[MembershipProfile])
 	if err != nil {
 		return fmt.Errorf("cannot collect profiles: %w", err)
+	}
+
+	*p = profiles
+
+	if len(profiles) != len(gid.NewSet(profileIDs...)) {
+		return ErrResourceNotFound
+	}
+
+	return nil
+}
+
+func (p *MembershipProfiles) LoadExistingByIDs(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	profileIDs []gid.GID,
+) error {
+	q := `
+SELECT
+    p.id,
+    p.identity_id,
+    p.organization_id,
+    i.email_address,
+    p.source,
+    p.state,
+    p.full_name,
+    p.kind,
+    p.additional_email_addresses,
+    p.position,
+    p.contract_start_date,
+    p.contract_end_date,
+    '' AS organization_name,
+    p.user_name,
+    p.external_id,
+    p.nickname,
+    p.locale,
+    p.timezone,
+    p.profile_url,
+    p.preferred_language,
+    p.given_name,
+    p.family_name,
+    p.formatted_name,
+    p.middle_name,
+    p.honorific_prefix,
+    p.honorific_suffix,
+    p.employee_number,
+    p.department,
+    p.cost_center,
+    p.enterprise_organization,
+    p.division,
+    p.manager_value,
+    p.activated_at,
+    p.deactivated_at,
+    p.scim_removed_at,
+    p.created_at,
+    p.updated_at
+FROM
+    iam_membership_profiles p
+INNER JOIN identities i
+    ON i.id = p.identity_id
+WHERE
+    p.%s
+    AND p.id = ANY(@profile_ids)
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.NamedArgs{"profile_ids": profileIDs}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query profiles by ids: %w", err)
+	}
+
+	profiles, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[MembershipProfile])
+	if err != nil {
+		return fmt.Errorf("cannot collect profiles by ids: %w", err)
 	}
 
 	*p = profiles
@@ -494,6 +716,9 @@ WITH profiles AS (
         p.enterprise_organization,
         p.division,
         p.manager_value,
+        p.activated_at,
+        p.deactivated_at,
+        p.scim_removed_at,
         p.created_at,
         p.updated_at
     FROM
@@ -537,6 +762,9 @@ SELECT
     enterprise_organization,
     division,
     manager_value,
+    activated_at,
+    deactivated_at,
+    scim_removed_at,
     created_at,
     updated_at
 FROM profiles
@@ -607,11 +835,16 @@ WITH profiles AS (
         p.enterprise_organization,
         p.division,
         p.manager_value,
+        p.activated_at,
+        p.deactivated_at,
+        p.scim_removed_at,
         p.created_at,
-        p.updated_at
+        p.updated_at,
+        o.name AS organization_name
     FROM
         iam_membership_profiles p
     INNER JOIN identities i ON i.id = p.identity_id
+    INNER JOIN organizations o ON o.id = p.organization_id
     WHERE
         p.identity_id = @identity_id
         AND %s
@@ -629,7 +862,7 @@ SELECT
     p.position,
     p.contract_start_date,
     p.contract_end_date,
-    o.name AS organization_name,
+    p.organization_name,
     p.user_name,
     p.external_id,
     p.nickname,
@@ -649,10 +882,12 @@ SELECT
     p.enterprise_organization,
     p.division,
     p.manager_value,
+    p.activated_at,
+    p.deactivated_at,
+    p.scim_removed_at,
     p.created_at,
     p.updated_at
 FROM profiles p
-INNER JOIN organizations o ON o.id = p.organization_id
 WHERE
     %s
 `
@@ -730,6 +965,9 @@ profiles AS (
         mp.enterprise_organization,
         mp.division,
         mp.manager_value,
+        mp.activated_at,
+        mp.deactivated_at,
+        mp.scim_removed_at,
         mp.created_at,
         mp.updated_at
     FROM
@@ -772,6 +1010,9 @@ SELECT
     p.enterprise_organization,
     p.division,
     p.manager_value,
+    p.activated_at,
+    p.deactivated_at,
+    p.scim_removed_at,
     p.created_at,
     p.updated_at
 FROM profiles p
@@ -987,6 +1228,9 @@ INSERT INTO
         enterprise_organization,
         division,
         manager_value,
+        activated_at,
+        deactivated_at,
+        scim_removed_at,
         created_at,
         updated_at
     )
@@ -1022,6 +1266,9 @@ VALUES (
     @enterprise_organization,
     @division,
     @manager_value,
+    @activated_at,
+    @deactivated_at,
+    @scim_removed_at,
     @created_at,
     @updated_at
 )
@@ -1059,6 +1306,9 @@ VALUES (
 		"enterprise_organization":    p.EnterpriseOrganization,
 		"division":                   p.Division,
 		"manager_value":              p.ManagerValue,
+		"activated_at":               p.ActivatedAt,
+		"deactivated_at":             p.DeactivatedAt,
+		"scim_removed_at":            p.SCIMRemovedAt,
 		"created_at":                 p.CreatedAt,
 		"updated_at":                 p.UpdatedAt,
 	}
@@ -1117,6 +1367,9 @@ SET
     enterprise_organization = @enterprise_organization,
     division = @division,
     manager_value = @manager_value,
+    activated_at = @activated_at,
+    deactivated_at = @deactivated_at,
+    scim_removed_at = @scim_removed_at,
     updated_at = @updated_at
 WHERE
     id = @id
@@ -1155,12 +1408,24 @@ WHERE
 		"enterprise_organization":    p.EnterpriseOrganization,
 		"division":                   p.Division,
 		"manager_value":              p.ManagerValue,
+		"activated_at":               p.ActivatedAt,
+		"deactivated_at":             p.DeactivatedAt,
+		"scim_removed_at":            p.SCIMRemovedAt,
 		"updated_at":                 p.UpdatedAt,
 	}
 	maps.Copy(args, scope.SQLArguments())
 
 	result, err := conn.Exec(ctx, q, args)
 	if err != nil {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+			switch pgErr.ConstraintName {
+			case "idx_profiles_identity_id_organization_id",
+				"idx_profiles_external_id_organization_id",
+				"idx_profiles_user_name_organization_id":
+				return ErrResourceAlreadyExists
+			}
+		}
+
 		return fmt.Errorf("cannot update profile: %w", err)
 	}
 

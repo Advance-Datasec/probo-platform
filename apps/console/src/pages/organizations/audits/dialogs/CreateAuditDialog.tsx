@@ -1,25 +1,30 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import {
   auditStates,
   formatDatetime,
   formatError,
-  getAuditStateLabel,
   type GraphQLError,
+  toPeriod,
 } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   Breadcrumb,
   Button,
@@ -33,49 +38,18 @@ import {
   Option,
   Select,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { Suspense } from "react";
-import { type Control, Controller } from "react-hook-form";
-import { useLazyLoadQuery } from "react-relay";
-import { graphql } from "relay-runtime";
-import { z } from "zod";
+import { type Control } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 
-import type { CreateAuditDialogFrameworksQuery } from "#/__generated__/core/CreateAuditDialogFrameworksQuery.graphql";
+import { useOrganizationFrameworkOptions } from "#/components/audits/useOrganizationFrameworkOptions";
 import { ControlledField } from "#/components/form/ControlledField";
+import { EntityMultiSelectField } from "#/components/form/EntityMultiSelectField";
 import { useCreateAudit } from "#/hooks/graph/AuditGraph";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
-
-const frameworksQuery = graphql`
-  query CreateAuditDialogFrameworksQuery($organizationId: ID!) {
-    organization: node(id: $organizationId) {
-      ... on Organization {
-        frameworks(first: 100) {
-          edges {
-            node {
-              id
-              name
-            }
-          }
-        }
-      }
-    }
-  }
-`;
-
-const schema = z.object({
-  frameworkId: z.string().min(1, "Framework is required"),
-  name: z.string().optional(),
-  validFrom: z.string().optional(),
-  validUntil: z.string().optional(),
-  state: z.enum([
-    "NOT_STARTED",
-    "IN_PROGRESS",
-    "COMPLETED",
-    "REJECTED",
-    "OUTDATED",
-  ]),
-});
+import { z } from "#/lib/zod";
 
 type Props = {
   children?: React.ReactNode;
@@ -94,15 +68,28 @@ export function CreateAuditDialog({
   ref: externalRef,
   onClose,
 }: Props) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { i18n, t } = useTranslation();
+  const toast = useToast();
+  const schema = z.object({
+    frameworkIds: z.array(z.string()).min(1, t("createAuditDialog.validation.frameworkRequired")),
+    name: z.string().optional(),
+    firm: z.string().optional(),
+    validFrom: z.string().optional(),
+    validUntil: z.string().optional(),
+    auditStartDate: z.string().optional(),
+    auditEndDate: z.string().optional(),
+    state: z.enum(auditStates),
+  });
   const { control, handleSubmit, register, formState, reset }
     = useFormWithSchema(schema, {
       defaultValues: {
-        frameworkId: "",
+        frameworkIds: [],
         name: "",
+        firm: "",
         validFrom: "",
         validUntil: "",
+        auditStartDate: "",
+        auditEndDate: "",
         state: "NOT_STARTED",
       },
     });
@@ -114,10 +101,17 @@ export function CreateAuditDialog({
     try {
       await createAudit({
         organizationId,
-        frameworkId: data.frameworkId,
+        frameworkIds: data.frameworkIds,
         name: data.name || null,
-        validFrom: formatDatetime(data.validFrom),
-        validUntil: formatDatetime(data.validUntil),
+        firm: data.firm || null,
+        validity: toPeriod(
+          formatDatetime(data.validFrom),
+          formatDatetime(data.validUntil),
+        ),
+        auditDates: toPeriod(
+          formatDatetime(data.auditStartDate),
+          formatDatetime(data.auditEndDate),
+        ),
         state: data.state,
         file: file ?? null,
       });
@@ -125,21 +119,21 @@ export function CreateAuditDialog({
       ref.current?.close();
       reset();
       onClose?.();
-      toast({
-        title: __("Success"),
+      toast.add({
+        title: t("createAuditDialog.messages.success"),
         description: file
-          ? __("Audit created and report uploaded successfully")
-          : __("Audit created successfully"),
-        variant: "success",
+          ? t("createAuditDialog.messages.createdWithReport")
+          : t("createAuditDialog.messages.created"),
+        type: "success",
       });
     } catch (error) {
-      toast({
-        title: __("Error"),
+      toast.add({
+        title: t("createAuditDialog.messages.error"),
         description: formatError(
-          __("Failed to create audit"),
+          t("createAuditDialog.errors.create"),
           error as GraphQLError,
         ),
-        variant: "error",
+        type: "error",
       });
     }
   };
@@ -152,7 +146,13 @@ export function CreateAuditDialog({
     <Dialog
       ref={ref}
       trigger={children}
-      title={<Breadcrumb items={[__("Audits"), __("New Audit")]} />}
+      title={(
+        <Breadcrumb items={[
+          t("createAuditDialog.breadcrumb.audits"),
+          t("createAuditDialog.breadcrumb.newAudit"),
+        ]}
+        />
+      )}
       onClose={handleClose}
     >
       <form onSubmit={e => void handleSubmit(onSubmit)(e)} className="space-y-4">
@@ -165,54 +165,79 @@ export function CreateAuditDialog({
                   {file.name}
                 </p>
                 <p className="text-txt-tertiary text-xs">
-                  {(file.size / 1024 / 1024).toFixed(2)}
-                  {" MB"}
+                  {t("createAuditDialog.fileSize", {
+                    value: new Intl.NumberFormat(i18n.language, {
+                      maximumFractionDigits: 2,
+                    }).format(file.size / 1024 / 1024),
+                  })}
                 </p>
               </div>
             </div>
           )}
 
-          <Field label={__("Framework")}>
+          <Field
+            label={t("createAuditDialog.fields.framework")}
+            error={formState.errors.frameworkIds?.message}
+          >
             <Suspense
-              fallback={
-                <Select variant="editor" disabled placeholder="Loading..." />
-              }
+              fallback={(
+                <Select
+                  variant="editor"
+                  disabled
+                  placeholder={t("createAuditDialog.loading")}
+                />
+              )}
             >
               <FrameworkSelect
                 organizationId={organizationId}
                 control={control}
-                name="frameworkId"
               />
             </Suspense>
           </Field>
 
-          <Field label={__("Name")}>
-            <Input {...register("name")} placeholder={__("Audit name")} />
+          <Field label={t("createAuditDialog.fields.name")}>
+            <Input
+              {...register("name")}
+              placeholder={t("createAuditDialog.fields.namePlaceholder")}
+            />
+          </Field>
+
+          <Field label={t("createAuditDialog.fields.firm")}>
+            <Input
+              {...register("firm")}
+              placeholder={t("createAuditDialog.fields.firmPlaceholder")}
+            />
           </Field>
 
           <ControlledField
             control={control}
             name="state"
             type="select"
-            label={__("State")}
+            label={t("createAuditDialog.fields.state")}
           >
             {auditStates.map(state => (
               <Option key={state} value={state}>
-                {getAuditStateLabel(__, state)}
+                {t(`createAuditDialog.states.${state.toLowerCase()}`)}
               </Option>
             ))}
           </ControlledField>
 
-          <Field label={__("Valid From")}>
+          <Field label={t("createAuditDialog.fields.validFrom")}>
             <Input {...register("validFrom")} type="date" />
           </Field>
-          <Field label={__("Valid Until")}>
+          <Field label={t("createAuditDialog.fields.validUntil")}>
             <Input {...register("validUntil")} type="date" />
+          </Field>
+          <Field label={t("createAuditDialog.fields.auditStartDate")}>
+            <Input {...register("auditStartDate")} type="date" />
+          </Field>
+          <Field label={t("createAuditDialog.fields.auditEndDate")}>
+            <Input {...register("auditEndDate")} type="date" />
           </Field>
         </DialogContent>
         <DialogFooter>
           <Button disabled={formState.isSubmitting} type="submit">
-            {__("Create")}
+            {t("createAuditDialog.actions.create")}
           </Button>
         </DialogFooter>
       </form>
@@ -220,49 +245,48 @@ export function CreateAuditDialog({
   );
 }
 
-type FormSchema = z.infer<typeof schema>;
+type FormSchema = {
+  frameworkIds: string[];
+  name?: string;
+  firm?: string;
+  validFrom?: string;
+  validUntil?: string;
+  auditStartDate?: string;
+  auditEndDate?: string;
+  state: (typeof auditStates)[number];
+};
 
 function FrameworkSelect({
   organizationId,
   control,
-  name,
 }: {
   organizationId: string;
   control: Control<FormSchema>;
-  name: keyof FormSchema;
 }) {
-  const { __ } = useTranslate();
-  const data = useLazyLoadQuery<CreateAuditDialogFrameworksQuery>(
-    frameworksQuery,
-    { organizationId },
-    { fetchPolicy: "network-only" },
+  const { t } = useTranslation();
+  const { frameworks, failed, retry } = useOrganizationFrameworkOptions(
+    organizationId,
+    "network-only",
   );
-  const frameworks
-    = data?.organization?.frameworks?.edges
-      ?.map(edge => edge.node)
-      .filter((node): node is NonNullable<typeof node> => node !== null) ?? [];
 
   return (
-    <Controller
-      control={control}
-      name={name}
-      render={({ field }) => (
-        <Select
-          id={name}
-          variant="editor"
-          placeholder={__("Select a framework")}
-          onValueChange={field.onChange}
-          {...field}
-          className="w-full"
-          value={field.value ?? ""}
-        >
-          {frameworks.map(framework => (
-            <Option key={framework.id} value={framework.id}>
-              {framework.name}
-            </Option>
-          ))}
-        </Select>
+    <div className="space-y-2">
+      <EntityMultiSelectField
+        control={control}
+        name="frameworkIds"
+        items={frameworks}
+        placeholder={t("createAuditDialog.fields.frameworkPlaceholder")}
+        emptyLabel={t("createAuditDialog.validation.frameworkRequired")}
+        renderOption={framework => framework.name}
+        renderBadgeLabel={framework => framework.name}
+        getRemoveAriaLabel={framework =>
+          t("createAuditDialog.actions.remove", { name: framework.name })}
+      />
+      {failed && (
+        <Button type="button" variant="tertiary" onClick={retry}>
+          {t("createAuditDialog.actions.retry")}
+        </Button>
       )}
-    />
+    </div>
   );
 }

@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package webhook
 
@@ -31,7 +37,42 @@ type Payload struct {
 	OrganizationID string          `json:"organizationId"`
 	EventType      string          `json:"eventType"`
 	CreatedAt      time.Time       `json:"createdAt"`
+	Actor          json.RawMessage `json:"actor"`
 	Data           json.RawMessage `json:"data"`
+	UpdatedFrom    json.RawMessage `json:"updatedFrom,omitempty"`
+}
+
+func NewPayload(event *coredata.WebhookEvent, data *coredata.WebhookData) *Payload {
+	if event == nil || data == nil {
+		return nil
+	}
+
+	return &Payload{
+		EventID:        event.ID.String(),
+		SubscriptionID: event.WebhookSubscriptionID.String(),
+		OrganizationID: data.OrganizationID.String(),
+		EventType:      data.EventType.String(),
+		CreatedAt:      data.CreatedAt,
+		Actor:          data.Actor,
+		Data:           data.Data,
+		UpdatedFrom:    data.UpdatedFrom,
+	}
+}
+
+func MarshalPayload(event *coredata.WebhookEvent, data *coredata.WebhookData) *string {
+	payload := NewPayload(event, data)
+	if payload == nil {
+		return nil
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+
+	s := string(body)
+
+	return &s
 }
 
 func InsertData(
@@ -42,15 +83,41 @@ func InsertData(
 	eventType coredata.WebhookEventType,
 	data any,
 ) error {
-	var configs coredata.WebhookSubscriptions
-
-	exists, err := configs.ExistsByOrganizationIDAndEventType(ctx, tx, scope, organizationID, eventType)
-	if err != nil {
-		return fmt.Errorf("cannot check webhook subscriptions: %w", err)
+	if err := InsertUpdateData(ctx, tx, scope, organizationID, eventType, data, nil); err != nil {
+		return fmt.Errorf("cannot insert webhook data: %w", err)
 	}
 
-	if !exists {
+	return nil
+}
+
+func InsertUpdateData(
+	ctx context.Context,
+	tx pg.Tx,
+	scope coredata.Scoper,
+	organizationID gid.GID,
+	eventType coredata.WebhookEventType,
+	data any,
+	updatedFrom any,
+) error {
+	var configs coredata.WebhookSubscriptions
+
+	if err := configs.LoadMatchingByOrganizationIDAndEventType(
+		ctx,
+		tx,
+		scope,
+		organizationID,
+		eventType,
+	); err != nil {
+		return fmt.Errorf("cannot load matching webhook subscriptions: %w", err)
+	}
+
+	if len(configs) == 0 {
 		return nil
+	}
+
+	actor, err := marshalActor(ctx, tx, scope, organizationID)
+	if err != nil {
+		return fmt.Errorf("cannot marshal webhook actor: %w", err)
 	}
 
 	raw, err := json.Marshal(data)
@@ -58,16 +125,43 @@ func InsertData(
 		return fmt.Errorf("cannot marshal webhook event data: %w", err)
 	}
 
+	var updatedFromRaw json.RawMessage
+	if updatedFrom != nil {
+		updatedFromRaw, err = json.Marshal(updatedFrom)
+		if err != nil {
+			return fmt.Errorf("cannot marshal webhook event updated-from data: %w", err)
+		}
+	}
+
+	now := time.Now()
 	webhookData := &coredata.WebhookData{
 		ID:             gid.New(scope.GetTenantID(), coredata.WebhookDataEntityType),
 		OrganizationID: organizationID,
 		EventType:      eventType,
 		Data:           raw,
-		CreatedAt:      time.Now(),
+		UpdatedFrom:    updatedFromRaw,
+		Actor:          actor,
+		CreatedAt:      now,
+		ProcessedAt:    &now,
 	}
 
 	if err = webhookData.Insert(ctx, tx, scope); err != nil {
 		return fmt.Errorf("cannot insert webhook data: %w", err)
+	}
+
+	for _, config := range configs {
+		event := &coredata.WebhookEvent{
+			ID:                    gid.New(scope.GetTenantID(), coredata.WebhookEventEntityType),
+			WebhookDataID:         webhookData.ID,
+			WebhookSubscriptionID: config.ID,
+			Status:                coredata.WebhookEventStatusPending,
+			MaxAttempts:           coredata.WebhookEventDefaultMaxAttempts,
+			CreatedAt:             now,
+			UpdatedAt:             now,
+		}
+		if err := event.Insert(ctx, tx, scope); err != nil {
+			return fmt.Errorf("cannot insert webhook event: %w", err)
+		}
 	}
 
 	return nil

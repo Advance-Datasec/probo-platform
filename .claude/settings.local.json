@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(find 'c:/D/Advance Sec/probo-platform' -path */go.gearno.de/kit* -name *.go)"
-    ]
-  }
-}

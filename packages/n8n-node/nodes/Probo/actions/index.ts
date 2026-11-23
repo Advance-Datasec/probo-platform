@@ -1,48 +1,67 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import type { IExecuteFunctions, INodeExecutionData, INodeProperties } from 'n8n-workflow';
+import * as aiSystem from './aiSystem';
 import * as accessReview from './accessReview';
+import * as accessReviewSource from './accessReviewSource';
 import * as asset from './asset';
 import * as audit from './audit';
 import * as auditLog from './auditLog';
+import * as businessFunction from './businessFunction';
 import * as control from './control';
 import * as cookieBanner from './cookieBanner';
 import * as cookieCategory from './cookieCategory';
 import * as cookieConsentRecord from './cookieConsentRecord';
 import * as trackerPattern from './trackerPattern';
 import * as datum from './datum';
+import * as device from './device';
 import * as document from './document';
+import * as documentComment from './documentComment';
+import * as documentSuggestion from './documentSuggestion';
 import * as dpia from './dpia';
+import * as employeePortal from './employeePortal';
 import * as evidence from './evidence';
 import * as execute from './execute';
 import * as finding from './finding';
 import * as framework from './framework';
-import * as measure from './measure';
+import * as measure from './internalControl';
 import * as obligation from './obligation';
 import * as organization from './organization';
 import * as organizationContext from './organizationContext';
 import * as processingActivity from './processingActivity';
 import * as rightsRequest from './rightsRequest';
 import * as resourceAlias from './resourceAlias';
-import * as riskAssessment from './riskAssessment';
+import * as tag from './tag';
+import * as riskAnalysis from './riskAnalysis';
 import * as user from './user';
 import * as risk from './risk';
 import * as statementOfApplicability from './statementOfApplicability';
+import * as treatmentPlan from './treatmentPlan';
 import * as task from './task';
+import * as taskComment from './taskComment';
+import * as taskActivity from './taskActivity';
 import * as tia from './tia';
-import * as trustCenter from './trustCenter';
+import * as compliancePortal from './compliancePortal';
+import * as attachment from './attachment';
+import * as connector from './connector';
 import * as thirdParty from './thirdParty';
 import * as webhook from './webhook';
 
@@ -53,40 +72,56 @@ export interface ResourceModule {
 
 export interface OperationModule {
 	description: INodeProperties[];
-	execute: (this: IExecuteFunctions, itemIndex: number) => Promise<INodeExecutionData>;
+	execute: (
+		this: IExecuteFunctions,
+		itemIndex: number,
+	) => Promise<INodeExecutionData | INodeExecutionData[]>;
 }
 
 export const resources: Record<string, ResourceModule> = {
+	aiSystem: aiSystem as ResourceModule,
 	accessReview: accessReview as ResourceModule,
+	accessReviewSource: accessReviewSource as ResourceModule,
 	asset: asset as ResourceModule,
 	audit: audit as ResourceModule,
 	auditLog: auditLog as ResourceModule,
+	businessFunction: businessFunction as ResourceModule,
 	control: control as ResourceModule,
+	connector: connector as ResourceModule,
+	attachment: attachment as ResourceModule,
 	cookieBanner: cookieBanner as ResourceModule,
 	cookieCategory: cookieCategory as ResourceModule,
 	cookieConsentRecord: cookieConsentRecord as ResourceModule,
 	trackerPattern: trackerPattern as ResourceModule,
 	datum: datum as ResourceModule,
+	device: device as ResourceModule,
 	document: document as ResourceModule,
+	documentComment: documentComment as ResourceModule,
+	documentSuggestion: documentSuggestion as ResourceModule,
 	dpia: dpia as ResourceModule,
+	employeePortal: employeePortal as ResourceModule,
 	evidence: evidence as ResourceModule,
 	execute: execute as ResourceModule,
 	finding: finding as ResourceModule,
 	framework: framework as ResourceModule,
-	measure: measure as ResourceModule,
+	internalControl: measure as ResourceModule,
 	obligation: obligation as ResourceModule,
 	organization: organization as ResourceModule,
 	organizationContext: organizationContext as ResourceModule,
 	processingActivity: processingActivity as ResourceModule,
 	rightsRequest: rightsRequest as ResourceModule,
 	resourceAlias: resourceAlias as ResourceModule,
-	riskAssessment: riskAssessment as ResourceModule,
+	tag: tag as ResourceModule,
+	riskAnalysis: riskAnalysis as ResourceModule,
 	user: user as ResourceModule,
 	risk: risk as ResourceModule,
 	statementOfApplicability: statementOfApplicability as ResourceModule,
 	task: task as ResourceModule,
+	taskComment: taskComment as ResourceModule,
+	taskActivity: taskActivity as ResourceModule,
+	treatmentPlan: treatmentPlan as ResourceModule,
 	tia: tia as ResourceModule,
-	trustCenter: trustCenter as ResourceModule,
+	compliancePortal: compliancePortal as ResourceModule,
 	thirdParty: thirdParty as ResourceModule,
 	webhook: webhook as ResourceModule,
 };

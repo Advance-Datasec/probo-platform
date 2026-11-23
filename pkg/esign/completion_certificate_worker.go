@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package esign
 
@@ -32,9 +38,14 @@ import (
 	"go.probo.inc/probo/pkg/mail"
 )
 
-// EmailPresenterConfigFunc resolves the emails.PresenterConfig for the
-// organization that owns the given trust center.
-type EmailPresenterConfigFunc func(ctx context.Context, organizationID gid.GID) (emails.PresenterConfig, error)
+// EmailPresenterConfigFunc resolves the presentation used for a signature.
+// Callers can use the signature ID to recover source-specific branding without
+// coupling the electronic-signature domain to that source.
+type EmailPresenterConfigFunc func(
+	ctx context.Context,
+	signatureID gid.GID,
+	organizationID gid.GID,
+) (emails.PresenterConfig, error)
 
 type completionCertificateHandler struct {
 	pg                  *pg.Client
@@ -140,15 +151,57 @@ func (h *completionCertificateHandler) generateAndCommit(
 ) error {
 	scope := coredata.NewScopeFromObjectID(signature.ID)
 
-	email, attachments, err := h.generateCertificate(ctx, signature, scope)
+	var (
+		signedFile   coredata.File
+		organization coredata.Organization
+	)
+
+	if ref.UnrefOrZero(signature.EmailSubject) != "" {
+		if err := h.pg.WithConn(
+			ctx,
+			func(ctx context.Context, conn pg.Querier) error {
+				if err := signedFile.LoadByID(ctx, conn, scope, signature.FileID); err != nil {
+					return fmt.Errorf("cannot load signed file: %w", err)
+				}
+
+				if err := organization.LoadByID(ctx, conn, scope, signature.OrganizationID); err != nil {
+					return fmt.Errorf("cannot load organization: %w", err)
+				}
+
+				return nil
+			},
+		); err != nil {
+			return err
+		}
+	}
+
+	certificateFile, err := h.generateCertificate(ctx, signature, scope)
 	if err != nil {
 		return err
+	}
+
+	var (
+		email       *coredata.Email
+		attachments coredata.EmailAttachments
+	)
+
+	if ref.UnrefOrZero(signature.EmailSubject) != "" {
+		email, attachments, err = h.generateCompletionEmail(
+			ctx,
+			signature,
+			&signedFile,
+			&organization,
+			certificateFile,
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	if err := h.pg.WithTx(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
-			signature.CertificateFileID = &attachments[1].FileID
+			signature.CertificateFileID = &certificateFile.ID
 
 			signature.UpdatedAt = time.Now()
 			if err := signature.Update(ctx, tx, scope); err != nil {
@@ -163,13 +216,15 @@ func (h *completionCertificateHandler) generateAndCommit(
 				return fmt.Errorf("cannot insert certificate event: %w", err)
 			}
 
-			if err := email.Insert(ctx, tx); err != nil {
-				return fmt.Errorf("cannot insert certificate email: %w", err)
-			}
+			if email != nil {
+				if err := email.Insert(ctx, tx); err != nil {
+					return fmt.Errorf("cannot insert certificate email: %w", err)
+				}
 
-			for _, attachment := range attachments {
-				if err := attachment.Insert(ctx, tx); err != nil {
-					return fmt.Errorf("cannot insert email attachment: %w", err)
+				for _, attachment := range attachments {
+					if err := attachment.Insert(ctx, tx); err != nil {
+						return fmt.Errorf("cannot insert email attachment: %w", err)
+					}
 				}
 			}
 
@@ -186,12 +241,8 @@ func (h *completionCertificateHandler) generateCertificate(
 	ctx context.Context,
 	signature *coredata.ElectronicSignature,
 	scope coredata.Scoper,
-) (*coredata.Email, coredata.EmailAttachments, error) {
-	var (
-		events       = coredata.ElectronicSignatureEvents{}
-		signedFile   = coredata.File{}
-		organization = coredata.Organization{}
-	)
+) (*coredata.File, error) {
+	events := coredata.ElectronicSignatureEvents{}
 
 	if err := h.pg.WithConn(
 		ctx,
@@ -200,23 +251,15 @@ func (h *completionCertificateHandler) generateCertificate(
 				return fmt.Errorf("cannot load events: %w", err)
 			}
 
-			if err := signedFile.LoadByID(ctx, conn, scope, signature.FileID); err != nil {
-				return fmt.Errorf("cannot load signed file: %w", err)
-			}
-
-			if err := organization.LoadByID(ctx, conn, scope, signature.OrganizationID); err != nil {
-				return fmt.Errorf("cannot load organization: %w", err)
-			}
-
 			return nil
 		},
 	); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	certificatePDFReader, err := h.certificateGen.Generate(ctx, signature, events)
 	if err != nil {
-		return nil, nil, fmt.Errorf("cannot generate certificate: %w", err)
+		return nil, fmt.Errorf("cannot generate certificate: %w", err)
 	}
 
 	certificateOfCompletionFile := coredata.File{
@@ -241,7 +284,7 @@ func (h *completionCertificateHandler) generateCertificate(
 		},
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("cannot upload cert to S3: %w", err)
+		return nil, fmt.Errorf("cannot upload cert to S3: %w", err)
 	}
 
 	certificateOfCompletionFile.FileSize = certificateOfCompletionFileSize
@@ -256,10 +299,20 @@ func (h *completionCertificateHandler) generateCertificate(
 			return nil
 		},
 	); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	presenterCfg, err := h.presenterConfigFunc(ctx, signature.OrganizationID)
+	return &certificateOfCompletionFile, nil
+}
+
+func (h *completionCertificateHandler) generateCompletionEmail(
+	ctx context.Context,
+	signature *coredata.ElectronicSignature,
+	signedFile *coredata.File,
+	organization *coredata.Organization,
+	certificateFile *coredata.File,
+) (*coredata.Email, coredata.EmailAttachments, error) {
+	presenterCfg, err := h.presenterConfigFunc(ctx, signature.ID, signature.OrganizationID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("cannot resolve presenter config: %w", err)
 	}
@@ -271,10 +324,7 @@ func (h *completionCertificateHandler) generateCertificate(
 		docName = signature.DocumentType.DisplayName()
 	}
 
-	subject := signature.EmailSubject
-	if subject == "" {
-		subject = fmt.Sprintf("Your signed %s - Certificate of Completion", docName)
-	}
+	subject := *signature.EmailSubject
 
 	textBody, htmlBody, err := emailPresenter.RenderElectronicSignatureCertificate(ctx, ref.UnrefOrZero(signature.SignerFullName), docName, subject)
 	if err != nil {
@@ -300,7 +350,7 @@ func (h *completionCertificateHandler) generateCertificate(
 		),
 		coredata.NewEmailAttachment(
 			email.ID,
-			certificateOfCompletionFile.ID,
+			certificateFile.ID,
 			certificateFilename,
 		),
 	}
@@ -330,11 +380,22 @@ func (h *completionCertificateHandler) handleCertFailure(
 			signature.UpdatedAt = time.Now()
 
 			if signature.AttemptCount >= signature.MaxAttempts {
-				signature.Status = coredata.ElectronicSignatureStatusFailed
+				terminal := "Certificate generation failed after maximum attempts."
+				signature.LastError = &terminal
 			}
 
 			if err := signature.Update(ctx, tx, scope); err != nil {
 				return fmt.Errorf("cannot update signature: %w", err)
+			}
+
+			if signature.AttemptCount >= signature.MaxAttempts {
+				event := signature.NewEvent(
+					coredata.ElectronicSignatureEventTypeProcessingError,
+					coredata.ElectronicSignatureEventSourceServer,
+				)
+				if err := event.Insert(ctx, tx, scope); err != nil {
+					return fmt.Errorf("cannot insert certificate failure event: %w", err)
+				}
 			}
 
 			return nil

@@ -1,19 +1,23 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { sprintf } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   Card,
@@ -32,6 +36,7 @@ import {
 } from "@probo/ui";
 import { clsx } from "clsx";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useFragment } from "react-relay";
 import { graphql } from "relay-runtime";
 
@@ -43,13 +48,13 @@ import { LinkedDocumentDialog } from "./LinkedDocumentsDialog";
 const linkedDocumentFragment = graphql`
   fragment LinkedDocumentsCardFragment on Document {
     id
-    versions(first: 1) {
+    title
+    documentType
+    currentPublishedMajor
+    pendingApproval: versions(first: 1, filter: { statuses: [PENDING_APPROVAL] }) {
       edges {
         node {
           id
-          title
-          documentType
-          status
         }
       }
     }
@@ -86,7 +91,7 @@ type Props<Params> = {
  * Reusable component that displays a list of linked documents
  */
 export function LinkedDocumentsCard<Params>(props: Props<Params>) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [limit, setLimit] = useState<number | null>(4);
   const documents = useMemo(() => {
     return limit ? props.documents.slice(0, limit) : props.documents;
@@ -124,7 +129,7 @@ export function LinkedDocumentsCard<Params>(props: Props<Params>) {
     <Wrapper padded className="space-y-[10px]">
       {variant === "card" && (
         <div className="flex justify-between">
-          <div className="text-lg font-semibold">{__("Documents")}</div>
+          <div className="text-lg font-semibold">{t("linkedDocumentsCard.title")}</div>
           {!props.readOnly && (
             <LinkedDocumentDialog
               connectionId={props.connectionId}
@@ -134,7 +139,7 @@ export function LinkedDocumentsCard<Params>(props: Props<Params>) {
               onUnlink={onDetach}
             >
               <Button variant="tertiary" icon={IconPlusLarge}>
-                {__("Link document")}
+                {t("linkedDocumentsCard.actions.link")}
               </Button>
             </LinkedDocumentDialog>
           )}
@@ -143,9 +148,9 @@ export function LinkedDocumentsCard<Params>(props: Props<Params>) {
       <Table className={clsx(variant === "card" && "bg-invert")}>
         <Thead>
           <Tr>
-            <Th>{__("Name")}</Th>
-            <Th>{__("Type")}</Th>
-            <Th>{__("State")}</Th>
+            <Th>{t("linkedDocumentsCard.columns.name")}</Th>
+            <Th>{t("linkedDocumentsCard.columns.type")}</Th>
+            <Th>{t("linkedDocumentsCard.columns.state")}</Th>
             {!props.readOnly && <Th></Th>}
           </Tr>
         </Thead>
@@ -156,7 +161,7 @@ export function LinkedDocumentsCard<Params>(props: Props<Params>) {
                 colSpan={props.readOnly ? 3 : 4}
                 className="text-center text-txt-secondary"
               >
-                {__("No documents linked")}
+                {t("linkedDocumentsCard.empty")}
               </Td>
             </Tr>
           )}
@@ -177,7 +182,7 @@ export function LinkedDocumentsCard<Params>(props: Props<Params>) {
               onUnlink={onDetach}
             >
               <TrButton colspan={4} icon={IconPlusLarge}>
-                {__("Link document")}
+                {t("linkedDocumentsCard.actions.link")}
               </TrButton>
             </LinkedDocumentDialog>
           )}
@@ -190,7 +195,9 @@ export function LinkedDocumentsCard<Params>(props: Props<Params>) {
           className="mt-3 mx-auto"
           icon={IconChevronDown}
         >
-          {sprintf(__("Show %s more"), props.documents.length - limit)}
+          {t("linkedDocumentsCard.actions.showMore", {
+            count: props.documents.length - limit,
+          })}
         </Button>
       )}
     </Wrapper>
@@ -204,10 +211,10 @@ function DocumentRow(props: {
 }) {
   const document = useFragment(linkedDocumentFragment, props.document);
   const organizationId = useOrganizationId();
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (
-    <Tr to={`/organizations/${organizationId}/documents/${document.id}`}>
+    <Tr to={`/organizations/${organizationId}/governance/documents/${document.id}`}>
       <Td>
         <div className="flex gap-4 items-center">
           <img
@@ -217,14 +224,22 @@ function DocumentRow(props: {
             height={36}
             className="border-4 border-highlight rounded box-content"
           />
-          {document.versions.edges[0].node.title}
+          {document.title}
         </div>
       </Td>
       <Td>
-        <DocumentTypeBadge type={document.versions.edges[0].node.documentType} />
+        <DocumentTypeBadge type={document.documentType} />
       </Td>
       <Td>
-        <DocumentVersionBadge state={document.versions.edges[0].node.status} />
+        <DocumentVersionBadge
+          state={
+            document.pendingApproval.edges[0]
+              ? "PENDING_APPROVAL"
+              : document.currentPublishedMajor != null
+                ? "PUBLISHED"
+                : "DRAFT"
+          }
+        />
       </Td>
       {!props.readOnly && (
         <Td noLink width={50} className="text-end">
@@ -233,7 +248,7 @@ function DocumentRow(props: {
             onClick={() => props.onClick(document.id)}
             icon={IconTrashCan}
           >
-            {__("Unlink")}
+            {t("linkedDocumentsCard.actions.unlink")}
           </Button>
         </Td>
       )}

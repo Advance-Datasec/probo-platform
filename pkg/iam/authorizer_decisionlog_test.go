@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package iam_test
 
@@ -67,7 +73,7 @@ func TestAuthorizer_DecisionLogging(t *testing.T) {
 		assert.Equal(t, 1, countAuditLogsForAction(t, context.Background(), client, action))
 	})
 
-	t.Run("deny writes decision log without audit row", func(t *testing.T) {
+	t.Run("deny writes decision log and denial audit row", func(t *testing.T) {
 		t.Parallel()
 
 		client := test.PGClient(t)
@@ -99,7 +105,20 @@ func TestAuthorizer_DecisionLogging(t *testing.T) {
 		assert.Contains(t, output, "deny")
 		assert.Contains(t, output, "deny-test-action")
 		assert.Contains(t, output, "explicit deny by statement deny-test-action")
-		assert.Equal(t, 0, countAuditLogsForAction(t, context.Background(), client, action))
+		assert.Equal(t, 1, countAuditLogsForActionAndOutcome(
+			t,
+			context.Background(),
+			client,
+			action,
+			coredata.AuditLogOutcomeDenied,
+		))
+		assert.Equal(t, 0, countAuditLogsForActionAndOutcome(
+			t,
+			context.Background(),
+			client,
+			action,
+			coredata.AuditLogOutcomeAllowed,
+		))
 	})
 
 	t.Run("implicit deny logs no_match without policy id", func(t *testing.T) {
@@ -133,6 +152,13 @@ func TestAuthorizer_DecisionLogging(t *testing.T) {
 		assert.Contains(t, output, "no_match")
 		assert.NotContains(t, output, "policy_id")
 		assert.True(t, strings.Contains(output, "implicit deny"))
+		assert.Equal(t, 1, countAuditLogsForActionAndOutcome(
+			t,
+			context.Background(),
+			client,
+			action,
+			coredata.AuditLogOutcomeDenied,
+		))
 	})
 }
 

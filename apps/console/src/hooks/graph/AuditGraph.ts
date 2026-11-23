@@ -1,22 +1,30 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { promisifyMutation, sprintf } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
+import { type Period, promisifyMutation } from "@probo/helpers";
 import { useConfirm } from "@probo/ui";
+import { useTranslation } from "react-i18next";
 import { useMutation } from "react-relay";
 import { graphql } from "relay-runtime";
+
+import { auditFrameworkNames } from "#/components/audits/formatAuditFrameworkNames";
 
 import { useMutationWithToasts } from "../useMutationWithToasts";
 
@@ -33,24 +41,19 @@ export const auditsQuery = graphql`
   }
 `;
 
-export const auditNodeQuery = graphql`
-  query AuditGraphNodeQuery($auditId: ID!) {
-    node(id: $auditId) {
-      ... on Audit {
-        id
-        name
-        validFrom
-        validUntil
-        reportFile {
-          id
-          fileName
-          mimeType
-          size
-          downloadUrl
-          createdAt
-        }
-        state
-        framework {
+export const auditFrameworksFragment = graphql`
+  fragment AuditGraphFrameworks_audit on Audit
+  @refetchable(queryName: "AuditGraphFrameworksPaginationQuery")
+  @argumentDefinitions(
+    first: { type: "Int", defaultValue: 100 }
+    after: { type: "CursorKey", defaultValue: null }
+  ) {
+    frameworks(first: $first, after: $after)
+      @connection(key: "AuditGraph_frameworks") {
+      __id
+      edges {
+        cursor
+        node {
           id
           name
           lightLogo {
@@ -60,6 +63,36 @@ export const auditNodeQuery = graphql`
             downloadUrl
           }
         }
+      }
+    }
+  }
+`;
+
+export const auditNodeQuery = graphql`
+  query AuditGraphNodeQuery($auditId: ID!) {
+    node(id: $auditId) {
+      ... on Audit {
+        id
+        name
+        firm
+        validity {
+          start
+          end
+        }
+        auditDates {
+          start
+          end
+        }
+        reportFile {
+          id
+          fileName
+          mimeType
+          size
+          downloadUrl
+          createdAt
+        }
+        state
+        ...AuditGraphFrameworks_audit
         organization {
           id
           name
@@ -68,6 +101,8 @@ export const auditNodeQuery = graphql`
         updatedAt
         canUpdate: permission(action: "core:audit:update")
         canDelete: permission(action: "core:audit:delete")
+        canLinkFramework: permission(action: "core:audit:create-framework-mapping")
+        canUnlinkFramework: permission(action: "core:audit:delete-framework-mapping")
       }
     }
   }
@@ -83,17 +118,21 @@ export const createAuditMutation = graphql`
         node {
           id
           name
-          validFrom
-          validUntil
+          firm
+          validity {
+            start
+            end
+          }
+          auditDates {
+            start
+            end
+          }
           reportFile {
             id
             fileName
           }
           state
-          framework {
-            id
-            name
-          }
+          ...AuditFrameworkNames_audit
           createdAt
           canUpdate: permission(action: "core:audit:update")
           canDelete: permission(action: "core:audit:delete")
@@ -109,17 +148,20 @@ export const updateAuditMutation = graphql`
       audit {
         id
         name
-        validFrom
-        validUntil
+        firm
+        validity {
+          start
+          end
+        }
+        auditDates {
+          start
+          end
+        }
         reportFile {
           id
           fileName
         }
         state
-        framework {
-          id
-          name
-        }
         updatedAt
       }
     }
@@ -138,14 +180,17 @@ export const deleteAuditMutation = graphql`
 `;
 
 export const useDeleteAudit = (
-  audit: { id: string; framework?: { name: string } | null },
+  audit: {
+    id: string;
+    frameworks?: Parameters<typeof auditFrameworkNames>[0];
+  },
   connectionId: string,
   onSuccess?: () => void,
 ) => {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [mutate] = useMutationWithToasts(deleteAuditMutation, {
-    successMessage: __("Audit deleted successfully"),
-    errorMessage: __("Failed to delete audit"),
+    successMessage: t("auditGraph.messages.deleted"),
+    errorMessage: t("auditGraph.errors.delete"),
   });
   const confirm = useConfirm();
 
@@ -163,12 +208,9 @@ export const useDeleteAudit = (
         onSuccess?.();
       },
       {
-        message: sprintf(
-          __(
-            "This will permanently delete the audit for %s. This action cannot be undone.",
-          ),
-          audit.framework?.name ?? "",
-        ),
+        message: t("auditGraph.deleteConfirmation", {
+          frameworkName: auditFrameworkNames(audit.frameworks),
+        }),
       },
     );
   };
@@ -177,33 +219,35 @@ export const useDeleteAudit = (
 export const useCreateAudit = (connectionId: string) => {
   // eslint-disable-next-line relay/generated-typescript-types
   const [mutate] = useMutation(createAuditMutation);
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (input: {
     organizationId: string;
-    frameworkId: string;
+    frameworkIds: string[];
     name?: string | null;
-    validFrom?: string;
-    validUntil?: string;
+    firm?: string | null;
+    validity?: Period | null;
+    auditDates?: Period | null;
     reportKey?: string;
     state?: string;
     file?: File | null;
   }) => {
     if (!input.organizationId) {
-      return alert(__("Failed to create audit: organization is required"));
+      return alert(t("auditGraph.errors.createOrganizationRequired"));
     }
-    if (!input.frameworkId) {
-      return alert(__("Failed to create audit: framework is required"));
+    if (input.frameworkIds.length === 0) {
+      return alert(t("auditGraph.errors.createFrameworkRequired"));
     }
 
     return promisifyMutation(mutate)({
       variables: {
         input: {
           organizationId: input.organizationId,
-          frameworkId: input.frameworkId,
+          frameworkIds: input.frameworkIds,
           name: input.name,
-          validFrom: input.validFrom,
-          validUntil: input.validUntil,
+          firm: input.firm,
+          validity: input.validity,
+          auditDates: input.auditDates,
           reportKey: input.reportKey,
           state: input.state || "NOT_STARTED",
           file: input.file ? null : undefined,
@@ -218,22 +262,30 @@ export const useCreateAudit = (connectionId: string) => {
 export const useUpdateAudit = () => {
   // eslint-disable-next-line relay/generated-typescript-types
   const [mutate] = useMutation(updateAuditMutation);
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (input: {
     id: string;
     name?: string | null;
-    validFrom?: string | null;
-    validUntil?: string | null;
+    firm?: string | null;
+    validity?: Period | null;
+    auditDates?: Period | null;
     state?: string;
   }) => {
     if (!input.id) {
-      return alert(__("Failed to update audit: audit ID is required"));
+      return alert(t("auditGraph.errors.updateIdRequired"));
     }
 
     return promisifyMutation(mutate)({
       variables: {
-        input,
+        input: {
+          id: input.id,
+          name: input.name,
+          firm: input.firm,
+          validity: input.validity,
+          auditDates: input.auditDates,
+          state: input.state,
+        },
       },
     });
   };
@@ -257,15 +309,15 @@ export const uploadAuditReportMutation = graphql`
 `;
 
 export const useUploadAuditReport = () => {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [mutate, isLoading] = useMutationWithToasts(uploadAuditReportMutation, {
-    successMessage: __("Audit report uploaded successfully"),
-    errorMessage: __("Failed to upload audit report"),
+    successMessage: t("auditGraph.messages.reportUploaded"),
+    errorMessage: t("auditGraph.errors.uploadReport"),
   });
 
   const uploadAuditReport = (input: { auditId: string; file: File }) => {
     if (!input.auditId) {
-      return alert(__("Failed to upload report: audit ID is required"));
+      return alert(t("auditGraph.errors.uploadReportIdRequired"));
     }
 
     return mutate({
@@ -302,10 +354,10 @@ export const deleteAuditReportMutation = graphql`
 `;
 
 export const useDeleteAuditReport = () => {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [mutate] = useMutationWithToasts(deleteAuditReportMutation, {
-    successMessage: __("Audit report deleted successfully"),
-    errorMessage: __("Failed to delete audit report"),
+    successMessage: t("auditGraph.messages.reportDeleted"),
+    errorMessage: t("auditGraph.errors.deleteReport"),
   });
 
   return (input: { auditId: string }) => {
@@ -314,6 +366,80 @@ export const useDeleteAuditReport = () => {
         input: {
           auditId: input.auditId,
         },
+      },
+    });
+  };
+};
+
+export const linkAuditFrameworkMutation = graphql`
+  mutation AuditGraphLinkFrameworkMutation(
+    $input: CreateAuditFrameworkMappingInput!
+    $connections: [ID!]!
+  ) {
+    createAuditFrameworkMapping(input: $input) {
+      frameworkEdge @prependEdge(connections: $connections) {
+        cursor
+        node {
+          id
+          name
+          lightLogo {
+            downloadUrl
+          }
+          darkLogo {
+            downloadUrl
+          }
+        }
+      }
+    }
+  }
+`;
+
+export const useLinkAuditFramework = (connectionId: string) => {
+  const { t } = useTranslation();
+  const [mutate] = useMutationWithToasts(linkAuditFrameworkMutation, {
+    successMessage: t("auditDetailsPage.frameworks.linked"),
+    errorMessage: t("auditDetailsPage.frameworks.linkError"),
+  });
+
+  return (auditId: string, frameworkId: string) => {
+    return mutate({
+      variables: {
+        input: {
+          auditId,
+          frameworkId,
+        },
+        connections: [connectionId],
+      },
+    });
+  };
+};
+
+export const unlinkAuditFrameworkMutation = graphql`
+  mutation AuditGraphUnlinkFrameworkMutation(
+    $input: DeleteAuditFrameworkMappingInput!
+    $connections: [ID!]!
+  ) {
+    deleteAuditFrameworkMapping(input: $input) {
+      deletedFrameworkId @deleteEdge(connections: $connections)
+    }
+  }
+`;
+
+export const useUnlinkAuditFramework = (connectionId: string) => {
+  const { t } = useTranslation();
+  const [mutate] = useMutationWithToasts(unlinkAuditFrameworkMutation, {
+    successMessage: t("auditDetailsPage.frameworks.unlinked"),
+    errorMessage: t("auditDetailsPage.frameworks.unlinkError"),
+  });
+
+  return (auditId: string, frameworkId: string) => {
+    return mutate({
+      variables: {
+        input: {
+          auditId,
+          frameworkId,
+        },
+        connections: [connectionId],
       },
     });
   };

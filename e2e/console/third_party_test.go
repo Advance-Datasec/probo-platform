@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_test
 
@@ -500,13 +506,13 @@ func TestThirdParty_SubResolvers(t *testing.T) {
 		assert.NotNil(t, result.Node.Services.Edges)
 	})
 
-	t.Run("businessOwner sub-resolver (null)", func(t *testing.T) {
+	t.Run("administrators sub-resolver (empty)", func(t *testing.T) {
 		query := `
 			query($id: ID!) {
 				node(id: $id) {
 					... on ThirdParty {
 						id
-						businessOwner {
+						administrators {
 							id
 							fullName
 						}
@@ -517,47 +523,17 @@ func TestThirdParty_SubResolvers(t *testing.T) {
 
 		var result struct {
 			Node struct {
-				ID            string `json:"id"`
-				BusinessOwner *struct {
+				ID             string `json:"id"`
+				Administrators []struct {
 					ID       string `json:"id"`
 					FullName string `json:"fullName"`
-				} `json:"businessOwner"`
+				} `json:"administrators"`
 			} `json:"node"`
 		}
 
 		err := owner.Execute(query, map[string]any{"id": thirdPartyID}, &result)
 		require.NoError(t, err)
-		assert.Nil(t, result.Node.BusinessOwner)
-	})
-
-	t.Run("securityOwner sub-resolver (null)", func(t *testing.T) {
-		query := `
-			query($id: ID!) {
-				node(id: $id) {
-					... on ThirdParty {
-						id
-						securityOwner {
-							id
-							fullName
-						}
-					}
-				}
-			}
-		`
-
-		var result struct {
-			Node struct {
-				ID            string `json:"id"`
-				SecurityOwner *struct {
-					ID       string `json:"id"`
-					FullName string `json:"fullName"`
-				} `json:"securityOwner"`
-			} `json:"node"`
-		}
-
-		err := owner.Execute(query, map[string]any{"id": thirdPartyID}, &result)
-		require.NoError(t, err)
-		assert.Nil(t, result.Node.SecurityOwner)
+		assert.Empty(t, result.Node.Administrators)
 	})
 }
 
@@ -750,23 +726,22 @@ func TestThirdParty_OmittableDescription(t *testing.T) {
 	})
 }
 
-func TestThirdParty_OmittableBusinessOwner(t *testing.T) {
+func TestThirdParty_Administrators(t *testing.T) {
 	t.Parallel()
 	owner := testutil.NewClient(t, testutil.RoleOwner)
 
-	// Create a profile for owner assignment
 	profileID := factory.CreateUser(owner)
 	thirdPartyID := factory.NewThirdParty(owner).
-		WithName("BusinessOwner Test ThirdParty").
+		WithName("Administrators Test ThirdParty").
 		Create()
 
-	t.Run("set business owner", func(t *testing.T) {
+	t.Run("set administrators", func(t *testing.T) {
 		query := `
 			mutation UpdateThirdParty($input: UpdateThirdPartyInput!) {
 				updateThirdParty(input: $input) {
 					thirdParty {
 						id
-						businessOwner {
+						administrators {
 							id
 							fullName
 						}
@@ -778,32 +753,33 @@ func TestThirdParty_OmittableBusinessOwner(t *testing.T) {
 		var result struct {
 			UpdateThirdParty struct {
 				ThirdParty struct {
-					ID            string `json:"id"`
-					BusinessOwner struct {
+					ID             string `json:"id"`
+					Administrators []struct {
 						ID       string `json:"id"`
 						FullName string `json:"fullName"`
-					} `json:"businessOwner"`
+					} `json:"administrators"`
 				} `json:"thirdParty"`
 			} `json:"updateThirdParty"`
 		}
 
 		err := owner.Execute(query, map[string]any{
 			"input": map[string]any{
-				"id":              thirdPartyID,
-				"businessOwnerId": profileID,
+				"id":               thirdPartyID,
+				"administratorIds": []string{profileID},
 			},
 		}, &result)
 		require.NoError(t, err)
-		assert.Equal(t, profileID, result.UpdateThirdParty.ThirdParty.BusinessOwner.ID)
+		require.Len(t, result.UpdateThirdParty.ThirdParty.Administrators, 1)
+		assert.Equal(t, profileID, result.UpdateThirdParty.ThirdParty.Administrators[0].ID)
 	})
 
-	t.Run("clear business owner with null", func(t *testing.T) {
+	t.Run("clear administrators with empty list", func(t *testing.T) {
 		query := `
 			mutation UpdateThirdParty($input: UpdateThirdPartyInput!) {
 				updateThirdParty(input: $input) {
 					thirdParty {
 						id
-						businessOwner {
+						administrators {
 							id
 						}
 					}
@@ -814,103 +790,22 @@ func TestThirdParty_OmittableBusinessOwner(t *testing.T) {
 		var result struct {
 			UpdateThirdParty struct {
 				ThirdParty struct {
-					ID            string `json:"id"`
-					BusinessOwner *struct {
+					ID             string `json:"id"`
+					Administrators []struct {
 						ID string `json:"id"`
-					} `json:"businessOwner"`
+					} `json:"administrators"`
 				} `json:"thirdParty"`
 			} `json:"updateThirdParty"`
 		}
 
 		err := owner.Execute(query, map[string]any{
 			"input": map[string]any{
-				"id":              thirdPartyID,
-				"businessOwnerId": nil,
+				"id":               thirdPartyID,
+				"administratorIds": []string{},
 			},
 		}, &result)
 		require.NoError(t, err)
-		assert.Nil(t, result.UpdateThirdParty.ThirdParty.BusinessOwner)
-	})
-}
-
-func TestThirdParty_OmittableSecurityOwner(t *testing.T) {
-	t.Parallel()
-	owner := testutil.NewClient(t, testutil.RoleOwner)
-
-	// Create a profile for owner assignment
-	profileID := factory.CreateUser(owner)
-	thirdPartyID := factory.NewThirdParty(owner).WithName("SecurityOwner Test ThirdParty").Create()
-
-	t.Run("set security owner", func(t *testing.T) {
-		query := `
-			mutation UpdateThirdParty($input: UpdateThirdPartyInput!) {
-				updateThirdParty(input: $input) {
-					thirdParty {
-						id
-						securityOwner {
-							id
-							fullName
-						}
-					}
-				}
-			}
-		`
-
-		var result struct {
-			UpdateThirdParty struct {
-				ThirdParty struct {
-					ID            string `json:"id"`
-					SecurityOwner struct {
-						ID       string `json:"id"`
-						FullName string `json:"fullName"`
-					} `json:"securityOwner"`
-				} `json:"thirdParty"`
-			} `json:"updateThirdParty"`
-		}
-
-		err := owner.Execute(query, map[string]any{
-			"input": map[string]any{
-				"id":              thirdPartyID,
-				"securityOwnerId": profileID,
-			},
-		}, &result)
-		require.NoError(t, err)
-		assert.Equal(t, profileID, result.UpdateThirdParty.ThirdParty.SecurityOwner.ID)
-	})
-
-	t.Run("clear security owner with null", func(t *testing.T) {
-		query := `
-			mutation UpdateThirdParty($input: UpdateThirdPartyInput!) {
-				updateThirdParty(input: $input) {
-					thirdParty {
-						id
-						securityOwner {
-							id
-						}
-					}
-				}
-			}
-		`
-
-		var result struct {
-			UpdateThirdParty struct {
-				ThirdParty struct {
-					ID            string `json:"id"`
-					SecurityOwner *struct {
-						ID string `json:"id"`
-					} `json:"securityOwner"`
-				} `json:"thirdParty"`
-			} `json:"updateThirdParty"`
-		}
-
-		err := owner.Execute(query, map[string]any{
-			"input": map[string]any{
-				"id":              thirdPartyID,
-				"securityOwnerId": nil,
-			},
-		}, &result)
-		require.NoError(t, err)
-		assert.Nil(t, result.UpdateThirdParty.ThirdParty.SecurityOwner)
+		assert.Empty(t, result.UpdateThirdParty.ThirdParty.Administrators)
 	})
 }
 
@@ -1103,72 +998,5 @@ func TestThirdParty_Vet(t *testing.T) {
 		}, &result)
 		require.NoError(t, err)
 		assert.Equal(t, thirdPartyID, result.VetThirdParty.ThirdParty.ID)
-	})
-}
-
-func TestThirdParty_TenantIsolation(t *testing.T) {
-	t.Parallel()
-
-	org1Owner := testutil.NewClient(t, testutil.RoleOwner)
-	org2Owner := testutil.NewClient(t, testutil.RoleOwner)
-
-	thirdPartyID := factory.NewThirdParty(org1Owner).WithName("Org1 ThirdParty").Create()
-
-	t.Run("cannot read thirdParty from another organization", func(t *testing.T) {
-		query := `
-			query($id: ID!) {
-				node(id: $id) {
-					... on ThirdParty {
-						id
-						name
-					}
-				}
-			}
-		`
-
-		var result struct {
-			Node *struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
-			} `json:"node"`
-		}
-
-		err := org2Owner.Execute(query, map[string]any{"id": thirdPartyID}, &result)
-		testutil.AssertNodeNotAccessible(t, err, result.Node == nil, "thirdParty")
-	})
-
-	t.Run("cannot update thirdParty from another organization", func(t *testing.T) {
-		query := `
-			mutation UpdateThirdParty($input: UpdateThirdPartyInput!) {
-				updateThirdParty(input: $input) {
-					thirdParty { id }
-				}
-			}
-		`
-
-		_, err := org2Owner.Do(query, map[string]any{
-			"input": map[string]any{
-				"id":   thirdPartyID,
-				"name": "Hijacked ThirdParty",
-			},
-		})
-		require.Error(t, err, "Should not be able to update thirdParty from another org")
-	})
-
-	t.Run("cannot delete thirdParty from another organization", func(t *testing.T) {
-		query := `
-			mutation DeleteThirdParty($input: DeleteThirdPartyInput!) {
-				deleteThirdParty(input: $input) {
-					deletedThirdPartyId
-				}
-			}
-		`
-
-		_, err := org2Owner.Do(query, map[string]any{
-			"input": map[string]any{
-				"thirdPartyId": thirdPartyID,
-			},
-		})
-		require.Error(t, err, "Should not be able to delete thirdParty from another org")
 	})
 }

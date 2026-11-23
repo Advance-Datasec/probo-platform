@@ -1,32 +1,50 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import mermaid from "mermaid";
 import { useEffect, useId, useState } from "react";
 
-import { mermaidRenderConfig } from "../../mermaidConfig";
+import { mermaidRenderErrorToast, renderMermaidDiagram } from "../../lib/mermaid";
+import useToast from "../../v2/Toaster/useToast";
 
 type Props = {
   chart: string;
 };
 
+type MermaidRenderState = {
+  source: string;
+  svg: string | null;
+  hasError: boolean;
+};
+
 export function MermaidDiagram({ chart }: Props) {
   const id = useId().replace(/:/g, "");
-  const [svg, setSvg] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [renderState, setRenderState] = useState<MermaidRenderState>({
+    source: "",
+    svg: null,
+    hasError: false,
+  });
+  const toast = useToast();
 
   const source = (chart ?? "").trim();
+  const svg = renderState.source === source ? renderState.svg : null;
+  const hasError = renderState.source === source && renderState.hasError;
 
   useEffect(() => {
     if (!source) {
@@ -35,28 +53,33 @@ export function MermaidDiagram({ chart }: Props) {
 
     let cancelled = false;
 
-    mermaid.initialize(mermaidRenderConfig);
-
-    mermaid
-      .render(`mermaid-${id}`, source)
+    renderMermaidDiagram(`mermaid-${id}`, source)
       .then((result) => {
         if (!cancelled) {
-          setSvg(result.svg);
-          setError(null);
+          setRenderState({
+            source,
+            svg: result.svg,
+            hasError: false,
+          });
         }
       })
-      .catch((err: unknown) => {
+      .catch(() => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
+          setRenderState({
+            source,
+            svg: null,
+            hasError: true,
+          });
+          toast.add(mermaidRenderErrorToast);
         }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [source, id]);
+  }, [source, id, toast]);
 
-  if (error) {
+  if (hasError) {
     return (
       <pre className="border border-border-solid rounded p-4 bg-transparent font-mono text-sm overflow-x-auto text-inherit">
         <code>{chart}</code>

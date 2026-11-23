@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -37,9 +43,58 @@ type (
 	FindingAudits []*FindingAudit
 )
 
-func (fa FindingAudit) Upsert(
+func (fas *FindingAudits) LoadByFindingIDAndAuditIDs(
 	ctx context.Context,
 	conn pg.Querier,
+	scope Scoper,
+	findingID gid.GID,
+	auditIDs []gid.GID,
+) error {
+	if len(auditIDs) == 0 {
+		*fas = FindingAudits{}
+		return nil
+	}
+
+	q := `
+SELECT
+    finding_id,
+    audit_id,
+    reference_id,
+    organization_id,
+    created_at
+FROM
+    findings_audits
+WHERE
+    %s
+    AND finding_id = @finding_id
+    AND audit_id = ANY(@audit_ids);
+`
+
+	args := pgx.StrictNamedArgs{
+		"finding_id": findingID,
+		"audit_ids":  auditIDs,
+	}
+	maps.Copy(args, scope.SQLArguments())
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query finding audits: %w", err)
+	}
+
+	findingAudits, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[FindingAudit])
+	if err != nil {
+		return fmt.Errorf("cannot collect finding audits: %w", err)
+	}
+
+	*fas = findingAudits
+
+	return nil
+}
+
+func (fa *FindingAudit) Upsert(
+	ctx context.Context,
+	conn pg.Tx,
 	scope Scoper,
 ) error {
 	q := `
@@ -60,7 +115,15 @@ VALUES (
     @tenant_id,
     @created_at
 )
-ON CONFLICT (finding_id, audit_id) DO NOTHING;
+ON CONFLICT (finding_id, audit_id) DO UPDATE
+SET
+    reference_id = EXCLUDED.reference_id
+RETURNING
+    finding_id,
+    audit_id,
+    reference_id,
+    organization_id,
+    created_at;
 `
 
 	args := pgx.StrictNamedArgs{
@@ -72,10 +135,17 @@ ON CONFLICT (finding_id, audit_id) DO NOTHING;
 		"created_at":      fa.CreatedAt,
 	}
 
-	_, err := conn.Exec(ctx, q, args)
+	rows, err := conn.Query(ctx, q, args)
 	if err != nil {
 		return fmt.Errorf("cannot upsert finding audit: %w", err)
 	}
+
+	findingAudit, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[FindingAudit])
+	if err != nil {
+		return fmt.Errorf("cannot collect finding audit: %w", err)
+	}
+
+	*fa = findingAudit
 
 	return nil
 }

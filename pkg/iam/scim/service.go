@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package scim
 
@@ -31,17 +37,20 @@ import (
 	"go.gearno.de/kit/pg"
 	"go.gearno.de/x/ref"
 	"go.opentelemetry.io/otel/trace"
-	"go.probo.inc/probo/pkg/connector"
+	"go.probo.inc/probo/pkg/connectorprotocol"
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/crypto/cipher"
 	"go.probo.inc/probo/pkg/crypto/hash"
 	"go.probo.inc/probo/pkg/crypto/rand"
 	"go.probo.inc/probo/pkg/gid"
+	"go.probo.inc/probo/pkg/iam/identityname"
 	"go.probo.inc/probo/pkg/mail"
 	"go.probo.inc/probo/pkg/page"
 	"go.probo.inc/probo/pkg/webhook"
 	webhooktypes "go.probo.inc/probo/pkg/webhook/types"
 )
+
+const scimEventLogTimeout = 5 * time.Second
 
 type (
 	Service struct {
@@ -54,7 +63,7 @@ type (
 		TracerProvider    trace.TracerProvider
 		Registerer        prometheus.Registerer
 		EncryptionKey     cipher.EncryptionKey
-		ConnectorRegistry *connector.ConnectorRegistry
+		ConnectorRegistry *connectorprotocol.Registry
 		BridgeRunner      BridgeRunnerConfig
 	}
 )
@@ -144,7 +153,7 @@ func (s *Service) CreateUser(
 
 	profileState := coredata.ProfileStateActive
 	if !attrs.Active {
-		profileState = coredata.ProfileStateInactive
+		profileState = coredata.ProfileStateDeactivated
 	}
 
 	var externalIdPtr *string
@@ -184,6 +193,8 @@ func (s *Service) CreateUser(
 		eventType := coredata.WebhookEventTypeUserUpdated
 		profile = &coredata.MembershipProfile{}
 
+		var previousProfile *coredata.MembershipProfile
+
 		if err := profile.LoadByIdentityIDAndOrganizationID(
 			ctx,
 			tx,
@@ -208,6 +219,9 @@ func (s *Service) CreateUser(
 					*externalIdPtr,
 					config.OrganizationID,
 				); err == nil {
+					snapshot := *profile
+					previousProfile = &snapshot
+
 					// Migrate the existing membership to the new identity
 					// so the user's role is preserved.
 					oldIdentityID := profile.IdentityID
@@ -233,6 +247,7 @@ func (s *Service) CreateUser(
 					profile.IdentityID = identity.ID
 					profile.EmailAddress = emailAddr
 					applyUserAttributes(profile, attrs, externalIdPtr, profileState, now)
+					profile.SCIMRemovedAt = nil
 
 					if err := profile.Update(ctx, tx, scope); err != nil {
 						return fmt.Errorf("cannot update profile: %w", err)
@@ -264,7 +279,13 @@ func (s *Service) CreateUser(
 				eventType = coredata.WebhookEventTypeUserCreated
 			}
 		} else {
-			if profile.Source == coredata.ProfileSourceSCIM {
+			if previousProfile == nil {
+				snapshot := *profile
+				previousProfile = &snapshot
+			}
+
+			removedFromList := profile.State == coredata.ProfileStateDeactivated && profile.SCIMRemovedAt != nil
+			if profile.Source == coredata.ProfileSourceSCIM && !removedFromList {
 				return scimerrors.ScimErrorUniqueness
 			}
 
@@ -281,26 +302,27 @@ func (s *Service) CreateUser(
 			}
 
 			applyUserAttributes(profile, attrs, externalIdPtr, profileState, now)
+			profile.SCIMRemovedAt = nil
 
 			if err := profile.Update(ctx, tx, scope); err != nil {
 				return fmt.Errorf("cannot update profile: %w", err)
 			}
 		}
 
+		invitations := &coredata.Invitations{}
+
+		onlyPending := coredata.NewInvitationFilter([]coredata.InvitationStatus{coredata.InvitationStatusPending})
+		if err := invitations.ExpireByUserID(
+			ctx,
+			tx,
+			coredata.NewScopeFromObjectID(profile.OrganizationID),
+			profile.ID,
+			onlyPending,
+		); err != nil {
+			return fmt.Errorf("cannot expire pending invitations: %w", err)
+		}
+
 		if !attrs.Active {
-			invitations := &coredata.Invitations{}
-
-			onlyPending := coredata.NewInvitationFilter([]coredata.InvitationStatus{coredata.InvitationStatusPending})
-			if err := invitations.ExpireByUserID(
-				ctx,
-				tx,
-				coredata.NewScopeFromObjectID(profile.OrganizationID),
-				profile.ID,
-				onlyPending,
-			); err != nil {
-				return fmt.Errorf("cannot expire pending invitations: %w", err)
-			}
-
 			signatures := &coredata.DocumentVersionSignatures{}
 			if err := signatures.DeleteRequestedBySignatory(ctx, tx, scope, profile.ID); err != nil {
 				return fmt.Errorf("cannot delete requested signatures: %w", err)
@@ -334,8 +356,17 @@ func (s *Service) CreateUser(
 			}
 		}
 
-		if err := webhook.InsertData(ctx, tx, scope, config.OrganizationID, eventType, webhooktypes.NewUser(profile, membership)); err != nil {
+		var previousUser any
+		if eventType == coredata.WebhookEventTypeUserUpdated && previousProfile != nil {
+			previousUser = webhooktypes.NewUser(previousProfile, membership)
+		}
+
+		if err := webhook.InsertUpdateData(ctx, tx, scope, config.OrganizationID, eventType, webhooktypes.NewUser(profile, membership), previousUser); err != nil {
 			return fmt.Errorf("cannot insert webhook event: %w", err)
+		}
+
+		if err := identityname.CopyFromUniqueProfile(ctx, tx, profile.IdentityID, profile.FullName); err != nil {
+			return fmt.Errorf("cannot sync identity full name: %w", err)
 		}
 
 		return nil
@@ -399,7 +430,7 @@ func (s *Service) ListUsers(
 	//    when they don't exist in the identity provider.
 	// 2. When a manual user exists in the identity provider but not in the
 	//    SCIM list, CreateUser is called which enrolls them into SCIM management.
-	filter.WithSource(coredata.ProfileSourceSCIM)
+	filter.WithSource(coredata.ProfileSourceSCIM).WithoutSCIMRemoved()
 
 	scope := coredata.NewScopeFromObjectID(config.OrganizationID)
 
@@ -511,8 +542,12 @@ func (s *Service) updateUser(
 				return fmt.Errorf("cannot load membership: %w", err)
 			}
 
-			shouldReactivate := attrs.Active != nil && *attrs.Active && profile.State == coredata.ProfileStateInactive
-			shouldDeactivate := attrs.Active != nil && !*attrs.Active && profile.State == coredata.ProfileStateActive
+			previousProfile := *profile
+			previousMembership := *membership
+			previousUser := webhooktypes.NewUser(&previousProfile, &previousMembership)
+
+			shouldReactivate := attrs.Active != nil && *attrs.Active && profile.State == coredata.ProfileStateDeactivated
+			shouldDeactivate := attrs.Active != nil && !*attrs.Active && profile.State != coredata.ProfileStateDeactivated
 
 			if attrs.FullName != "" {
 				profile.FullName = attrs.FullName
@@ -723,11 +758,9 @@ func (s *Service) updateUser(
 			}
 
 			if shouldReactivate {
-				profile.State = coredata.ProfileStateActive
-				profile.UpdatedAt = now
+				profile.MarkActive(now)
 			} else if shouldDeactivate {
-				profile.State = coredata.ProfileStateInactive
-				profile.UpdatedAt = now
+				profile.MarkDeactivated(now)
 			}
 
 			if profile.Source != coredata.ProfileSourceSCIM {
@@ -735,11 +768,29 @@ func (s *Service) updateUser(
 				profile.UpdatedAt = now
 			}
 
+			if attrs.ExternalID != nil && *attrs.ExternalID != "" {
+				if err := profile.ClearExternalID(
+					ctx,
+					tx,
+					scope,
+					*attrs.ExternalID,
+					config.OrganizationID,
+				); err != nil {
+					return fmt.Errorf("cannot clear conflicting external id: %w", err)
+				}
+			}
+
+			profile.SCIMRemovedAt = nil
+
 			if err := profile.Update(ctx, tx, scope); err != nil {
+				if errors.Is(err, coredata.ErrResourceAlreadyExists) {
+					return scimerrors.ScimErrorUniqueness
+				}
+
 				return fmt.Errorf("cannot update membership profile: %w", err)
 			}
 
-			if shouldDeactivate {
+			if profile.State == coredata.ProfileStateActive || shouldDeactivate {
 				invitations := &coredata.Invitations{}
 
 				onlyPending := coredata.NewInvitationFilter([]coredata.InvitationStatus{coredata.InvitationStatusPending})
@@ -752,7 +803,9 @@ func (s *Service) updateUser(
 				); err != nil {
 					return fmt.Errorf("cannot expire pending invitations: %w", err)
 				}
+			}
 
+			if shouldDeactivate {
 				signatures := &coredata.DocumentVersionSignatures{}
 				if err := signatures.DeleteRequestedBySignatory(ctx, tx, scope, profile.ID); err != nil {
 					return fmt.Errorf("cannot delete requested signatures: %w", err)
@@ -779,8 +832,14 @@ func (s *Service) updateUser(
 				}
 			}
 
-			if err := webhook.InsertData(ctx, tx, scope, config.OrganizationID, coredata.WebhookEventTypeUserUpdated, webhooktypes.NewUser(profile, membership)); err != nil {
+			if err := webhook.InsertUpdateData(ctx, tx, scope, config.OrganizationID, coredata.WebhookEventTypeUserUpdated, webhooktypes.NewUser(profile, membership), previousUser); err != nil {
 				return fmt.Errorf("cannot insert webhook event: %w", err)
+			}
+
+			if attrs.FullName != "" {
+				if err := identityname.CopyFromUniqueProfile(ctx, tx, profile.IdentityID, profile.FullName); err != nil {
+					return fmt.Errorf("cannot sync identity full name: %w", err)
+				}
 			}
 
 			return nil
@@ -801,7 +860,15 @@ func applyUserAttributes(
 	now time.Time,
 ) {
 	profile.Source = coredata.ProfileSourceSCIM
-	profile.State = state
+	switch {
+	case state == coredata.ProfileStateActive && profile.State != coredata.ProfileStateActive:
+		profile.MarkActive(now)
+	case state == coredata.ProfileStateDeactivated && profile.State != coredata.ProfileStateDeactivated:
+		profile.MarkDeactivated(now)
+	default:
+		profile.State = state
+	}
+
 	profile.FullName = attrs.FullName
 	profile.Position = &attrs.Title
 	profile.UserName = &attrs.UserName
@@ -867,13 +934,25 @@ func (s *Service) DeleteUser(
 				membership = m
 			}
 
-			if err := profile.Delete(ctx, tx, scope, profile.ID); err != nil {
-				if errors.Is(err, coredata.ErrResourceInUse) {
-					s.logger.WarnCtx(
-						ctx,
-						"SCIM user delete skipped, profile is in use",
-						log.String("profile_id", profileID.String()),
-					)
+			deleteErr := tx.Savepoint(
+				ctx,
+				func(ctx context.Context, sp pg.Tx) error {
+					if err := profile.Delete(ctx, sp, scope, profile.ID); err != nil {
+						return fmt.Errorf("cannot delete profile: %w", err)
+					}
+
+					return nil
+				},
+			)
+			if deleteErr != nil {
+				if errors.Is(deleteErr, coredata.ErrResourceInUse) {
+					if profile.State != coredata.ProfileStateDeactivated {
+						s.logger.WarnCtx(
+							ctx,
+							"SCIM user delete skipped, profile is in use",
+							log.String("profile_id", profileID.String()),
+						)
+					}
 
 					if err := s.deactivateProfileInTx(ctx, tx, scope, config, profile, membership); err != nil {
 						return fmt.Errorf("cannot deactivate profile: %w", err)
@@ -882,7 +961,7 @@ func (s *Service) DeleteUser(
 					return nil
 				}
 
-				return fmt.Errorf("cannot delete profile: %w", err)
+				return fmt.Errorf("cannot delete profile in savepoint: %w", deleteErr)
 			}
 
 			invitations := &coredata.Invitations{}
@@ -921,13 +1000,20 @@ func (s *Service) deactivateProfileInTx(
 	profile *coredata.MembershipProfile,
 	membership *coredata.Membership,
 ) error {
-	if profile.State == coredata.ProfileStateInactive {
+	now := time.Now()
+	profile.SCIMRemovedAt = &now
+
+	if profile.State == coredata.ProfileStateDeactivated {
+		profile.UpdatedAt = now
+		if err := profile.Update(ctx, tx, scope); err != nil {
+			return fmt.Errorf("cannot update profile: %w", err)
+		}
+
 		return nil
 	}
 
-	now := time.Now()
-	profile.State = coredata.ProfileStateInactive
-	profile.UpdatedAt = now
+	previousUser := webhooktypes.NewUser(profile, membership)
+	profile.MarkDeactivated(now)
 
 	if err := profile.Update(ctx, tx, scope); err != nil {
 		return fmt.Errorf("cannot deactivate profile: %w", err)
@@ -958,7 +1044,7 @@ func (s *Service) deactivateProfileInTx(
 		}
 	}
 
-	if err := webhook.InsertData(ctx, tx, scope, config.OrganizationID, coredata.WebhookEventTypeUserUpdated, webhooktypes.NewUser(profile, membership)); err != nil {
+	if err := webhook.InsertUpdateData(ctx, tx, scope, config.OrganizationID, coredata.WebhookEventTypeUserUpdated, webhooktypes.NewUser(profile, membership), previousUser); err != nil {
 		return fmt.Errorf("cannot insert webhook event: %w", err)
 	}
 
@@ -974,10 +1060,25 @@ func (s *Service) LogEvent(
 	ipAddress net.IP,
 	statusCode int,
 	errorMessage *string,
+	requestBody *string,
+	responseBody *string,
 ) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), scimEventLogTimeout)
+	defer cancel()
+
 	scope := coredata.NewScopeFromObjectID(config.OrganizationID)
 
-	event := s.createEvent(config, method, path, userName, ipAddress, statusCode, errorMessage)
+	event := s.createEvent(
+		config,
+		method,
+		path,
+		userName,
+		ipAddress,
+		statusCode,
+		errorMessage,
+		requestBody,
+		responseBody,
+	)
 
 	err := s.pg.WithTx(
 		ctx,
@@ -1003,6 +1104,8 @@ func (s *Service) createEvent(
 	ipAddress net.IP,
 	statusCode int,
 	errorMessage *string,
+	requestBody *string,
+	responseBody *string,
 ) *coredata.SCIMEvent {
 	event := &coredata.SCIMEvent{
 		ID:                  gid.New(config.OrganizationID.TenantID(), coredata.SCIMEventEntityType),
@@ -1010,6 +1113,8 @@ func (s *Service) createEvent(
 		SCIMConfigurationID: config.ID,
 		Method:              method,
 		Path:                path,
+		RequestBody:         requestBody,
+		ResponseBody:        responseBody,
 		StatusCode:          statusCode,
 		ErrorMessage:        errorMessage,
 		IPAddress:           ipAddress,
@@ -1099,13 +1204,13 @@ func ParseUserFromAttributes(attributes scim.ResourceAttributes) scimUserAttribu
 		}
 	}
 
-	attrs.FullName = displayName
+	attrs.FullName = strings.TrimSpace(displayName)
 	if attrs.FullName == "" {
 		attrs.FullName = strings.TrimSpace(givenName + " " + familyName)
 	}
 
 	if attrs.FullName == "" {
-		attrs.FullName = attrs.UserName
+		attrs.FullName = strings.TrimSpace(attrs.UserName)
 	}
 
 	attrs.Title, _ = attributes["title"].(string)
@@ -1187,7 +1292,7 @@ func ParseUserFromReplaceAttributes(attributes scim.ResourceAttributes) scimRepl
 	attrs.GivenName = &givenName
 	attrs.FamilyName = &familyName
 
-	attrs.FullName = displayName
+	attrs.FullName = strings.TrimSpace(displayName)
 	if attrs.FullName == "" {
 		attrs.FullName = strings.TrimSpace(givenName + " " + familyName)
 	}
@@ -1354,7 +1459,7 @@ func ParseUserFromPatchOperations(operations []scim.PatchOperation) scimReplaceA
 					}
 
 					if name, ok := valueMap["displayName"].(string); ok {
-						attrs.FullName = name
+						attrs.FullName = strings.TrimSpace(name)
 					}
 
 					if nameMap, ok := valueMap["name"].(map[string]any); ok {
@@ -1513,7 +1618,7 @@ func ParseUserFromPatchOperations(operations []scim.PatchOperation) scimReplaceA
 				}
 			case "displayname":
 				if name, ok := op.Value.(string); ok {
-					attrs.FullName = name
+					attrs.FullName = strings.TrimSpace(name)
 				}
 			case "name":
 				if nameMap, ok := op.Value.(map[string]any); ok {
@@ -1672,6 +1777,8 @@ func ParseUserFromPatchOperations(operations []scim.PatchOperation) scimReplaceA
 	if attrs.FullName == "" && (givenName != "" || familyName != "") {
 		attrs.FullName = strings.TrimSpace(givenName + " " + familyName)
 	}
+
+	attrs.FullName = strings.TrimSpace(attrs.FullName)
 
 	if givenName != "" && attrs.GivenName == nil {
 		attrs.GivenName = &givenName

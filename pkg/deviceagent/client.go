@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package deviceagent
 
@@ -40,7 +46,12 @@ type (
 
 // NewClient creates an API client.
 func NewClient(serverURL, apiKey, userAgent string) *Client {
-	httpClient := httpclient.DefaultPooledClient()
+	opts := []httpclient.Option{}
+	if IsProboServers(serverURL) {
+		opts = append(opts, httpclient.WithTLSConfig(proboCloudTLSConfig()))
+	}
+
+	httpClient := httpclient.DefaultPooledClient(opts...)
 	httpClient.Timeout = 30 * time.Second
 
 	return &Client{
@@ -52,65 +63,35 @@ func NewClient(serverURL, apiKey, userAgent string) *Client {
 }
 
 type (
-	EnrollRequest struct {
-		EnrollmentToken string  `json:"enrollment_token"`
-		HardwareUUID    string  `json:"hardware_uuid"`
-		SerialNumber    *string `json:"serial_number,omitempty"`
-		Hostname        string  `json:"hostname"`
-		Platform        string  `json:"platform"`
-		OSVersion       string  `json:"os_version"`
-		AgentVersion    string  `json:"agent_version"`
-	}
-
-	EnrollResponse struct {
-		DeviceID         string `json:"device_id"`
-		APIKey           string `json:"api_key"`
-		HeartbeatSeconds int    `json:"heartbeat_interval_seconds"`
-		PostureSeconds   int    `json:"posture_interval_seconds"`
-		ServerTime       string `json:"server_time"`
-	}
-
 	HeartbeatRequest struct {
-		AgentVersion string `json:"agent_version,omitempty"`
-		Hostname     string `json:"hostname,omitempty"`
-		OSVersion    string `json:"os_version,omitempty"`
-		UptimeSec    int64  `json:"uptime_seconds,omitempty"`
+		HardwareUUID string  `json:"hardware_uuid"`
+		SerialNumber *string `json:"serial_number,omitempty"`
+		Hostname     string  `json:"hostname"`
+		Platform     string  `json:"platform"`
+		OSVersion    string  `json:"os_version"`
+		AgentVersion string  `json:"agent_version"`
 	}
 
 	HeartbeatResponse struct {
+		DeviceID         string `json:"device_id"`
 		HeartbeatSeconds int    `json:"heartbeat_interval_seconds"`
 		PostureSeconds   int    `json:"posture_interval_seconds"`
 		ServerTime       string `json:"server_time"`
 	}
 
 	PostureResultPayload struct {
-		CheckKey   string          `json:"check_key"`
-		Status     string          `json:"status"`
-		Evidence   json.RawMessage `json:"evidence,omitempty"`
-		ObservedAt time.Time       `json:"observed_at"`
+		CheckKey      string          `json:"check_key"`
+		Status        string          `json:"status"`
+		Evidence      json.RawMessage `json:"evidence,omitempty"`
+		ObservedAt    time.Time       `json:"observed_at"`
+		CorrelationID string          `json:"correlation_id"`
 	}
 
 	PosturesRequest struct {
-		Results []PostureResultPayload `json:"results"`
+		AgentVersion string                 `json:"agent_version"`
+		Results      []PostureResultPayload `json:"results"`
 	}
 )
-
-// Enroll exchanges an enrollment token for a device key.
-func (c *Client) Enroll(ctx context.Context, req EnrollRequest) (*EnrollResponse, error) {
-	var resp EnrollResponse
-	if err := c.do(
-		ctx,
-		http.MethodPost,
-		"/api/agent/v1/enroll",
-		false,
-		req,
-		&resp,
-	); err != nil {
-		return nil, err
-	}
-
-	return &resp, nil
-}
 
 // Heartbeat sends a periodic device heartbeat.
 func (c *Client) Heartbeat(ctx context.Context, req HeartbeatRequest) (*HeartbeatResponse, error) {
@@ -130,8 +111,8 @@ func (c *Client) Heartbeat(ctx context.Context, req HeartbeatRequest) (*Heartbea
 }
 
 // PushPostures sends posture check results.
-func (c *Client) PushPostures(ctx context.Context, results []PostureResultPayload) error {
-	if len(results) == 0 {
+func (c *Client) PushPostures(ctx context.Context, req PosturesRequest) error {
+	if len(req.Results) == 0 {
 		return nil
 	}
 
@@ -140,7 +121,7 @@ func (c *Client) PushPostures(ctx context.Context, results []PostureResultPayloa
 		http.MethodPost,
 		"/api/agent/v1/postures",
 		true,
-		PosturesRequest{Results: results},
+		req,
 		nil,
 	)
 }
@@ -155,6 +136,35 @@ func (c *Client) Unenroll(ctx context.Context) error {
 		nil,
 		nil,
 	)
+}
+
+type enrollResponse struct {
+	APIKey string `json:"api_key"`
+}
+
+// ExchangeEnrollmentToken redeems a one-shot enrollment token for the
+// permanent device API key.
+func (c *Client) ExchangeEnrollmentToken(
+	ctx context.Context,
+	token string,
+) (string, error) {
+	var resp enrollResponse
+	if err := c.do(
+		ctx,
+		http.MethodPost,
+		"/api/agent/v1/enroll",
+		false,
+		map[string]string{"token": token},
+		&resp,
+	); err != nil {
+		return "", err
+	}
+
+	if resp.APIKey == "" {
+		return "", errors.New("agent api: empty api key in enroll response")
+	}
+
+	return resp.APIKey, nil
 }
 
 // HTTPError captures a non-2xx API response.
@@ -175,6 +185,40 @@ func IsUnauthorized(err error) bool {
 	}
 
 	return herr.StatusCode == http.StatusUnauthorized
+}
+
+// IsGone reports whether err is an API 410. The enroll endpoint
+// returns 410 when the enrollment token is expired.
+func IsGone(err error) bool {
+	var herr *HTTPError
+	if !errors.As(err, &herr) {
+		return false
+	}
+
+	return herr.StatusCode == http.StatusGone
+}
+
+// IsForbidden reports whether err is an API 403. The enroll endpoint
+// returns 403 when the enrollment token is invalid.
+func IsForbidden(err error) bool {
+	var herr *HTTPError
+	if !errors.As(err, &herr) {
+		return false
+	}
+
+	return herr.StatusCode == http.StatusForbidden
+}
+
+// IsHardwareConflict reports whether err is the same-organization
+// hardware UUID rejection from heartbeat. The agent API reserves
+// 409 for that conflict.
+func IsHardwareConflict(err error) bool {
+	var herr *HTTPError
+	if !errors.As(err, &herr) {
+		return false
+	}
+
+	return herr.StatusCode == http.StatusConflict
 }
 
 func (c *Client) do(

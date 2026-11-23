@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -23,24 +29,30 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"go.gearno.de/kit/pg"
+	"go.gearno.de/x/ref"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/iam/policy"
 	"go.probo.inc/probo/pkg/page"
 )
 
+var (
+	_ Searchable = (*Audit)(nil)
+)
+
 type (
 	Audit struct {
-		ID                    gid.GID               `db:"id"`
-		Name                  *string               `db:"name"`
-		OrganizationID        gid.GID               `db:"organization_id"`
-		FrameworkID           gid.GID               `db:"framework_id"`
-		ReportFileID          *gid.GID              `db:"report_file_id"`
-		ValidFrom             *time.Time            `db:"valid_from"`
-		ValidUntil            *time.Time            `db:"valid_until"`
-		State                 AuditState            `db:"state"`
-		TrustCenterVisibility TrustCenterVisibility `db:"trust_center_visibility"`
-		CreatedAt             time.Time             `db:"created_at"`
-		UpdatedAt             time.Time             `db:"updated_at"`
+		ID             gid.GID    `db:"id"`
+		Name           *string    `db:"name"`
+		Firm           *string    `db:"firm"`
+		OrganizationID gid.GID    `db:"organization_id"`
+		ReportFileID   *gid.GID   `db:"report_file_id"`
+		ValidFrom      *time.Time `db:"valid_from"`
+		ValidUntil     *time.Time `db:"valid_until"`
+		AuditStartDate *time.Time `db:"audit_start_date"`
+		AuditEndDate   *time.Time `db:"audit_end_date"`
+		State          AuditState `db:"state"`
+		CreatedAt      time.Time  `db:"created_at"`
+		UpdatedAt      time.Time  `db:"updated_at"`
 	}
 
 	Audits []*Audit
@@ -54,11 +66,19 @@ func (a *Audit) CursorKey(field AuditOrderField) page.CursorKey {
 		return page.NewCursorKey(a.ID, a.ValidFrom)
 	case AuditOrderFieldValidUntil:
 		return page.NewCursorKey(a.ID, a.ValidUntil)
+	case AuditOrderFieldAuditStartDate:
+		return page.NewCursorKey(a.ID, a.AuditStartDate)
+	case AuditOrderFieldAuditEndDate:
+		return page.NewCursorKey(a.ID, a.AuditEndDate)
 	case AuditOrderFieldState:
 		return page.NewCursorKey(a.ID, a.State)
 	}
 
 	panic(fmt.Sprintf("unsupported order by: %s", field))
+}
+
+func (a Audit) SearchText() []string {
+	return []string{ref.UnrefOrZero(a.Name), ref.UnrefOrZero(a.Firm)}
 }
 
 // AuthorizationAttributes returns the authorization attributes for policy evaluation.
@@ -111,13 +131,14 @@ func (a *Audit) LoadByID(
 SELECT
 	id,
 	name,
+	firm,
 	organization_id,
-	framework_id,
 	report_file_id,
 	valid_from,
 	valid_until,
+	audit_start_date,
+	audit_end_date,
 	state,
-	trust_center_visibility,
 	created_at,
 	updated_at
 FROM
@@ -148,6 +169,62 @@ LIMIT 1;
 	}
 
 	*a = audit
+
+	return nil
+}
+
+func (a *Audits) LoadByIDs(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	auditIDs []gid.GID,
+) error {
+	if len(auditIDs) == 0 {
+		*a = Audits{}
+		return nil
+	}
+
+	q := `
+SELECT
+	id,
+	name,
+	firm,
+	organization_id,
+	report_file_id,
+	valid_from,
+	valid_until,
+	audit_start_date,
+	audit_end_date,
+	state,
+	created_at,
+	updated_at
+FROM
+	audits
+WHERE
+	%s
+	AND id = ANY(@ids);
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"ids": auditIDs}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query audits: %w", err)
+	}
+
+	audits, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[Audit])
+	if err != nil {
+		return fmt.Errorf("cannot collect audits: %w", err)
+	}
+
+	*a = audits
+
+	if len(audits) != len(gid.NewSet(auditIDs...)) {
+		return ErrResourceNotFound
+	}
 
 	return nil
 }
@@ -185,6 +262,68 @@ WHERE
 	return count, nil
 }
 
+func (a *Audits) LoadByCompliancePortalID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	compliancePortalID gid.GID,
+	organizationID gid.GID,
+	cursor *page.Cursor[AuditOrderField],
+	filter *AuditFilter,
+) error {
+	if filter == nil {
+		filter = NewAuditCompliancePortalFilter()
+	}
+
+	filter = filter.WithCompliancePortalID(compliancePortalID)
+
+	q := `
+SELECT
+	audits.id,
+	audits.name,
+	audits.firm,
+	audits.organization_id,
+	audits.report_file_id,
+	audits.valid_from,
+	audits.valid_until,
+	audits.audit_start_date,
+	audits.audit_end_date,
+	audits.state,
+	audits.created_at,
+	audits.updated_at
+FROM
+	audits
+WHERE
+	%s
+	AND audits.organization_id = @organization_id
+	AND %s
+	AND %s
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment(), filter.SQLFragment(), cursor.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"organization_id": organizationID,
+	}
+	maps.Copy(args, scope.SQLArguments())
+	maps.Copy(args, filter.SQLArguments())
+	maps.Copy(args, cursor.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query audits: %w", err)
+	}
+
+	audits, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[Audit])
+	if err != nil {
+		return fmt.Errorf("cannot collect audits: %w", err)
+	}
+
+	*a = audits
+
+	return nil
+}
+
 func (a *Audits) LoadByOrganizationID(
 	ctx context.Context,
 	conn pg.Querier,
@@ -197,13 +336,14 @@ func (a *Audits) LoadByOrganizationID(
 SELECT
 	id,
 	name,
+	firm,
 	organization_id,
-	framework_id,
 	report_file_id,
 	valid_from,
 	valid_until,
+	audit_start_date,
+	audit_end_date,
 	state,
-	trust_center_visibility,
 	created_at,
 	updated_at
 FROM
@@ -246,45 +386,48 @@ func (a *Audit) Insert(
 INSERT INTO audits (
 	id,
 	name,
+	firm,
 	tenant_id,
 	organization_id,
-	framework_id,
 	report_file_id,
 	valid_from,
 	valid_until,
+	audit_start_date,
+	audit_end_date,
 	state,
-	trust_center_visibility,
 	created_at,
 	updated_at
 ) VALUES (
 	@id,
 	@name,
+	@firm,
 	@tenant_id,
 	@organization_id,
-	@framework_id,
 	@report_file_id,
 	@valid_from,
 	@valid_until,
+	@audit_start_date,
+	@audit_end_date,
 	@state,
-	@trust_center_visibility,
 	@created_at,
 	@updated_at
 )
 `
 
 	args := pgx.StrictNamedArgs{
-		"id":                      a.ID,
-		"name":                    a.Name,
-		"tenant_id":               scope.GetTenantID(),
-		"organization_id":         a.OrganizationID,
-		"framework_id":            a.FrameworkID,
-		"report_file_id":          a.ReportFileID,
-		"valid_from":              a.ValidFrom,
-		"valid_until":             a.ValidUntil,
-		"state":                   a.State,
-		"trust_center_visibility": a.TrustCenterVisibility,
-		"created_at":              a.CreatedAt,
-		"updated_at":              a.UpdatedAt,
+		"id":               a.ID,
+		"name":             a.Name,
+		"firm":             a.Firm,
+		"tenant_id":        scope.GetTenantID(),
+		"organization_id":  a.OrganizationID,
+		"report_file_id":   a.ReportFileID,
+		"valid_from":       a.ValidFrom,
+		"valid_until":      a.ValidUntil,
+		"audit_start_date": a.AuditStartDate,
+		"audit_end_date":   a.AuditEndDate,
+		"state":            a.State,
+		"created_at":       a.CreatedAt,
+		"updated_at":       a.UpdatedAt,
 	}
 
 	_, err := conn.Exec(ctx, q, args)
@@ -304,11 +447,13 @@ func (a *Audit) Update(
 UPDATE audits
 SET
 	name = @name,
+	firm = @firm,
 	report_file_id = @report_file_id,
 	valid_from = @valid_from,
 	valid_until = @valid_until,
+	audit_start_date = @audit_start_date,
+	audit_end_date = @audit_end_date,
 	state = @state,
-	trust_center_visibility = @trust_center_visibility,
 	updated_at = @updated_at
 WHERE
 	%s
@@ -318,14 +463,16 @@ WHERE
 	q = fmt.Sprintf(q, scope.SQLFragment())
 
 	args := pgx.StrictNamedArgs{
-		"id":                      a.ID,
-		"name":                    a.Name,
-		"report_file_id":          a.ReportFileID,
-		"valid_from":              a.ValidFrom,
-		"valid_until":             a.ValidUntil,
-		"state":                   a.State,
-		"trust_center_visibility": a.TrustCenterVisibility,
-		"updated_at":              a.UpdatedAt,
+		"id":               a.ID,
+		"name":             a.Name,
+		"firm":             a.Firm,
+		"report_file_id":   a.ReportFileID,
+		"valid_from":       a.ValidFrom,
+		"valid_until":      a.ValidUntil,
+		"audit_start_date": a.AuditStartDate,
+		"audit_end_date":   a.AuditEndDate,
+		"state":            a.State,
+		"updated_at":       a.UpdatedAt,
 	}
 	maps.Copy(args, scope.SQLArguments())
 
@@ -375,13 +522,14 @@ WITH audits_by_control AS (
 		a.id,
 		a.tenant_id,
 		a.name,
+		a.firm,
 		a.organization_id,
-		a.framework_id,
 		a.report_file_id,
 		a.valid_from,
 		a.valid_until,
+		a.audit_start_date,
+		a.audit_end_date,
 		a.state,
-		a.trust_center_visibility,
 		a.created_at,
 		a.updated_at
 	FROM
@@ -394,13 +542,14 @@ WITH audits_by_control AS (
 SELECT
 	id,
 	name,
+	firm,
 	organization_id,
-	framework_id,
 	report_file_id,
 	valid_from,
 	valid_until,
+	audit_start_date,
+	audit_end_date,
 	state,
-	trust_center_visibility,
 	created_at,
 	updated_at
 FROM
@@ -442,13 +591,14 @@ WITH audits_by_finding AS (
 		a.id,
 		a.tenant_id,
 		a.name,
+		a.firm,
 		a.organization_id,
-		a.framework_id,
 		a.report_file_id,
 		a.valid_from,
 		a.valid_until,
+		a.audit_start_date,
+		a.audit_end_date,
 		a.state,
-		a.trust_center_visibility,
 		a.created_at,
 		a.updated_at
 	FROM
@@ -461,13 +611,14 @@ WITH audits_by_finding AS (
 SELECT
 	id,
 	name,
+	firm,
 	organization_id,
-	framework_id,
 	report_file_id,
 	valid_from,
 	valid_until,
+	audit_start_date,
+	audit_end_date,
 	state,
-	trust_center_visibility,
 	created_at,
 	updated_at
 FROM
@@ -592,13 +743,14 @@ func (a *Audit) LoadByReportFileID(
 SELECT
 	id,
 	name,
+	firm,
 	organization_id,
-	framework_id,
 	report_file_id,
 	valid_from,
 	valid_until,
+	audit_start_date,
+	audit_end_date,
 	state,
-	trust_center_visibility,
 	created_at,
 	updated_at
 FROM
@@ -631,6 +783,78 @@ LIMIT 1;
 	return nil
 }
 
+// LoadByCompliancePortalIDAndFrameworkID loads any audit linked to the given
+// framework that the portal publishes with a visibility other than NONE. Both
+// associations only narrow the WHERE clause, so they stay subqueries.
+func (a *Audit) LoadByCompliancePortalIDAndFrameworkID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	compliancePortalID gid.GID,
+	frameworkID gid.GID,
+) error {
+	q := `
+SELECT
+	id,
+	name,
+	firm,
+	organization_id,
+	report_file_id,
+	valid_from,
+	valid_until,
+	audit_start_date,
+	audit_end_date,
+	state,
+	created_at,
+	updated_at
+FROM
+	audits
+WHERE %s
+	AND id IN (
+		SELECT
+			audit_id
+		FROM
+			audits_frameworks
+		WHERE %s
+			AND framework_id = @framework_id
+	)
+	AND id IN (
+		SELECT
+			audit_id
+		FROM
+			cp_audits
+		WHERE %s
+			AND compliance_portal_id = @compliance_portal_id
+	)
+LIMIT 1;
+`
+	q = fmt.Sprintf(q, scope.SQLFragment(), scope.SQLFragment(), scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"framework_id":         frameworkID,
+		"compliance_portal_id": compliancePortalID,
+	}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query audit: %w", err)
+	}
+
+	audit, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Audit])
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrResourceNotFound
+		}
+
+		return fmt.Errorf("cannot collect audit: %w", err)
+	}
+
+	*a = audit
+
+	return nil
+}
+
 func (as *Audits) LoadByReportFileIDs(
 	ctx context.Context,
 	conn pg.Querier,
@@ -641,13 +865,14 @@ func (as *Audits) LoadByReportFileIDs(
 SELECT
 	id,
 	name,
+	firm,
 	organization_id,
-	framework_id,
 	report_file_id,
 	valid_from,
 	valid_until,
+	audit_start_date,
+	audit_end_date,
 	state,
-	trust_center_visibility,
 	created_at,
 	updated_at
 FROM
@@ -677,48 +902,114 @@ WHERE
 	return nil
 }
 
-func (as *Audits) LoadByReportIDs(
+func (a *Audits) LoadByFrameworkID(
 	ctx context.Context,
 	conn pg.Querier,
 	scope Scoper,
-	reportIDs []gid.GID,
+	frameworkID gid.GID,
+	cursor *page.Cursor[AuditOrderField],
 ) error {
 	q := `
+WITH audits_by_framework AS (
+	SELECT
+		a.id,
+		a.tenant_id,
+		a.name,
+		a.firm,
+		a.organization_id,
+		a.report_file_id,
+		a.valid_from,
+		a.valid_until,
+		a.audit_start_date,
+		a.audit_end_date,
+		a.state,
+		a.created_at,
+		a.updated_at
+	FROM
+		audits a
+	INNER JOIN
+		audits_frameworks af ON a.id = af.audit_id
+	WHERE
+		af.framework_id = @framework_id
+)
 SELECT
 	id,
 	name,
+	firm,
 	organization_id,
-	framework_id,
-	report_id,
+	report_file_id,
 	valid_from,
 	valid_until,
+	audit_start_date,
+	audit_end_date,
 	state,
-	trust_center_visibility,
 	created_at,
 	updated_at
 FROM
-	audits
-WHERE
-	%s
-	AND report_id = ANY(@report_ids)
+	audits_by_framework
+WHERE %s
+	AND %s
 `
+	q = fmt.Sprintf(q, scope.SQLFragment(), cursor.SQLFragment())
 
-	q = fmt.Sprintf(q, scope.SQLFragment())
-
-	args := pgx.StrictNamedArgs{"report_ids": reportIDs}
+	args := pgx.StrictNamedArgs{"framework_id": frameworkID}
 	maps.Copy(args, scope.SQLArguments())
+	maps.Copy(args, cursor.SQLArguments())
 
 	rows, err := conn.Query(ctx, q, args)
 	if err != nil {
-		return fmt.Errorf("cannot query audits by report IDs: %w", err)
+		return fmt.Errorf("cannot query audits: %w", err)
 	}
 
 	audits, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[Audit])
 	if err != nil {
-		return fmt.Errorf("cannot collect audits by report IDs: %w", err)
+		return fmt.Errorf("cannot collect audits: %w", err)
 	}
 
-	*as = audits
+	*a = audits
 
 	return nil
+}
+
+func (a *Audits) CountByFrameworkID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	frameworkID gid.GID,
+) (int, error) {
+	q := `
+WITH audits_by_framework AS (
+	SELECT
+		a.id,
+		a.tenant_id
+	FROM
+		audits a
+	INNER JOIN
+		audits_frameworks af ON a.id = af.audit_id
+	WHERE
+		af.framework_id = @framework_id
+)
+SELECT
+	COUNT(id)
+FROM
+	audits_by_framework
+WHERE
+	%s
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"framework_id": frameworkID}
+	maps.Copy(args, scope.SQLArguments())
+
+	row := conn.QueryRow(ctx, q, args)
+
+	var count int
+
+	err := row.Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("cannot count audits: %w", err)
+	}
+
+	return count, nil
 }

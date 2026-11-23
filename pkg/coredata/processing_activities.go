@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -23,6 +29,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"go.gearno.de/kit/pg"
+	"go.gearno.de/x/ref"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/iam/policy"
 	"go.probo.inc/probo/pkg/page"
@@ -136,6 +143,10 @@ WHERE
 	return nil
 }
 
+var (
+	_ Searchable = (*ProcessingActivity)(nil)
+)
+
 type (
 	ProcessingActivity struct {
 		ID                                   gid.GID                                          `db:"id"`
@@ -175,6 +186,19 @@ func (p *ProcessingActivity) CursorKey(field ProcessingActivityOrderField) page.
 	}
 
 	panic(fmt.Sprintf("unsupported order by: %s", field))
+}
+
+func (p ProcessingActivity) SearchText() []string {
+	return []string{
+		p.Name,
+		ref.UnrefOrZero(p.Purpose),
+		ref.UnrefOrZero(p.DataSubjectCategory),
+		ref.UnrefOrZero(p.PersonalDataCategory),
+		ref.UnrefOrZero(p.Recipients),
+		ref.UnrefOrZero(p.Location),
+		ref.UnrefOrZero(p.RetentionPeriod),
+		ref.UnrefOrZero(p.SecurityMeasures),
+	}
 }
 
 func (p *ProcessingActivity) AuthorizationAttributes(
@@ -372,6 +396,10 @@ WHERE
 	}
 
 	*p = processingActivities
+
+	if len(processingActivities) != len(gid.NewSet(processingActivityIDs...)) {
+		return ErrResourceNotFound
+	}
 
 	return nil
 }
@@ -619,6 +647,32 @@ WHERE
 	_, err := conn.Exec(ctx, q, args)
 	if err != nil {
 		return fmt.Errorf("cannot delete processing activity: %w", err)
+	}
+
+	return nil
+}
+
+func (c *ProcessingActivities) DeleteByOrganizationID(
+	ctx context.Context,
+	conn pg.Tx,
+	scope Scoper,
+	organizationID gid.GID,
+) error {
+	q := `
+DELETE FROM processing_activities
+WHERE
+	%s
+	AND organization_id = @organization_id
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"organization_id": organizationID}
+	maps.Copy(args, scope.SQLArguments())
+
+	_, err := conn.Exec(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot delete processing activities: %w", err)
 	}
 
 	return nil

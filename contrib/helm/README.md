@@ -1,6 +1,6 @@
-# Govrly Kubernetes Deployment
+# Probo Kubernetes Deployment
 
-This directory contains the Helm chart for deploying Govrly on Kubernetes with external managed services.
+This directory contains the Helm chart for deploying Probo on Kubernetes with external managed services.
 
 ## Quick Links
 
@@ -9,7 +9,7 @@ This directory contains the Helm chart for deploying Govrly on Kubernetes with e
 
 ## Prerequisites
 
-Before deploying Govrly, ensure you have:
+Before deploying Probo, ensure you have:
 
 1. **Kubernetes Cluster** - Version 1.23+
 2. **Helm** - Version 3.8+
@@ -121,7 +121,7 @@ For production deployments, we recommend:
 
 ### What Gets Deployed
 
-- **Govrly Application** - Main Go binary serving GraphQL APIs and React frontends
+- **Probo Application** - Main Go binary serving GraphQL APIs and React frontends
 - **Chrome Headless** - For PDF generation (optional, can use external service)
 - **LoadBalancer Service** - For external access via TCP on ports 80, 443, and 8080
 - **Ingress** - Alternative to LoadBalancer for HTTP routing (optional)
@@ -152,21 +152,21 @@ HAProxy Ingress LoadBalancer
 
 1. **HAProxy Ingress Controller** runs in the release namespace with a LoadBalancer service
 2. **TCP ConfigMap** defines Layer 4 TCP passthrough rules:
-   - Port 80 → Govrly service port 80
-   - Port 443 → Govrly service port 443
+   - Port 80 → Probo service port 80
+   - Port 443 → Probo service port 443
 3. **HTTP Ingress** defines Layer 7 HTTP routing:
-   - Host `probo.example.com` → Govrly service port 8080
+   - Host `probo.example.com` → Probo service port 8080
 
 **Benefits:**
 - Single LoadBalancer for both TCP and HTTP traffic
-- TCP passthrough for ports 80/443 (Govrly handles TLS directly)
+- TCP passthrough for ports 80/443 (Probo handles TLS directly)
 - HTTP routing for backoffice on port 8080
 - Supports ACME/Let's Encrypt integration
 
 **Port Configuration:**
-- **Port 80** - TCP passthrough to Govrly:80 (HTTP service, ACME challenges)
-- **Port 443** - TCP passthrough to Govrly:443 (HTTPS service with TLS)
-- **Port 8080** - HTTP routing to Govrly:8080 (Backoffice, via host-based routing)
+- **Port 80** - TCP passthrough to Probo:80 (HTTP service, ACME challenges)
+- **Port 443** - TCP passthrough to Probo:443 (HTTPS service with TLS)
+- **Port 8080** - HTTP routing to Probo:8080 (Backoffice, via host-based routing)
 
 ## Configuration
 
@@ -181,8 +181,14 @@ All deployments require:
 - `probo.oauth2.signingKey` - PEM private key used to sign OAuth2 tokens
 - `postgresql.host` - PostgreSQL server hostname
 - `postgresql.password` - Database password
-- `s3.accessKeyId` - S3 access credentials
-- `s3.secretAccessKey` - S3 secret key
+
+S3 credentials are conditionally required, and only when
+`seaweedfs.enabled=false`. The chart default (`seaweedfs.enabled=true`) deploys
+bundled SeaweedFS and does not read `s3.accessKeyId` or `s3.secretAccessKey`.
+On AWS, set `seaweedfs.enabled=false` and leave `s3.endpoint`,
+`s3.accessKeyId`, and `s3.secretAccessKey` blank to authenticate via EKS Pod
+Identity or IRSA. On other S3-compatible storage, set `s3.endpoint` and both
+keys.
 
 See [values.yaml](charts/probo/values.yaml) for all available options.
 
@@ -467,9 +473,19 @@ regenerate the config from all `PROBOD_*` env vars.
 | metrics.serviceMonitor.scrapeTimeout                    | string  | `"10s"`                                            | Scrape timeout for metrics                                                                          |
 | metrics.serviceMonitor.labels                           | object  | `{}`                                               | Labels for the ServiceMonitor                                                                       |
 | metrics.serviceMonitor.relabelings                      | list    | `[]`                                               | Relabeling configs for the ServiceMonitor                                                           |
-| probo.baseUrl                                           | string  | `"probo.example.com"`                              | Public hostname where Govrly will be accessible                                                      |
+| probo.baseUrl                                           | string  | `"probo.example.com"`                              | Public hostname where Probo will be accessible                                                      |
 | probo.encryptionKey                                     | string  | `""`                                               | **REQUIRED** Base64-encoded encryption key (generate with: openssl rand -base64 32)                 |
 | probo.oauth2.signingKey                                 | string  | `""`                                               | **REQUIRED** PEM private key for OAuth2 signing (set with --set-file)                                |
+| probo.identityFederation.enabled                                | bool    | `false`                                            | Serve the outbound OIDC issuer used to federate into customer cloud accounts                        |
+| probo.identityFederation.issuerBaseUrl                          | string  | `""`                                               | Advertised issuer base; empty serves it at {baseUrl}/federation. Immutable once customers register it |
+| probo.identityFederation.signingKey                             | string  | `""`                                               | **REQUIRED when the identity federation issuer is enabled** PEM private key, separate from oauth2.signingKey             |
+| probo.identityFederation.signingKeyKid                          | string  | `"default"`                                        | Key id published for signingKey                                                                     |
+| probo.identityFederation.previousSigningKey                     | string  | `""`                                               | Retired PEM private key, published in the JWKS but never signing, so tokens minted before a rotation still verify |
+| probo.identityFederation.previousSigningKeyKid                  | string  | `""`                                               | **REQUIRED when previousSigningKey is set** Key id of the retired key; must differ from signingKeyKid |
+| probo.identityFederation.cloudformationTemplateUrl              | string  | `"https://probo-cloudformation-template.s3.us-east-2.amazonaws.com/aws-audit-role.yaml"` | Public S3 HTTPS URL used to build the AWS console quick-create link |
+| probo.identityFederation.terraformModuleSource                  | string  | `"getprobo/audit-role/aws"`                        | Terraform module address copied into the AWS connector install snippet |
+| probo.identityFederation.gcpTerraformModuleSource               | string  | `"getprobo/audit-role/gcp"`                        | Terraform module address copied into the GCP connector install snippet |
+| probo.identityFederation.azureTerraformModuleSource             | string  | `"getprobo/audit-role/azurerm"`                    | Terraform module address copied into the Azure connector install snippet |
 | probo.service.port                                      | int     | `8080`                                             | Probo application service port                                                                      |
 | probo.metrics.port                                      | int     | `8081`                                             | Probo metrics service port                                                                          |
 | probo.tracing.enabled                                   | bool    | `false`                                            | Enable OpenTelemetry tracing                                                                        |
@@ -478,9 +494,12 @@ regenerate the config from all `PROBOD_*` env vars.
 | probo.tracing.batchTimeout                              | int     | `5`                                                | Batch timeout in seconds                                                                            |
 | probo.tracing.exportTimeout                             | int     | `30`                                               | Export timeout in seconds                                                                           |
 | probo.tracing.maxQueueSize                              | int     | `2048`                                             | Maximum queue size for traces                                                                       |
+| probo.faro.enabled                                      | bool    | `false`                                            | Send browser telemetry from the console, employee portal, and compliance portal                     |
+| probo.faro.collectorUrl                                 | string  | `""`                                               | **REQUIRED when Faro is enabled** Faro collector URL                                                 |
+| probo.faro.apiKey                                       | string  | `""`                                               | **REQUIRED when Faro is enabled** Collector API key. Visible to the browser                          |
 | probo.cors.allowedOrigins                               | list    | `["https://probo.example.com", "http://..."]`      | CORS allowed origins                                                                                |
 | probo.extraHeaderFields                                 | object  | `{}`                                               | Extra HTTP headers to add to responses                                                              |
-| probo.auth.disableSignup                                | bool    | `false`                                            | Disable user signup                                                                                 |
+| probo.auth.disableSignup                                | bool    | `false`                                            | Restrict console access to identities with an organization membership              |
 | probo.auth.invitationTokenValidity                      | int     | `3600`                                             | Invitation token validity in seconds                                                                |
 | probo.auth.cookieName                                   | string  | `"SSID"`                                           | Authentication cookie name                                                                          |
 | probo.auth.cookieDomain                                 | string  | `"probo.example.com"`                              | Authentication cookie domain                                                                        |
@@ -496,7 +515,7 @@ regenerate the config from all `PROBOD_*` env vars.
 | probo.trustAuth.tokenSecret                             | string  | `""`                                               | **REQUIRED** Trust token signing secret (at least 32 bytes, generate with: openssl rand -base64 32) |
 | probo.trustAuth.scope                                   | string  | `"trust_center_readonly"`                          | Trust token scope                                                                                   |
 | probo.trustAuth.tokenType                               | string  | `"trust_center_access"`                            | Trust token type                                                                                    |
-| probo.mailer.senderName                                 | string  | `"Govrly"`                                         | Email sender name                                                                                   |
+| probo.mailer.senderName                                 | string  | `"Probo"`                                          | Email sender name                                                                                   |
 | probo.mailer.senderEmail                                | string  | `"no-reply@notification.getprobo.com"`             | Email sender address                                                                                |
 | probo.mailer.smtp.addr                                  | string  | `"sandbox.smtp.mailtrap.io:2525"`                  | SMTP server address                                                                                 |
 | probo.mailer.smtp.user                                  | string  | `"2d1b1d0e8b3d0b"`                                 | SMTP username                                                                                       |
@@ -524,8 +543,8 @@ regenerate the config from all `PROBOD_*` env vars.
 | s3.region                                               | string  | `"us-east-1"`                                      | S3 region                                                                                           |
 | s3.bucket                                               | string  | `"probod"`                                         | S3 bucket name                                                                                      |
 | s3.endpoint                                             | string  | `""`                                               | S3 endpoint (leave empty for AWS S3, set for S3-compatible storage)                                 |
-| s3.accessKeyId                                          | string  | `""`                                               | **REQUIRED** (when seaweedfs.enabled=false) S3 access key                                           |
-| s3.secretAccessKey                                      | string  | `""`                                               | **REQUIRED** (when seaweedfs.enabled=false) S3 secret key                                           |
+| s3.accessKeyId                                          | string  | `""`                                               | S3 access key. Set with secretAccessKey. Leave both blank only for AWS workload identity (seaweedfs.enabled=false and empty s3.endpoint) |
+| s3.secretAccessKey                                      | string  | `""`                                               | S3 secret key. Set with accessKeyId. Leave both blank only for AWS workload identity (seaweedfs.enabled=false and empty s3.endpoint)     |
 | seaweedfs.enabled                                       | bool    | `true`                                             | Enable included SeaweedFS for demo purposes (NOT for production)                                    |
 | seaweedfs.image.repository                              | string  | `"chrislusf/seaweedfs"`                            | SeaweedFS container image repository                                                                |
 | seaweedfs.image.tag                                     | string  | `"latest"`                                         | SeaweedFS image tag                                                                                 |

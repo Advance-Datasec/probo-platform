@@ -1,19 +1,24 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatDatetime, formatError, todayAsDateInput } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   Dialog,
@@ -24,14 +29,15 @@ import {
   Input,
   Spinner,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { graphql, useMutation } from "react-relay";
-import { z } from "zod";
 
 import type { UploadComplianceReportDialogMutation } from "#/__generated__/core/UploadComplianceReportDialogMutation.graphql";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
+import { z } from "#/lib/zod";
 
 const uploadComplianceReportMutation = graphql`
   mutation UploadComplianceReportDialogMutation(
@@ -58,11 +64,6 @@ const uploadComplianceReportMutation = graphql`
   }
 `;
 
-const schema = z.object({
-  reportDate: z.string().min(1, "Report date is required"),
-  validUntil: z.string().optional(),
-});
-
 type Props = {
   children: React.ReactNode;
   thirdPartyId: string;
@@ -76,7 +77,11 @@ export function UploadComplianceReportDialog({
   connectionId,
   onSuccess,
 }: Props) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
+  const schema = z.object({
+    reportDate: z.string().min(1, t("uploadComplianceReportDialog.validation.reportDateRequired")),
+    validUntil: z.string().optional(),
+  });
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const ref = useDialogRef();
 
@@ -91,7 +96,7 @@ export function UploadComplianceReportDialog({
     },
   });
 
-  const { toast } = useToast();
+  const toast = useToast();
   const [uploadComplianceReport, isUploading]
     = useMutation<UploadComplianceReportDialogMutation>(
       uploadComplianceReportMutation,
@@ -124,20 +129,20 @@ export function UploadComplianceReportDialog({
       },
       onCompleted(_response, errors) {
         if (errors) {
-          toast({
-            title: __("Error"),
+          toast.add({
+            title: t("uploadComplianceReportDialog.messages.error"),
             description: formatError(
-              __("Failed to upload compliance report"),
+              t("uploadComplianceReportDialog.errors.upload"),
               errors,
             ),
-            variant: "error",
+            type: "error",
           });
           return;
         }
-        toast({
-          title: __("Success"),
-          description: __("Compliance report uploaded successfully"),
-          variant: "success",
+        toast.add({
+          title: t("uploadComplianceReportDialog.messages.success"),
+          description: t("uploadComplianceReportDialog.messages.uploaded"),
+          type: "success",
         });
         reset();
         setUploadedFile(null);
@@ -145,13 +150,13 @@ export function UploadComplianceReportDialog({
         ref.current?.close();
       },
       onError(error) {
-        toast({
-          title: __("Error"),
+        toast.add({
+          title: t("uploadComplianceReportDialog.messages.error"),
           description: formatError(
-            __("Failed to upload compliance report"),
+            t("uploadComplianceReportDialog.errors.upload"),
             error,
           ),
-          variant: "error",
+          type: "error",
         });
       },
     });
@@ -164,7 +169,7 @@ export function UploadComplianceReportDialog({
 
   return (
     <Dialog
-      title={__("Upload Compliance Report")}
+      title={t("uploadComplianceReportDialog.title")}
       ref={ref}
       trigger={children}
       className="max-w-lg"
@@ -173,30 +178,29 @@ export function UploadComplianceReportDialog({
       <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
         <DialogContent padded className="space-y-4">
           <Dropzone
-            description={__("Only PDF files up to 10MB are allowed")}
+            description={t("uploadComplianceReportDialog.fileHelp")}
             isUploading={isUploading}
             onDrop={handleDrop}
             accept={{
               "application/pdf": [".pdf"],
             }}
-            maxSize={10}
+            maxSize={30}
           />
 
           {uploadedFile && (
             <div className="p-3 bg-tertiary-subtle rounded-lg">
               <p className="text-sm font-medium">
-                {__("Selected file")}
-                :
+                {t("uploadComplianceReportDialog.selectedFile")}
               </p>
               <p className="text-sm text-txt-secondary">{uploadedFile.name}</p>
             </div>
           )}
 
           <div className="grid grid-cols-2 gap-4">
-            <Field label={__("Report date")} required>
+            <Field label={t("uploadComplianceReportDialog.fields.reportDate")} required>
               <Input {...register("reportDate")} type="date" required />
             </Field>
-            <Field label={__("Valid until")}>
+            <Field label={t("uploadComplianceReportDialog.fields.validUntil")}>
               <Input {...register("validUntil")} type="date" />
             </Field>
           </div>
@@ -208,7 +212,7 @@ export function UploadComplianceReportDialog({
             disabled={isUploading || !uploadedFile}
             icon={isUploading ? Spinner : undefined}
           >
-            {__("Upload")}
+            {t("uploadComplianceReportDialog.actions.upload")}
           </Button>
         </DialogFooter>
       </form>

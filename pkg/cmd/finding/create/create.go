@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package create
 
@@ -24,12 +30,13 @@ import (
 )
 
 const createMutation = `
-mutation($input: CreateFindingInput!) {
+mutation FindingCreate($input: CreateFindingInput!) {
   createFinding(input: $input) {
     findingEdge {
       node {
         id
         referenceId
+        title
         kind
         status
         priority
@@ -45,6 +52,7 @@ type createResponse struct {
 			Node struct {
 				ID          string `json:"id"`
 				ReferenceID string `json:"referenceId"`
+				Title       string `json:"title"`
 				Kind        string `json:"kind"`
 				Status      string `json:"status"`
 				Priority    string `json:"priority"`
@@ -55,8 +63,9 @@ type createResponse struct {
 
 func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 	var (
-		flagOrganization     string
+		flagOrg              string
 		flagKind             string
+		flagTitle            string
 		flagDescription      string
 		flagSource           string
 		flagIdentifiedOn     string
@@ -74,7 +83,7 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 		Use:   "create",
 		Short: "Create a new finding",
 		Example: `  # Create a finding
-  prb finding create --organization ORG_ID --kind MINOR_NONCONFORMITY --owner-id OWNER_ID --status OPEN --priority HIGH`,
+  prb finding create --org ORG_ID --kind MINOR_NONCONFORMITY --title "Missing access review" --owner-id OWNER_ID --status OPEN --priority HIGH`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := cmdutil.ValidateEnum("kind", flagKind, []string{"MINOR_NONCONFORMITY", "MAJOR_NONCONFORMITY", "OBSERVATION", "EXCEPTION"}); err != nil {
@@ -107,9 +116,15 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 				cmdutil.TokenRefreshOption(cfg, host, hc),
 			)
 
+			flagOrg, err = cmdutil.ResolveOrganization(flagOrg, hc.Organization)
+			if err != nil {
+				return err
+			}
+
 			input := map[string]any{
-				"organizationId": flagOrganization,
+				"organizationId": flagOrg,
 				"kind":           flagKind,
+				"title":          flagTitle,
 				"status":         flagStatus,
 				"priority":       flagPriority,
 			}
@@ -175,8 +190,9 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&flagOrganization, "organization", "", "Organization ID (required)")
+	cmdutil.AddOrganizationFlag(cmd, &flagOrg, "Organization ID")
 	cmd.Flags().StringVar(&flagKind, "kind", "", "Finding kind: MINOR_NONCONFORMITY, MAJOR_NONCONFORMITY, OBSERVATION, EXCEPTION (required)")
+	cmd.Flags().StringVar(&flagTitle, "title", "", "Finding title (required)")
 	cmd.Flags().StringVar(&flagDescription, "description", "", "Finding description")
 	cmd.Flags().StringVar(&flagSource, "source", "", "Finding source")
 	cmd.Flags().StringVar(&flagIdentifiedOn, "identified-on", "", "Date identified (RFC3339)")
@@ -189,8 +205,8 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&flagRiskID, "risk-id", "", "Associated risk ID")
 	cmd.Flags().StringVar(&flagEffectivenessChk, "effectiveness-check", "", "Effectiveness check")
 
-	_ = cmd.MarkFlagRequired("organization")
 	_ = cmd.MarkFlagRequired("kind")
+	_ = cmd.MarkFlagRequired("title")
 	_ = cmd.MarkFlagRequired("status")
 	_ = cmd.MarkFlagRequired("priority")
 

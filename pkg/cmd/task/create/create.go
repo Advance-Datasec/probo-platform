@@ -1,22 +1,29 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package create
 
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
@@ -25,7 +32,7 @@ import (
 )
 
 const createMutation = `
-mutation($input: CreateTaskInput!) {
+mutation TaskCreate($input: CreateTaskInput!) {
   createTask(input: $input) {
     taskEdge {
       node {
@@ -39,29 +46,114 @@ mutation($input: CreateTaskInput!) {
 }
 `
 
-type createResponse struct {
-	CreateTask struct {
-		TaskEdge struct {
-			Node struct {
-				ID       string `json:"id"`
-				Name     string `json:"name"`
-				State    string `json:"state"`
-				Priority string `json:"priority"`
-			} `json:"node"`
-		} `json:"taskEdge"`
-	} `json:"createTask"`
+type createEnvelope struct {
+	Data struct {
+		CreateTask struct {
+			TaskEdge struct {
+				Node struct {
+					ID       string `json:"id"`
+					Name     string `json:"name"`
+					State    string `json:"state"`
+					Priority string `json:"priority"`
+				} `json:"node"`
+			} `json:"taskEdge"`
+		} `json:"createTask"`
+	} `json:"data"`
+	Errors []graphQLError `json:"errors"`
+}
+
+const (
+	publishProviderLinear = "LINEAR"
+	publishProviderAsana  = "ASANA"
+)
+
+type (
+	graphQLError struct {
+		Message    string          `json:"message"`
+		Path       json.RawMessage `json:"path"`
+		Extensions json.RawMessage `json:"extensions"`
+	}
+
+	publishErrorExtensions struct {
+		Provider string `json:"provider"`
+	}
+)
+
+func graphQLErrorMessage(errs []graphQLError) string {
+	messages := make([]string, 0, len(errs))
+	for _, err := range errs {
+		if err.Message != "" {
+			messages = append(messages, err.Message)
+		}
+	}
+
+	return strings.Join(messages, "; ")
+}
+
+func publishFailureLabel(errs []graphQLError) string {
+	sawLinear, sawAsana, sawLinkTask := publishErrorSources(errs)
+
+	switch {
+	case sawLinear && sawAsana:
+		return "Linear and Asana publish failed"
+	case sawLinear:
+		return "Linear publish failed"
+	case sawAsana:
+		return "Asana publish failed"
+	case sawLinkTask:
+		return "linkTask publish failed"
+	default:
+		return "External publish failed"
+	}
+}
+
+func publishErrorSources(errs []graphQLError) (linear bool, asana bool, linkTask bool) {
+	for _, graphErr := range errs {
+		switch publishErrorProvider(graphErr.Extensions) {
+		case publishProviderLinear:
+			linear = true
+		case publishProviderAsana:
+			asana = true
+		}
+
+		haystack := strings.ToLower(graphErr.Message + " " + string(graphErr.Path))
+		if strings.Contains(haystack, "linktask") {
+			linkTask = true
+		}
+	}
+
+	return linear, asana, linkTask
+}
+
+func publishErrorProvider(extensions json.RawMessage) string {
+	if len(extensions) == 0 {
+		return ""
+	}
+
+	var parsed publishErrorExtensions
+	if err := json.Unmarshal(extensions, &parsed); err != nil {
+		return ""
+	}
+
+	return parsed.Provider
 }
 
 func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 	var (
-		flagOrg          string
-		flagName         string
-		flagDescription  string
-		flagPriority     string
-		flagMeasure      string
-		flagTimeEstimate string
-		flagAssignedTo   string
-		flagDeadline     string
+		flagOrg                string
+		flagName               string
+		flagContent            string
+		flagState              string
+		flagPriority           string
+		flagInternalControls   []string
+		flagTimeEstimate       string
+		flagAssignedTo         string
+		flagDeadline           string
+		flagRecurrenceInterval string
+		flagLinearTeam         string
+		flagNoLinearTeam       bool
+		flagAsanaProject       string
+		flagNoAsanaProject     bool
 	)
 
 	cmd := &cobra.Command{
@@ -91,12 +183,9 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 				cmdutil.TokenRefreshOption(cfg, host, hc),
 			)
 
-			if flagOrg == "" {
-				flagOrg = hc.Organization
-			}
-
-			if flagOrg == "" {
-				return fmt.Errorf("organization is required; pass --org or set a default with 'prb auth login'")
+			flagOrg, err = cmdutil.ResolveOrganization(flagOrg, hc.Organization)
+			if err != nil {
+				return err
 			}
 
 			if f.IOStreams.IsInteractive() {
@@ -131,21 +220,48 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("name is required; pass --name or run interactively")
 			}
 
+			if flagPriority == "" {
+				return fmt.Errorf("priority is required; pass --priority or run interactively")
+			}
+
+			if err := cmdutil.ValidateEnum("priority", flagPriority, cmdutil.TaskPriorities()); err != nil {
+				return err
+			}
+
 			input := map[string]any{
 				"organizationId": flagOrg,
 				"name":           flagName,
+				"priority":       flagPriority,
 			}
 
-			if flagDescription != "" {
-				input["description"] = flagDescription
+			if flagContent != "" {
+				content, err := cmdutil.CLIContent(flagContent)
+				if err != nil {
+					return fmt.Errorf("cannot read content: %w", err)
+				}
+
+				input["content"] = content
 			}
 
-			if flagPriority != "" {
-				input["priority"] = flagPriority
+			if flagState != "" {
+				if err := cmdutil.ValidateEnum("state", flagState, cmdutil.TaskStates()); err != nil {
+					return err
+				}
+
+				input["state"] = flagState
 			}
 
-			if flagMeasure != "" {
-				input["measureId"] = flagMeasure
+			if len(flagInternalControls) > 0 {
+				internalControlIDs := make([]string, 0, len(flagInternalControls))
+				for _, internalControlID := range flagInternalControls {
+					if internalControlID != "" {
+						internalControlIDs = append(internalControlIDs, internalControlID)
+					}
+				}
+
+				if len(internalControlIDs) > 0 {
+					input["internalControlIds"] = internalControlIDs
+				}
 			}
 
 			if flagTimeEstimate != "" {
@@ -160,7 +276,35 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 				input["deadline"] = flagDeadline
 			}
 
-			data, err := client.Do(
+			if flagRecurrenceInterval != "" {
+				if flagDeadline == "" {
+					return fmt.Errorf("--recurrence-interval requires --deadline")
+				}
+
+				input["recurrenceInterval"] = flagRecurrenceInterval
+			}
+
+			if flagNoLinearTeam && flagLinearTeam != "" {
+				return fmt.Errorf("--no-linear-team and --linear-team cannot be used together")
+			}
+
+			if flagNoLinearTeam {
+				input["linearTeamId"] = nil
+			} else if flagLinearTeam != "" {
+				input["linearTeamId"] = flagLinearTeam
+			}
+
+			if flagNoAsanaProject && flagAsanaProject != "" {
+				return fmt.Errorf("--no-asana-project and --asana-project cannot be used together")
+			}
+
+			if flagNoAsanaProject {
+				input["asanaProjectId"] = nil
+			} else if flagAsanaProject != "" {
+				input["asanaProjectId"] = flagAsanaProject
+			}
+
+			raw, err := client.DoRaw(
 				createMutation,
 				map[string]any{"input": input},
 			)
@@ -168,31 +312,54 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
-			var resp createResponse
-			if err := json.Unmarshal(data, &resp); err != nil {
+			var resp createEnvelope
+			if err := json.Unmarshal(raw, &resp); err != nil {
 				return fmt.Errorf("cannot parse response: %w", err)
 			}
 
-			t := resp.CreateTask.TaskEdge.Node
+			task := resp.Data.CreateTask.TaskEdge.Node
+			if task.ID == "" {
+				if len(resp.Errors) > 0 {
+					return fmt.Errorf("GraphQL error: %s", graphQLErrorMessage(resp.Errors))
+				}
+
+				return fmt.Errorf("cannot parse response: task was not returned")
+			}
+
 			_, _ = fmt.Fprintf(
 				f.IOStreams.Out,
 				"Created task %s (%s)\n",
-				t.ID,
-				t.Name,
+				task.ID,
+				task.Name,
 			)
+
+			if len(resp.Errors) > 0 {
+				_, _ = fmt.Fprintf(
+					f.IOStreams.ErrOut,
+					"%s: %s\n",
+					publishFailureLabel(resp.Errors),
+					graphQLErrorMessage(resp.Errors),
+				)
+			}
 
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&flagOrg, "org", "", "Organization ID")
+	cmdutil.AddOrganizationFlag(cmd, &flagOrg, "Organization ID")
 	cmd.Flags().StringVar(&flagName, "name", "", "Task name (required)")
-	cmd.Flags().StringVar(&flagDescription, "description", "", "Task description")
-	cmd.Flags().StringVar(&flagPriority, "priority", "", "Task priority: URGENT, HIGH, MEDIUM, LOW")
-	cmd.Flags().StringVar(&flagMeasure, "measure", "", "Measure ID")
+	cmd.Flags().StringVar(&flagContent, "content", "", "Task content as markdown or ProseMirror JSON. Images and links to /api/files/v1/{id} are kept")
+	cmd.Flags().StringVar(&flagState, "state", "", cmdutil.TaskStateFlagUsage())
+	cmd.Flags().StringVar(&flagPriority, "priority", "", cmdutil.TaskPriorityFlagUsage()+" (required)")
+	cmd.Flags().StringArrayVar(&flagInternalControls, "internal-control", nil, "Internal control ID (repeatable)")
 	cmd.Flags().StringVar(&flagTimeEstimate, "time-estimate", "", "Time estimate")
 	cmd.Flags().StringVar(&flagAssignedTo, "assigned-to", "", "Assigned profile ID")
 	cmd.Flags().StringVar(&flagDeadline, "deadline", "", "Deadline")
+	cmd.Flags().StringVar(&flagRecurrenceInterval, "recurrence-interval", "", "Recurrence interval as an ISO-8601 duration, e.g. P7D, P1M or P1Y (requires --deadline). The next task is created when the deadline passes")
+	cmd.Flags().StringVar(&flagLinearTeam, "linear-team", "", "Linear team ID. Omit to use the organization's default Linear team. If the Linear publish attempt fails after the task is created, the task still exists")
+	cmd.Flags().BoolVar(&flagNoLinearTeam, "no-linear-team", false, "Create the task with no Linear team")
+	cmd.Flags().StringVar(&flagAsanaProject, "asana-project", "", "Asana project GID. Omit to use the organization's default Asana project. A Linear publish takes precedence when both would publish")
+	cmd.Flags().BoolVar(&flagNoAsanaProject, "no-asana-project", false, "Create the task with no Asana project")
 
 	return cmd
 }

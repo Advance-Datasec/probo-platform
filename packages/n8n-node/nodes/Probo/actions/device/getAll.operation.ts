@@ -1,0 +1,255 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import type { INodeProperties, IExecuteFunctions, INodeExecutionData, IDataObject } from 'n8n-workflow';
+import { organizationLocator } from '../../locators';
+import { proboApiRequestAllItems, executionItems } from '../../GenericFunctions';
+
+export const description: INodeProperties[] = [
+	organizationLocator({
+		resource: ['device'],
+		operation: ['getAll'],
+	}),
+	{
+		displayName: 'Return All',
+		name: 'returnAll',
+		type: 'boolean',
+		displayOptions: {
+			show: {
+				resource: ['device'],
+				operation: ['getAll'],
+			},
+		},
+		default: false,
+		description: 'Whether to return all results or only up to a given limit',
+	},
+	{
+		displayName: 'Limit',
+		name: 'limit',
+		type: 'number',
+		displayOptions: {
+			show: {
+				resource: ['device'],
+				operation: ['getAll'],
+				returnAll: [false],
+			},
+		},
+		typeOptions: {
+			minValue: 1,
+		},
+		default: 50,
+		description: 'Max number of results to return',
+	},
+	{
+		displayName: 'Options',
+		name: 'options',
+		type: 'collection',
+		placeholder: 'Add Option',
+		default: {},
+		displayOptions: {
+			show: {
+				resource: ['device'],
+				operation: ['getAll'],
+			},
+		},
+		options: [
+			{
+				displayName: 'Agent Versions',
+				name: 'agentVersions',
+				type: 'string',
+				default: '',
+				description: 'Only devices reporting one of these agent versions. Separate versions with commas.',
+			},
+			{
+				displayName: 'Include Owner',
+				name: 'includeOwner',
+				type: 'boolean',
+				default: false,
+				description: 'Whether to include owner details in the response',
+			},
+			{
+				displayName: 'Include Postures',
+				name: 'includePostures',
+				type: 'boolean',
+				default: false,
+				description: 'Whether to include latest posture check results in the response',
+			},
+			{
+				displayName: 'Platforms',
+				name: 'platforms',
+				type: 'multiOptions',
+				options: [
+					{ name: 'FreeBSD', value: 'FREEBSD' },
+					{ name: 'Linux', value: 'LINUX' },
+					{ name: 'macOS', value: 'DARWIN' },
+					{ name: 'Windows', value: 'WINDOWS' },
+				],
+				default: [],
+				description: 'Only devices on one of these platforms. Devices that have not reported a platform are excluded.',
+			},
+			{
+				displayName: 'Query',
+				name: 'query',
+				type: 'string',
+				default: '',
+				description: 'Search devices by owner name. Each word is a prefix match, and every word must match.',
+			},
+			{
+				displayName: 'States',
+				name: 'states',
+				type: 'multiOptions',
+				options: [
+					{ name: 'Active', value: 'ACTIVE' },
+					{ name: 'Pending', value: 'PENDING' },
+					{ name: 'Revoked', value: 'REVOKED' },
+				],
+				default: [],
+				description: 'Only devices in one of these states',
+			},
+			{
+				displayName: 'Warnings Only',
+				name: 'hasPostureWarning',
+				type: 'boolean',
+				default: false,
+				description: 'Whether to keep only devices whose latest posture for some check is FAIL or UNKNOWN',
+			},
+		],
+	},
+];
+
+export async function execute(
+	this: IExecuteFunctions,
+	itemIndex: number,
+): Promise<INodeExecutionData[]> {
+	const organizationId = this.getNodeParameter('organizationId', itemIndex, '', { extractValue: true }) as string;
+	const returnAll = this.getNodeParameter('returnAll', itemIndex) as boolean;
+	const limit = this.getNodeParameter('limit', itemIndex, 50) as number;
+	const options = this.getNodeParameter('options', itemIndex, {}) as {
+		includeOwner?: boolean;
+		includePostures?: boolean;
+		query?: string;
+		states?: string[];
+		platforms?: string[];
+		agentVersions?: string;
+		hasPostureWarning?: boolean;
+	};
+
+	const ownerFragment = options.includeOwner
+		? `owner {
+			id
+			fullName
+			emailAddress
+		}`
+		: '';
+
+	const latestPosturesFragment = options.includePostures
+		? `latestPostures {
+			id
+			checkKey
+			status
+			value {
+				kind
+				text
+				number
+			}
+			version
+			agentVersion
+			observedAt
+		}`
+		: '';
+
+	const variables: IDataObject = { organizationId };
+	const filter: IDataObject = {};
+	if (options.query) {
+		filter.query = options.query;
+	}
+	if (options.states?.length) {
+		filter.states = options.states;
+	}
+	if (options.platforms?.length) {
+		filter.platforms = options.platforms;
+	}
+	const agentVersions = options.agentVersions
+		?.split(',')
+		.map(version => version.trim())
+		.filter(version => version.length > 0);
+	if (agentVersions?.length) {
+		filter.agentVersions = agentVersions;
+	}
+	if (options.hasPostureWarning) {
+		filter.hasPostureWarning = true;
+	}
+	if (Object.keys(filter).length > 0) {
+		variables.filter = filter;
+	}
+
+	const query = `
+		query GetDevices(
+			$organizationId: ID!
+			$first: Int
+			$after: CursorKey
+			$filter: DeviceFilter
+		) {
+			node(id: $organizationId) {
+				... on Organization {
+					devices(first: $first, after: $after, filter: $filter) {
+						edges {
+							node {
+								id
+								state
+								hostname
+								platform
+								osVersion
+								agentVersion
+								serialNumber
+								lastSeenAt
+								enrolledAt
+								revokedAt
+								createdAt
+								updatedAt
+								${ownerFragment}
+								${latestPosturesFragment}
+							}
+						}
+						pageInfo {
+							hasNextPage
+							endCursor
+						}
+					}
+				}
+			}
+		}
+	`;
+
+	const devices = await proboApiRequestAllItems.call(
+		this,
+		query,
+		variables,
+		(response) => {
+			const data = response?.data as IDataObject | undefined;
+			const node = data?.node as IDataObject | undefined;
+			return node?.devices as IDataObject | undefined;
+		},
+		returnAll,
+		limit,
+	);
+
+	return executionItems(devices, itemIndex);
+}

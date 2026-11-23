@@ -1,150 +1,187 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
+import { PlusIcon } from "@phosphor-icons/react";
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
-import {
-  IconMagnifyingGlass,
-  Input,
-} from "@probo/ui";
+import { ButtonLink } from "@probo/ui/src/v2/Button/ButtonLink";
+import { Callout } from "@probo/ui/src/v2/Callout/Callout";
+import { Card } from "@probo/ui/src/v2/Card/Card";
+import { List } from "@probo/ui/src/v2/List/List";
+import { Heading } from "@probo/ui/src/v2/typography/Heading";
+import { Text } from "@probo/ui/src/v2/typography/Text";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { graphql, type PreloadedQuery, usePreloadedQuery } from "react-relay";
 
 import type { MembershipsPageQuery } from "#/__generated__/iam/MembershipsPageQuery.graphql";
+import { SearchField } from "#/components/SearchField/SearchField";
 
-import { InvitingOrganizationCard } from "./_components/InvitingOrganizationCard";
-import { MembershipCard } from "./_components/MembershipCard";
+import { InvitingOrganizationListItem } from "./_components/InvitingOrganizationListItem";
+import { OrganizationListItem } from "./_components/OrganizationListItem";
 
 export const membershipsPageQuery = graphql`
-  query MembershipsPageQuery {
+  query MembershipsPageQuery @throwOnFieldError {
+    signUpEnabled
     viewer @required(action: THROW) {
       profiles(
         first: 1000
         orderBy: { direction: ASC, field: ORGANIZATION_NAME }
-        filter: { state: ACTIVE }
+        filter: { states: [ACTIVE] }
       )
         @connection(key: "MembershipsPage_profiles")
         @required(action: THROW) {
         edges @required(action: THROW) {
           node {
             id
-            ...MembershipCardFragment
+            membership @required(action: THROW) {
+              role
+            }
+            ...OrganizationListItem_profile
             organization @required(action: THROW) {
               name
-              ...MembershipCard_organizationFragment
             }
           }
         }
       }
       invitingOrganizations {
         id
-        ...InvitingOrganizationCardFragment
+        ...InvitingOrganizationListItem_organization
       }
     }
   }
 `;
 
-export function MembershipsPage(props: {
+interface MembershipsPageProps {
   queryRef: PreloadedQuery<MembershipsPageQuery>;
-}) {
-  const { __ } = useTranslate();
+  onAccepted: () => void;
+}
+
+export function MembershipsPage({ queryRef, onAccepted }: MembershipsPageProps) {
+  const { t } = useTranslation();
   const [search, setSearch] = useState("");
 
-  usePageTitle(__("Select an organization"));
+  usePageTitle(t("membershipsPage.pageTitle"));
 
-  const { queryRef } = props;
   const {
+    signUpEnabled,
     viewer: {
       profiles: { edges: initialProfiles },
       invitingOrganizations,
     },
   } = usePreloadedQuery<MembershipsPageQuery>(membershipsPageQuery, queryRef);
 
+  // Mirrors the server rule: with signup disabled, only owners of an existing
+  // organization may create another one.
+  const canCreateOrganization
+    = signUpEnabled
+      || initialProfiles.some(({ node }) => node.membership.role === "OWNER");
+  const hasNoAccess
+    = !signUpEnabled
+      && initialProfiles.length === 0
+      && invitingOrganizations.length === 0;
+
   const profiles = useMemo(() => {
-    if (!search.trim()) {
+    const query = search.trim().toLowerCase();
+    if (!query) {
       return initialProfiles;
     }
+
     return initialProfiles.filter(({ node }) =>
-      node.organization.name.toLowerCase().includes(search.toLowerCase()),
+      node.organization.name.toLowerCase().includes(query),
     );
   }, [initialProfiles, search]);
 
   return (
-    <>
-      <div className="space-y-6 w-full py-6">
-        <h1 className="text-3xl font-bold text-center">
-          {__("Select an organization")}
-        </h1>
-        <div className="space-y-4 w-full">
-          {invitingOrganizations.length > 0 && (
-            <div className="space-y-3">
-              <h2 className="text-xl font-semibold">
-                {__("Pending invitations")}
-              </h2>
-              {invitingOrganizations.map(organization => (
-                <InvitingOrganizationCard key={organization.id} fKey={organization} />
-              ))}
-            </div>
-          )}
-          {initialProfiles.length > 0 && (
-            <div className="space-y-3">
-              <h2 className="text-xl font-semibold">
-                {__("Your organizations")}
-              </h2>
-              <div className="w-full">
-                <Input
-                  icon={IconMagnifyingGlass}
-                  placeholder={__("Search organizations...")}
-                  value={search}
-                  onValueChange={setSearch}
-                />
-              </div>
+    <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-8 py-8">
+      <Heading level={1} size={6} weight="medium" highContrast>
+        {t("membershipsPage.title")}
+      </Heading>
+
+      {invitingOrganizations.length > 0 && (
+        <List>
+          {invitingOrganizations.map(organization => (
+            <InvitingOrganizationListItem
+              key={organization.id}
+              organizationKey={organization}
+              onAccepted={onAccepted}
+            />
+          ))}
+        </List>
+      )}
+
+      {initialProfiles.length > 0
+        ? (
+            <>
+              <SearchField
+                size={2}
+                placeholder={t("membershipsPage.searchPlaceholder")}
+                aria-label={t("membershipsPage.searchPlaceholder")}
+                value={search}
+                onValueChange={setSearch}
+              />
               {profiles.length === 0
                 ? (
-                    <div className="text-center text-txt-secondary py-4">
-                      {__("No organizations found")}
-                    </div>
+                    <Text size={2} color="faint">
+                      {t("membershipsPage.emptySearch")}
+                    </Text>
                   )
                 : (
-                    profiles.map(({ node }) => (
-                      <MembershipCard
-                        key={node.id}
-                        fKey={node}
-                        organizationFragmentRef={node.organization}
-                      />
-                    ))
+                    <List>
+                      {profiles.map(({ node }) => (
+                        <OrganizationListItem key={node.id} profileKey={node} />
+                      ))}
+                    </List>
                   )}
+            </>
+          )
+        : hasNoAccess
+          ? (
+              <Callout color="neutral" variant="soft">
+                {t("noOrganizationAccess.description")}
+              </Callout>
+            )
+          : null}
+
+      {canCreateOrganization && (
+        <Card padding={2} variant="soft">
+          <div className="flex flex-col gap-3">
+            <Text size={2} weight="medium" color="neutral" highContrast>
+              {t("membershipsPage.createOrganization.title")}
+            </Text>
+            <Text size={2} color="faint">
+              {t("membershipsPage.createOrganization.description")}
+            </Text>
+            <div>
+              <ButtonLink
+                to="/organizations/new"
+                size={2}
+                variant="soft"
+                color="neutral"
+                iconStart={<PlusIcon />}
+              >
+                {t("membershipsPage.createOrganization.action")}
+              </ButtonLink>
             </div>
-          )}
-          {/* <Card padded>
-            <h2 className="text-xl font-semibold mb-1">
-              {__("Create an organization")}
-            </h2>
-            <p className="text-txt-tertiary mb-4">
-              {__("Add a new organization to your account")}
-            </p>
-            <Button
-              to="/organizations/new"
-              variant="quaternary"
-              icon={IconPlusLarge}
-              className="w-full"
-            >
-              {__("Create organization")}
-            </Button>
-          </Card> */}
-        </div>
-      </div>
-    </>
+          </div>
+        </Card>
+      )}
+    </main>
   );
 }

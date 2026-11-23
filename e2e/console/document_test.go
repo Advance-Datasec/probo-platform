@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_test
 
@@ -102,11 +108,6 @@ func TestDocument_Create(t *testing.T) {
 						documentEdge {
 							node {
 								id
-							}
-						}
-						documentVersionEdge {
-							node {
-								id
 								title
 								documentType
 							}
@@ -124,16 +125,11 @@ func TestDocument_Create(t *testing.T) {
 				CreateDocument struct {
 					DocumentEdge struct {
 						Node struct {
-							ID string `json:"id"`
-						} `json:"node"`
-					} `json:"documentEdge"`
-					DocumentVersionEdge struct {
-						Node struct {
 							ID           string `json:"id"`
 							Title        string `json:"title"`
 							DocumentType string `json:"documentType"`
 						} `json:"node"`
-					} `json:"documentVersionEdge"`
+					} `json:"documentEdge"`
 				} `json:"createDocument"`
 			}
 
@@ -143,13 +139,11 @@ func TestDocument_Create(t *testing.T) {
 			node := result.CreateDocument.DocumentEdge.Node
 			assert.NotEmpty(t, node.ID)
 
-			versionNode := result.CreateDocument.DocumentVersionEdge.Node
-
 			switch tt.assertField {
 			case "versionTitle":
-				assert.Equal(t, tt.assertValue, versionNode.Title)
+				assert.Equal(t, tt.assertValue, node.Title)
 			case "documentType":
-				assert.Equal(t, tt.assertValue, versionNode.DocumentType)
+				assert.Equal(t, tt.assertValue, node.DocumentType)
 			}
 		})
 	}
@@ -302,7 +296,7 @@ func TestDocument_Update(t *testing.T) {
 			query := `
 				mutation UpdateDocument($input: UpdateDocumentInput!) {
 					updateDocument(input: $input) {
-						documentVersion {
+						document {
 							id
 							title
 						}
@@ -312,10 +306,10 @@ func TestDocument_Update(t *testing.T) {
 
 			var result struct {
 				UpdateDocument struct {
-					DocumentVersion struct {
+					Document struct {
 						ID    string `json:"id"`
 						Title string `json:"title"`
-					} `json:"documentVersion"`
+					} `json:"document"`
 				} `json:"updateDocument"`
 			}
 
@@ -326,7 +320,7 @@ func TestDocument_Update(t *testing.T) {
 				},
 			}, &result)
 			require.NoError(t, err)
-			assert.Equal(t, "Updated Document Title", result.UpdateDocument.DocumentVersion.Title)
+			assert.Equal(t, "Updated Document Title", result.UpdateDocument.Document.Title)
 		},
 	)
 }
@@ -517,6 +511,102 @@ func TestDocument_List(t *testing.T) {
 	assert.GreaterOrEqual(t, result.Node.Documents.TotalCount, 3)
 }
 
+func TestDocument_ListByTitle(t *testing.T) {
+	t.Parallel()
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+
+	cryptographicAccessID := factory.NewDocument(owner).
+		WithTitle("Cryptographic Access Policy").
+		Create()
+	cryptographicRetentionID := factory.NewDocument(owner).
+		WithTitle("Cryptographic Retention Procedure").
+		Create()
+	vendorAccessID := factory.NewDocument(owner).
+		WithTitle("Vendor Access Policy").
+		Create()
+
+	const query = `
+		query GetDocuments($id: ID!, $query: String) {
+			node(id: $id) {
+				... on Organization {
+					documents(first: 10, filter: { query: $query }) {
+						edges {
+							node {
+								id
+							}
+						}
+						totalCount
+					}
+				}
+			}
+		}
+	`
+
+	tests := []struct {
+		name        string
+		searchQuery string
+		expectedIDs []string
+	}{
+		{
+			name:        "matches a title prefix",
+			searchQuery: "Crypto",
+			expectedIDs: []string{cryptographicAccessID, cryptographicRetentionID},
+		},
+		{
+			name:        "matches every word prefix",
+			searchQuery: "Crypto Acc",
+			expectedIDs: []string{cryptographicAccessID},
+		},
+		{
+			name:        "matches a complete title word",
+			searchQuery: "Vendor",
+			expectedIDs: []string{vendorAccessID},
+		},
+		{
+			name:        "returns no unrelated documents",
+			searchQuery: "Incident",
+			expectedIDs: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var result struct {
+				Node struct {
+					Documents struct {
+						Edges []struct {
+							Node struct {
+								ID string `json:"id"`
+							} `json:"node"`
+						} `json:"edges"`
+						TotalCount int `json:"totalCount"`
+					} `json:"documents"`
+				} `json:"node"`
+			}
+
+			err := owner.Execute(
+				query,
+				map[string]any{
+					"id":    owner.GetOrganizationID().String(),
+					"query": tt.searchQuery,
+				},
+				&result,
+			)
+			require.NoError(t, err)
+
+			actualIDs := make([]string, len(result.Node.Documents.Edges))
+			for i, edge := range result.Node.Documents.Edges {
+				actualIDs[i] = edge.Node.ID
+			}
+
+			assert.ElementsMatch(t, tt.expectedIDs, actualIDs)
+			assert.Equal(t, len(tt.expectedIDs), result.Node.Documents.TotalCount)
+		})
+	}
+}
+
 func TestDocument_Query(t *testing.T) {
 	t.Parallel()
 	owner := testutil.NewClient(t, testutil.RoleOwner)
@@ -614,9 +704,6 @@ func TestDocument_Timestamps(t *testing.T) {
 		initialCreatedAt := getResult.Node.CreatedAt
 		initialUpdatedAt := getResult.Node.UpdatedAt
 
-		// Wait long enough for timestamp to change (database may have second precision)
-		time.Sleep(1100 * time.Millisecond)
-
 		updateQuery := `
 			mutation UpdateDocument($input: UpdateDocumentInput!) {
 				updateDocument(input: $input) {
@@ -639,8 +726,8 @@ func TestDocument_Timestamps(t *testing.T) {
 
 		err = owner.Execute(updateQuery, map[string]any{
 			"input": map[string]any{
-				"id":                    documentID,
-				"trustCenterVisibility": "PRIVATE",
+				"id":             documentID,
+				"classification": "CONFIDENTIAL",
 			},
 		}, &updateResult)
 		require.NoError(t, err)
@@ -685,266 +772,6 @@ func TestDocument_SubResolvers(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, owner.GetOrganizationID().String(), result.Node.Organization.ID)
 		assert.NotEmpty(t, result.Node.Organization.Name)
-	})
-}
-
-func TestDocument_RBAC(t *testing.T) {
-	t.Parallel()
-
-	t.Run("create", func(t *testing.T) {
-		t.Run("owner can create", func(t *testing.T) {
-			owner := testutil.NewClient(t, testutil.RoleOwner)
-
-			_, err := owner.Do(`
-				mutation CreateDocument($input: CreateDocumentInput!) {
-					createDocument(input: $input) {
-						documentEdge { node { id } }
-					}
-				}
-			`, map[string]any{
-				"input": map[string]any{
-					"organizationId": owner.GetOrganizationID().String(),
-					"title":          "RBAC Test Document",
-					"content":        testutil.ProseMirrorTextDoc("Test content"),
-					"documentType":   "POLICY",
-					"classification": "INTERNAL",
-				},
-			})
-			require.NoError(t, err, "owner should be able to create document")
-		})
-
-		t.Run("admin can create", func(t *testing.T) {
-			owner := testutil.NewClient(t, testutil.RoleOwner)
-			admin := testutil.NewClientInOrg(t, testutil.RoleAdmin, owner)
-
-			_, err := admin.Do(`
-				mutation CreateDocument($input: CreateDocumentInput!) {
-					createDocument(input: $input) {
-						documentEdge { node { id } }
-					}
-				}
-			`, map[string]any{
-				"input": map[string]any{
-					"organizationId": admin.GetOrganizationID().String(),
-					"title":          "RBAC Test Document",
-					"content":        testutil.ProseMirrorTextDoc("Test content"),
-					"documentType":   "POLICY",
-					"classification": "INTERNAL",
-				},
-			})
-			require.NoError(t, err, "admin should be able to create document")
-		})
-
-		t.Run("viewer cannot create", func(t *testing.T) {
-			owner := testutil.NewClient(t, testutil.RoleOwner)
-			viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
-
-			_, err := viewer.Do(`
-				mutation CreateDocument($input: CreateDocumentInput!) {
-					createDocument(input: $input) {
-						documentEdge { node { id } }
-					}
-				}
-			`, map[string]any{
-				"input": map[string]any{
-					"organizationId": viewer.GetOrganizationID().String(),
-					"title":          "RBAC Test Document",
-					"content":        testutil.ProseMirrorTextDoc("Test content"),
-					"documentType":   "POLICY",
-					"classification": "INTERNAL",
-				},
-			})
-			testutil.RequireForbiddenError(t, err, "viewer should not be able to create document")
-		})
-	})
-
-	t.Run("update", func(t *testing.T) {
-		t.Run("owner can update", func(t *testing.T) {
-			owner := testutil.NewClient(t, testutil.RoleOwner)
-
-			documentID := factory.NewDocument(owner).WithTitle("RBAC Update Test").Create()
-
-			_, err := owner.Do(`
-				mutation UpdateDocument($input: UpdateDocumentInput!) {
-					updateDocument(input: $input) {
-						document { id }
-					}
-				}
-			`, map[string]any{
-				"input": map[string]any{
-					"id":                    documentID,
-					"trustCenterVisibility": "PRIVATE",
-				},
-			})
-			require.NoError(t, err, "owner should be able to update document")
-		})
-
-		t.Run("admin can update", func(t *testing.T) {
-			owner := testutil.NewClient(t, testutil.RoleOwner)
-			admin := testutil.NewClientInOrg(t, testutil.RoleAdmin, owner)
-
-			documentID := factory.NewDocument(owner).WithTitle("RBAC Update Test").Create()
-
-			_, err := admin.Do(`
-				mutation UpdateDocument($input: UpdateDocumentInput!) {
-					updateDocument(input: $input) {
-						document { id }
-					}
-				}
-			`, map[string]any{
-				"input": map[string]any{
-					"id":                    documentID,
-					"trustCenterVisibility": "PRIVATE",
-				},
-			})
-			require.NoError(t, err, "admin should be able to update document")
-		})
-
-		t.Run("viewer cannot update", func(t *testing.T) {
-			owner := testutil.NewClient(t, testutil.RoleOwner)
-			viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
-
-			documentID := factory.NewDocument(owner).WithTitle("RBAC Update Test").Create()
-
-			_, err := viewer.Do(`
-				mutation UpdateDocument($input: UpdateDocumentInput!) {
-					updateDocument(input: $input) {
-						document { id }
-					}
-				}
-			`, map[string]any{
-				"input": map[string]any{
-					"id":                    documentID,
-					"trustCenterVisibility": "PRIVATE",
-				},
-			})
-			testutil.RequireForbiddenError(t, err, "viewer should not be able to update document")
-		})
-	})
-
-	t.Run("delete", func(t *testing.T) {
-		t.Run("owner can delete", func(t *testing.T) {
-			owner := testutil.NewClient(t, testutil.RoleOwner)
-
-			documentID := factory.NewDocument(owner).WithTitle("RBAC Delete Test").Create()
-
-			_, err := owner.Do(`
-				mutation DeleteDocument($input: DeleteDocumentInput!) {
-					deleteDocument(input: $input) {
-						deletedDocumentId
-					}
-				}
-			`, map[string]any{
-				"input": map[string]any{"documentId": documentID},
-			})
-			require.NoError(t, err, "owner should be able to delete document")
-		})
-
-		t.Run("admin can delete", func(t *testing.T) {
-			owner := testutil.NewClient(t, testutil.RoleOwner)
-			admin := testutil.NewClientInOrg(t, testutil.RoleAdmin, owner)
-
-			documentID := factory.NewDocument(owner).WithTitle("RBAC Delete Test").Create()
-
-			_, err := admin.Do(`
-				mutation DeleteDocument($input: DeleteDocumentInput!) {
-					deleteDocument(input: $input) {
-						deletedDocumentId
-					}
-				}
-			`, map[string]any{
-				"input": map[string]any{"documentId": documentID},
-			})
-			require.NoError(t, err, "admin should be able to delete document")
-		})
-
-		t.Run("viewer cannot delete", func(t *testing.T) {
-			owner := testutil.NewClient(t, testutil.RoleOwner)
-			viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
-
-			documentID := factory.NewDocument(owner).WithTitle("RBAC Delete Test").Create()
-
-			_, err := viewer.Do(`
-				mutation DeleteDocument($input: DeleteDocumentInput!) {
-					deleteDocument(input: $input) {
-						deletedDocumentId
-					}
-				}
-			`, map[string]any{
-				"input": map[string]any{"documentId": documentID},
-			})
-			testutil.RequireForbiddenError(t, err, "viewer should not be able to delete document")
-		})
-	})
-
-	t.Run("read", func(t *testing.T) {
-		t.Run("owner can read", func(t *testing.T) {
-			owner := testutil.NewClient(t, testutil.RoleOwner)
-
-			documentID := factory.NewDocument(owner).WithTitle("RBAC Read Test").Create()
-
-			var result struct {
-				Node *struct {
-					ID string `json:"id"`
-				} `json:"node"`
-			}
-
-			err := owner.Execute(`
-				query($id: ID!) {
-					node(id: $id) {
-						... on Document { id }
-					}
-				}
-			`, map[string]any{"id": documentID}, &result)
-			require.NoError(t, err, "owner should be able to read document")
-			require.NotNil(t, result.Node, "owner should receive document data")
-		})
-
-		t.Run("admin can read", func(t *testing.T) {
-			owner := testutil.NewClient(t, testutil.RoleOwner)
-			admin := testutil.NewClientInOrg(t, testutil.RoleAdmin, owner)
-
-			documentID := factory.NewDocument(owner).WithTitle("RBAC Read Test").Create()
-
-			var result struct {
-				Node *struct {
-					ID string `json:"id"`
-				} `json:"node"`
-			}
-
-			err := admin.Execute(`
-				query($id: ID!) {
-					node(id: $id) {
-						... on Document { id }
-					}
-				}
-			`, map[string]any{"id": documentID}, &result)
-			require.NoError(t, err, "admin should be able to read document")
-			require.NotNil(t, result.Node, "admin should receive document data")
-		})
-
-		t.Run("viewer can read", func(t *testing.T) {
-			owner := testutil.NewClient(t, testutil.RoleOwner)
-			viewer := testutil.NewClientInOrg(t, testutil.RoleViewer, owner)
-
-			documentID := factory.NewDocument(owner).WithTitle("RBAC Read Test").Create()
-
-			var result struct {
-				Node *struct {
-					ID string `json:"id"`
-				} `json:"node"`
-			}
-
-			err := viewer.Execute(`
-				query($id: ID!) {
-					node(id: $id) {
-						... on Document { id }
-					}
-				}
-			`, map[string]any{"id": documentID}, &result)
-			require.NoError(t, err, "viewer should be able to read document")
-			require.NotNil(t, result.Node, "viewer should receive document data")
-		})
 	})
 }
 
@@ -1011,7 +838,7 @@ func TestDocument_MaxLength_Validation(t *testing.T) {
 			}
 		`
 
-		longContent := testutil.ProseMirrorTextDoc(strings.Repeat("a", 50_001))
+		longContent := testutil.ProseMirrorTextDoc(strings.Repeat("a", 200_001))
 
 		_, err := owner.Do(query, map[string]any{
 			"input": map[string]any{
@@ -1038,7 +865,7 @@ func TestDocument_MaxLength_Validation(t *testing.T) {
 			}
 		`
 
-		longContent := testutil.ProseMirrorTextDoc(strings.Repeat("a", 50_001))
+		longContent := testutil.ProseMirrorTextDoc(strings.Repeat("a", 200_001))
 
 		_, err := owner.Do(query, map[string]any{
 			"input": map[string]any{
@@ -1191,110 +1018,6 @@ func TestDocument_Pagination(t *testing.T) {
 		require.NoError(t, err)
 
 		testutil.AssertLastPage(t, len(result.Node.Documents.Edges), result.Node.Documents.PageInfo, 2, true)
-	})
-}
-
-func TestDocument_TenantIsolation(t *testing.T) {
-	t.Parallel()
-
-	org1Owner := testutil.NewClient(t, testutil.RoleOwner)
-	org2Owner := testutil.NewClient(t, testutil.RoleOwner)
-
-	documentID := factory.NewDocument(org1Owner).WithTitle("Org1 Document").Create()
-
-	t.Run("cannot read document from another organization", func(t *testing.T) {
-		query := `
-			query($id: ID!) {
-				node(id: $id) {
-					... on Document {
-						id
-					}
-				}
-			}
-		`
-
-		var result struct {
-			Node *struct {
-				ID string `json:"id"`
-			} `json:"node"`
-		}
-
-		err := org2Owner.Execute(query, map[string]any{"id": documentID}, &result)
-		testutil.AssertNodeNotAccessible(t, err, result.Node == nil, "document")
-	})
-
-	t.Run("cannot update document from another organization", func(t *testing.T) {
-		query := `
-			mutation UpdateDocument($input: UpdateDocumentInput!) {
-				updateDocument(input: $input) {
-					document { id }
-				}
-			}
-		`
-
-		_, err := org2Owner.Do(query, map[string]any{
-			"input": map[string]any{
-				"id":                    documentID,
-				"trustCenterVisibility": "PRIVATE",
-			},
-		})
-		require.Error(t, err, "Should not be able to update document from another org")
-	})
-
-	t.Run("cannot delete document from another organization", func(t *testing.T) {
-		query := `
-			mutation DeleteDocument($input: DeleteDocumentInput!) {
-				deleteDocument(input: $input) {
-					deletedDocumentId
-				}
-			}
-		`
-
-		_, err := org2Owner.Do(query, map[string]any{
-			"input": map[string]any{
-				"documentId": documentID,
-			},
-		})
-		require.Error(t, err, "Should not be able to delete document from another org")
-	})
-
-	t.Run("cannot list documents from another organization", func(t *testing.T) {
-		query := `
-			query($id: ID!) {
-				node(id: $id) {
-					... on Organization {
-						documents(first: 100) {
-							edges {
-								node {
-									id
-								}
-							}
-						}
-					}
-				}
-			}
-		`
-
-		var result struct {
-			Node struct {
-				Documents struct {
-					Edges []struct {
-						Node struct {
-							ID string `json:"id"`
-						} `json:"node"`
-					} `json:"edges"`
-				} `json:"documents"`
-			} `json:"node"`
-		}
-
-		err := org2Owner.Execute(query, map[string]any{
-			"id": org1Owner.GetOrganizationID().String(),
-		}, &result)
-		if err == nil {
-			for _, edge := range result.Node.Documents.Edges {
-				assert.NotEqual(t, documentID, edge.Node.ID, "Should not see document from another org")
-			}
-		}
 	})
 }
 

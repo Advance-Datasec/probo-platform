@@ -8,9 +8,21 @@ enum RightsRequestType
         @goEnum(
             value: "go.probo.inc/probo/pkg/coredata.RightsRequestTypeDeletion"
         )
+    RECTIFICATION
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.RightsRequestTypeRectification"
+        )
     PORTABILITY
         @goEnum(
             value: "go.probo.inc/probo/pkg/coredata.RightsRequestTypePortability"
+        )
+    OBJECTION
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.RightsRequestTypeObjection"
+        )
+    COMPLAINT
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.RightsRequestTypeComplaint"
         )
 }
 
@@ -24,6 +36,10 @@ enum RightsRequestState
         )
     DONE
         @goEnum(value: "go.probo.inc/probo/pkg/coredata.RightsRequestStateDone")
+    REJECTED
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.RightsRequestStateRejected"
+        )
 }
 
 enum RightsRequestOrderField
@@ -54,7 +70,15 @@ input RightsRequestOrder
     field: RightsRequestOrderField!
 }
 
-type RightsRequest implements Node {
+type RightsRequest implements Node & Taggable {
+    tags(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: TagOrder
+    ): TagConnection! @goField(forceResolver: true)
+
     id: ID!
     organization: Organization! @goField(forceResolver: true)
     requestType: RightsRequestType!

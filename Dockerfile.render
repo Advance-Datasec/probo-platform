@@ -1,45 +1,49 @@
-# Stage 1: Build frontend assets
-FROM node:24-alpine AS frontend
-RUN apk add --no-cache findutils
-WORKDIR /app
-COPY package.json package-lock.json turbo.json relay.config.json ./
-COPY apps/ apps/
-COPY packages/ packages/
-# Relay compiler needs GraphQL schemas from the Go API.
-# Upstream split each API's schema into multiple files under graphql/;
-# the combined schema.graphql files are generated via merge-graphql-schema.sh.
-COPY pkg/server/api/connect/v1/graphql/ pkg/server/api/connect/v1/graphql/
-COPY pkg/server/api/console/v1/graphql/ pkg/server/api/console/v1/graphql/
-COPY pkg/server/api/trust/v1/graphql/   pkg/server/api/trust/v1/graphql/
-COPY contrib/merge-graphql-schema.sh    contrib/merge-graphql-schema.sh
-RUN sh contrib/merge-graphql-schema.sh pkg/server/api/connect/v1/schema.graphql pkg/server/api/connect/v1/graphql \
- && sh contrib/merge-graphql-schema.sh pkg/server/api/console/v1/schema.graphql pkg/server/api/console/v1/graphql \
- && sh contrib/merge-graphql-schema.sh pkg/server/api/trust/v1/schema.graphql   pkg/server/api/trust/v1/graphql
-RUN npm ci
-RUN npm run relay
-RUN npx turbo run build
+# Render build for the Govrly/Probo fork. Builds from source in three stages,
+# following upstream's release workflow (.github/workflows/release-probod.yaml).
 
-# Stage 2: Build Go binary
-FROM golang:1.26-alpine AS backend
+# Stage 1: frontend assets (console, compliance portal, employee portal, emails)
+FROM node:24-bookworm-slim AS frontend
+RUN npm install -g npm@^12.0.2
+WORKDIR /app
+COPY . .
+RUN npm ci
+RUN sh contrib/merge-graphql-schema.sh pkg/server/api/connect/v1/schema.graphql          pkg/server/api/connect/v1/graphql \
+ && sh contrib/merge-graphql-schema.sh pkg/server/api/console/v1/schema.graphql          pkg/server/api/console/v1/graphql \
+ && sh contrib/merge-graphql-schema.sh pkg/server/api/complianceportal/v1/schema.graphql pkg/server/api/complianceportal/v1/graphql
+RUN npm --workspace @probo/emails run build
+RUN npm run relay
+ENV NODE_ENV=production
+RUN npm --workspace @probo/console run build \
+ && npm --workspace @probo/compliance-portal run build \
+ && npm --workspace @probo/employee-portal run build
+
+# Stage 2: Go binaries
+FROM golang:1.27-alpine AS backend
 RUN apk add --no-cache git
-ENV GOPRIVATE=go.probo.inc
+ENV GOTOOLCHAIN=auto
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-# Overwrite with Docker-built frontend assets
-COPY --from=frontend /app/apps/console/dist apps/console/dist
-COPY --from=frontend /app/apps/trust/dist apps/trust/dist
-COPY --from=frontend /app/packages/emails/dist packages/emails/dist
-RUN go generate ./...
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-w -s -X 'main.version=dev' -X 'main.env=prod'" \
-    -o /probod ./cmd/probod
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-w -s" \
-    -o /probod-bootstrap ./cmd/probod-bootstrap
+COPY --from=frontend /app/apps/console/dist           apps/console/dist
+COPY --from=frontend /app/apps/compliance-portal/dist apps/compliance-portal/dist
+COPY --from=frontend /app/apps/employee-portal/dist   apps/employee-portal/dist
+COPY --from=frontend /app/packages/emails/dist        packages/emails/dist
+RUN go generate ./pkg/server/api/connect/v1 \
+ && go generate ./pkg/server/api/mcp/v1 \
+ && go generate ./pkg/server/api/console/v1 \
+ && go generate ./pkg/server/api/complianceportal/v1
+RUN VERSION="$(cat cmd/probod/VERSION)" \
+ && BOOTSTRAP_VERSION="$(cat cmd/probod-bootstrap/VERSION)" \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+      -ldflags="-w -s -X 'main.version=${VERSION}' -X 'main.env=prod'" \
+      -o /probod ./cmd/probod \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+      -ldflags="-w -s -X 'main.version=${BOOTSTRAP_VERSION}'" \
+      -o /probod-bootstrap ./cmd/probod-bootstrap
 
-# Stage 3: Runtime (Alpine — matches working Render pattern)
+# Stage 3: runtime. Alpine, binaries under /app owned by the runtime user:
+# Render's no-new-privileges policy breaks the upstream Ubuntu + setcap image.
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates openssl bash && \
     addgroup -g 1000 probo && \

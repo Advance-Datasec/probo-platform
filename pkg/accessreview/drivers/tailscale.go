@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -26,16 +32,23 @@ import (
 	"go.probo.inc/probo/pkg/coredata"
 )
 
-// tailscaleDefaultTailnet is the "-" shorthand Tailscale accepts in the
-// tailnet path segment; it resolves to the access token's own tailnet, so
-// the connector never needs to know the organization name up front.
-const tailscaleDefaultTailnet = "-"
+const (
+	// tailscaleDefaultTailnet is the "-" shorthand Tailscale accepts in the
+	// tailnet path segment; it resolves to the access token's own tailnet, so
+	// the connector never needs to know the organization name up front.
+	tailscaleDefaultTailnet = "-"
+
+	// Tailscale path elements joined onto the driver's base URL.
+	tailscaleTailnetSegment = "tailnet"
+	tailscaleUsersSegment   = "users"
+)
 
 // TailscaleDriver fetches tailnet users from the Tailscale API via Bearer
 // token-authenticated REST requests. It always targets the access token's
 // default tailnet, so no tailnet identifier is required.
 type TailscaleDriver struct {
 	httpClient *http.Client
+	baseURL    string
 }
 
 var _ Driver = (*TailscaleDriver)(nil)
@@ -55,9 +68,12 @@ type tailscaleUsersResponse struct {
 	Users []tailscaleUser `json:"users"`
 }
 
-func NewTailscaleDriver(httpClient *http.Client) *TailscaleDriver {
+// NewTailscaleDriver builds a driver against baseURL, the versioned Tailscale
+// API origin (e.g. https://api.tailscale.com/api/v2).
+func NewTailscaleDriver(httpClient *http.Client, baseURL string) *TailscaleDriver {
 	return &TailscaleDriver{
 		httpClient: httpClient,
+		baseURL:    baseURL,
 	}
 }
 
@@ -87,7 +103,7 @@ func (d *TailscaleDriver) ListAccounts(ctx context.Context) ([]AccountRecord, er
 			FullName:   u.DisplayName,
 			Roles:      roles,
 			Active:     tailscaleUserActive(u.Status),
-			IsAdmin:    tailscaleUserIsAdmin(u.Role),
+			IsAdmin:    new(tailscaleUserIsAdmin(role)),
 			ExternalID: u.ID,
 			MFAStatus:  coredata.MFAStatusUnknown,
 			// Tailscale has no local credentials; it always delegates
@@ -117,12 +133,10 @@ func (d *TailscaleDriver) ListAccounts(ctx context.Context) ([]AccountRecord, er
 
 func (d *TailscaleDriver) fetchUsers(ctx context.Context) ([]tailscaleUser, error) {
 	endpoint, err := url.JoinPath(
-		"https://api.tailscale.com",
-		"api",
-		"v2",
-		"tailnet",
+		d.baseURL,
+		tailscaleTailnetSegment,
 		tailscaleDefaultTailnet,
-		"users",
+		tailscaleUsersSegment,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("cannot build tailscale users URL: %w", err)
@@ -144,8 +158,12 @@ func (d *TailscaleDriver) fetchUsers(ctx context.Context) ([]tailscaleUser, erro
 		_ = httpResp.Body.Close()
 	}()
 
+	// Classify the status so the source-name worker (which reuses this via
+	// tailscaleNameResolver) treats an auth/not-found 4xx as terminal instead
+	// of hot-looping. The sentinel is inert on the ListAccounts sync path,
+	// which does not inspect it.
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		return nil, fmt.Errorf("cannot fetch tailscale users: unexpected status %d", httpResp.StatusCode)
+		return nil, nameStatusError("tailscale users", httpResp.StatusCode)
 	}
 
 	var resp tailscaleUsersResponse
@@ -185,16 +203,21 @@ func tailscaleUserIsAdmin(role string) bool {
 // provider domain, which is still a useful label.
 type tailscaleNameResolver struct {
 	httpClient *http.Client
+	baseURL    string
 }
 
 var _ NameResolver = (*tailscaleNameResolver)(nil)
 
-func NewTailscaleNameResolver(httpClient *http.Client) NameResolver {
-	return &tailscaleNameResolver{httpClient: httpClient}
+// NewTailscaleNameResolver resolves the tailnet name against baseURL, the
+// versioned Tailscale API origin (e.g. https://api.tailscale.com/api/v2).
+func NewTailscaleNameResolver(httpClient *http.Client, baseURL string) NameResolver {
+	return &tailscaleNameResolver{httpClient: httpClient, baseURL: baseURL}
 }
 
 func (r *tailscaleNameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
-	driver := &TailscaleDriver{httpClient: r.httpClient}
+	// Constructed rather than composite-literalled so the driver always
+	// carries the resolver's base URL.
+	driver := NewTailscaleDriver(r.httpClient, r.baseURL)
 
 	users, err := driver.fetchUsers(ctx)
 	if err != nil {

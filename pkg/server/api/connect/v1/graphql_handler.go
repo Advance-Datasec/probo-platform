@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package connect_v1
 
@@ -19,37 +25,61 @@ import (
 
 	"go.gearno.de/kit/log"
 	"go.probo.inc/probo/pkg/baseurl"
+	employeeportalmgmt "go.probo.inc/probo/pkg/employeeportal/management"
 	"go.probo.inc/probo/pkg/filemanager"
 	"go.probo.inc/probo/pkg/iam"
+	"go.probo.inc/probo/pkg/notification"
 	"go.probo.inc/probo/pkg/securecookie"
 	"go.probo.inc/probo/pkg/server/api/authn"
 	"go.probo.inc/probo/pkg/server/api/authz"
 	"go.probo.inc/probo/pkg/server/api/connect/v1/schema"
-	"go.probo.inc/probo/pkg/server/gqlutils"
-	"go.probo.inc/probo/pkg/server/gqlutils/directives/authentication"
-	"go.probo.inc/probo/pkg/server/gqlutils/directives/session"
+	"go.probo.inc/probo/pkg/server/gqlx"
+	"go.probo.inc/probo/pkg/server/gqlx/directives/authentication"
+	"go.probo.inc/probo/pkg/server/gqlx/directives/ratelimit"
+	"go.probo.inc/probo/pkg/server/gqlx/directives/session"
 )
 
-func NewGraphQLHandler(svc *iam.Service, logger *log.Logger, fileManagerSvc *filemanager.Service, baseURL *baseurl.BaseURL, cookieConfig securecookie.Config, limits gqlutils.Limits) http.Handler {
+func NewGraphQLHandler(
+	svc *iam.Service,
+	logger *log.Logger,
+	fileManagerSvc *filemanager.Service,
+	employeePortalSvc *employeeportalmgmt.Service,
+	notificationSvc *notification.Service,
+	baseURL *baseurl.BaseURL,
+	cookieConfig securecookie.Config,
+	limits gqlx.Limits,
+	rateLimitDefault ratelimit.Budget,
+	rateLimits map[string]ratelimit.Budget,
+	slackbotAvailable bool,
+) http.Handler {
+	rateLimit := ratelimit.New(rateLimitDefault, rateLimits).Directive
+
 	config := schema.Config{
 		Resolvers: &Resolver{
-			authorize:      authz.NewAuthorizeFunc(svc, logger),
-			batchAuthorize: authz.NewBatchAuthorizeFunc(svc, logger),
-			logger:         logger,
-			iam:            svc,
-			scopeRegistry:  svc.OAuth2ScopeRegistry,
-			fileManager:    fileManagerSvc,
-			baseURL:        baseURL,
-			sessionCookie:  authn.NewCookie(&cookieConfig),
+			authorize:         authz.NewAuthorizeFunc(svc, logger),
+			batchAuthorize:    authz.NewBatchAuthorizeFunc(svc, logger),
+			logger:            logger,
+			iam:               svc,
+			scopeRegistry:     svc.OAuth2ScopeRegistry,
+			fileManager:       fileManagerSvc,
+			employeePortal:    employeePortalSvc,
+			notification:      notificationSvc,
+			baseURL:           baseURL,
+			sessionCookie:     authn.NewCookie(&cookieConfig),
+			slackbotAvailable: slackbotAvailable,
 		},
 		Directives: schema.DirectiveRoot{
 			Authentication: authentication.Directive,
+			RateLimit:      rateLimit,
 			SessionOnly:    session.Directive,
 		},
 	}
 
 	es := schema.NewExecutableSchema(config)
-	gqlh := gqlutils.NewHandler(es, logger, limits)
+	gqlh := gqlx.NewHandler(es, logger, limits)
 
-	return gqlh
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := ratelimit.WithReport(r.Context())
+		gqlh.ServeHTTP(w, r.WithContext(ctx))
+	})
 }

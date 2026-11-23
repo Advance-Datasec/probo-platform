@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
@@ -23,22 +29,23 @@ import (
 
 	"go.gearno.de/crypto/uuid"
 	"go.gearno.de/kit/pg"
+	"go.probo.inc/probo/pkg/collaboration"
 	"go.probo.inc/probo/pkg/coredata"
+	"go.probo.inc/probo/pkg/docgen"
 	"go.probo.inc/probo/pkg/esign"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/html2pdf"
 	"go.probo.inc/probo/pkg/mail"
+	"go.probo.inc/probo/pkg/notification"
 	"go.probo.inc/probo/pkg/page"
 )
 
-const DocumentApprovalConsentText = "By clicking \"Review and approve\", I consent to approve this document electronically and agree that my electronic signature has the same legal validity as a handwritten signature."
+const DocumentApprovalConsentText = "By clicking \"Approve\", I consent to approve this document electronically and agree that my electronic signature has the same legal validity as a handwritten signature."
 
 type (
 	DocumentApprovalService struct {
-		svc                     *Service
-		html2pdfConverter       *html2pdf.Converter
-		invitationTokenValidity time.Duration
-		tokenSecret             string
+		svc               *Service
+		html2pdfConverter *html2pdf.Converter
 	}
 
 	ErrDocumentVersionNotPendingApproval struct{}
@@ -69,8 +76,11 @@ func (e ErrApprovalDecisionAlreadyMade) Error() string {
 	return "approval decision has already been made"
 }
 
-func (s *DocumentApprovalService) RequestApprovalInTx(
-	ctx context.Context, scope coredata.Scoper,
+var errQuorumPDFClaimLost = errors.New("approval quorum pdf claim lost")
+
+func (s *DocumentApprovalService) RequestApproval(
+	ctx context.Context,
+	scope coredata.Scoper,
 	tx pg.Tx,
 	document *coredata.Document,
 	documentVersion *coredata.DocumentVersion,
@@ -79,22 +89,13 @@ func (s *DocumentApprovalService) RequestApprovalInTx(
 ) (*coredata.DocumentVersionApprovalQuorum, error) {
 	now := time.Now()
 
-	documentVersion.Status = coredata.DocumentVersionStatusPendingApproval
-	if changelog != nil {
+	if changelog != nil && documentVersion.Changelog != *changelog {
 		documentVersion.Changelog = *changelog
-	}
 
-	if document.CurrentPublishedMajor != nil {
-		documentVersion.Major = *document.CurrentPublishedMajor + 1
-	} else {
-		documentVersion.Major = 1
-	}
-
-	documentVersion.Minor = 0
-
-	documentVersion.UpdatedAt = now
-	if err := documentVersion.Update(ctx, tx, scope); err != nil {
-		return nil, fmt.Errorf("cannot update document version: %w", err)
+		documentVersion.UpdatedAt = now
+		if err := documentVersion.Update(ctx, tx, scope); err != nil {
+			return nil, fmt.Errorf("cannot update document version: %w", err)
+		}
 	}
 
 	quorum := &coredata.DocumentVersionApprovalQuorum{
@@ -110,13 +111,11 @@ func (s *DocumentApprovalService) RequestApprovalInTx(
 		return nil, fmt.Errorf("cannot insert approval quorum: %w", err)
 	}
 
-	if err := s.createDecisions(ctx, scope, tx, quorum, document.OrganizationID, approverIDs, now); err != nil {
+	if err := s.createDecisions(ctx, scope, tx, quorum, document, approverIDs, now); err != nil {
 		return nil, fmt.Errorf("cannot create approval decisions: %w", err)
 	}
 
-	// Approval notifications are sent asynchronously and debounced by the
-	// document notification worker, which batches all pending approvals per
-	// recipient into a single email.
+	// The notification email worker sends these from the inbox rows.
 
 	return quorum, nil
 }
@@ -128,7 +127,8 @@ func (s *DocumentApprovalService) RequestApprovalInTx(
 // an approval is requested for it; otherwise it is published as a major
 // bump. Documents with no draft (or already pending approval) are skipped.
 func (s *DocumentApprovalService) BulkPublishVersions(
-	ctx context.Context, scope coredata.Scoper,
+	ctx context.Context,
+	scope coredata.Scoper,
 	req BulkPublishVersionsRequest,
 ) ([]*coredata.DocumentVersion, []*coredata.Document, error) {
 	var (
@@ -140,13 +140,15 @@ func (s *DocumentApprovalService) BulkPublishVersions(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
 			for _, documentID := range req.DocumentIDs {
-				dv := &coredata.DocumentVersion{}
-				if err := dv.LoadLatestVersion(ctx, tx, scope, documentID); err != nil {
-					return fmt.Errorf("cannot load latest version for %q: %w", documentID, err)
+				pending := &coredata.DocumentVersion{}
+
+				err := pending.LoadPendingApprovalByDocumentID(ctx, tx, scope, documentID)
+				if err == nil {
+					continue
 				}
 
-				if dv.Status == coredata.DocumentVersionStatusPendingApproval {
-					continue
+				if !errors.Is(err, coredata.ErrResourceNotFound) {
+					return fmt.Errorf("cannot load pending approval for %q: %w", documentID, err)
 				}
 
 				document := &coredata.Document{}
@@ -155,90 +157,41 @@ func (s *DocumentApprovalService) BulkPublishVersions(
 				}
 
 				if document.ArchivedAt != nil {
-					return &ErrDocumentArchived{}
+					return &collaboration.ErrDocumentArchived{}
 				}
 
-				// Treat minor on an already-published version as a no-op so the
-				// operation is idempotent: the doc is included in the result
-				// without modification.
-				if req.Minor && dv.Status == coredata.DocumentVersionStatusPublished {
-					publishedVersions = append(publishedVersions, dv)
-					updatedDocuments = append(updatedDocuments, document)
+				var approverIDs []gid.GID
 
-					continue
-				}
-
-				if dv.Status != coredata.DocumentVersionStatusDraft {
-					continue
-				}
-
-				var requestedQuorum *coredata.DocumentVersionApprovalQuorum
-
-				if req.Minor {
-					var err error
-
-					document, dv, err = s.svc.Documents.publishMinorVersionInTx(ctx, scope, tx, documentID, &req.Changelog, true)
-					if err != nil {
-						return fmt.Errorf("cannot publish document %q: %w", documentID, err)
-					}
-				} else {
+				if !req.Minor {
 					defaultApprovers := &coredata.DocumentDefaultApprovers{}
 					if err := defaultApprovers.LoadByDocumentID(ctx, tx, scope, documentID); err != nil {
 						return fmt.Errorf("cannot load default approvers for %q: %w", documentID, err)
 					}
 
-					if len(*defaultApprovers) > 0 {
-						approverIDs := make([]gid.GID, len(*defaultApprovers))
-						for i, a := range *defaultApprovers {
-							approverIDs[i] = a.ApproverProfileID
-						}
-
-						quorum, err := s.RequestApprovalInTx(ctx, scope, tx, document, dv, approverIDs, &req.Changelog)
-						if err != nil {
-							return fmt.Errorf("cannot request approval for %q: %w", documentID, err)
-						}
-
-						requestedQuorum = quorum
-					} else {
-						var err error
-
-						document, dv, err = s.svc.Documents.publishMajorVersionInTx(ctx, scope, tx, documentID, &req.Changelog, true)
-						if err != nil {
-							return fmt.Errorf("cannot publish document %q: %w", documentID, err)
-						}
+					approverIDs = make([]gid.GID, len(*defaultApprovers))
+					for i, approver := range *defaultApprovers {
+						approverIDs[i] = approver.ApproverProfileID
 					}
 				}
 
-				publishedVersions = append(publishedVersions, dv)
-				updatedDocuments = append(updatedDocuments, document)
-
-				if requestedQuorum != nil {
-					if err := s.svc.Documents.emitDocumentEventInTx(
-						ctx,
-						scope,
-						tx,
-						dv.DocumentID,
-						coredata.WebhookEventTypeDocumentVersionApprovalQuorumRequested,
-						dv,
-						nil,
-						&requestedQuorum.ID,
-					); err != nil {
-						return fmt.Errorf("cannot emit approval quorum requested webhook: %w", err)
-					}
-				} else {
-					if err := s.svc.Documents.emitDocumentEventInTx(
-						ctx,
-						scope,
-						tx,
-						dv.DocumentID,
-						coredata.WebhookEventTypeDocumentVersionPublished,
-						dv,
-						nil,
-						nil,
-					); err != nil {
-						return fmt.Errorf("cannot emit version published webhook: %w", err)
-					}
+				result, err := s.svc.Documents.publish(
+					ctx,
+					scope,
+					tx,
+					PublishDocumentRequest{
+						DocumentID:      documentID,
+						Minor:           req.Minor,
+						ApproverIDs:     approverIDs,
+						Changelog:       req.Changelog,
+						IgnoreUnchanged: true,
+					},
+				)
+				if err != nil {
+					return fmt.Errorf("cannot publish document %q: %w", documentID, err)
 				}
+
+				publishedVersions = append(publishedVersions, result.Version)
+				updatedDocuments = append(updatedDocuments, result.Document)
 			}
 
 			return nil
@@ -276,7 +229,7 @@ func (s *DocumentApprovalService) Approve(
 			}
 
 			if document.ArchivedAt != nil {
-				return &ErrDocumentArchived{}
+				return &collaboration.ErrDocumentArchived{}
 			}
 
 			var (
@@ -385,11 +338,37 @@ func (s *DocumentApprovalService) Approve(
 					SignerIPAddr:   req.SignerIPAddr,
 					SignerUA:       req.SignerUA,
 					ConsentText:    DocumentApprovalConsentText,
-					EmailSubject:   fmt.Sprintf("Your approved %s - Certificate of Completion", document.Title),
 				},
 			)
 			if err != nil {
 				return fmt.Errorf("cannot create electronic signature: %w", err)
+			}
+
+			// Snapshot the quorum before mutating it, but only when a
+			// subscriber can actually receive the resulting
+			// `...:updated` event. Otherwise the emitter short-circuits
+			// on the same subscription check and this extra load would
+			// be wasted work that could still fail the approval.
+			var updatedFromQuorum any
+
+			subscriptions := coredata.WebhookSubscriptions{}
+
+			hasSubscription, err := subscriptions.ExistsByOrganizationIDAndEventType(
+				ctx,
+				tx,
+				scope,
+				document.OrganizationID,
+				coredata.WebhookEventTypeDocumentVersionApprovalQuorumUpdated,
+			)
+			if err != nil {
+				return fmt.Errorf("cannot check webhook subscriptions for approval quorum: %w", err)
+			}
+
+			if hasSubscription {
+				updatedFromQuorum, err = s.svc.Documents.loadDocumentApprovalQuorumForWebhook(ctx, scope, tx, quorum.ID, documentVersion, document)
+				if err != nil {
+					return fmt.Errorf("cannot load approval quorum snapshot for webhook: %w", err)
+				}
 			}
 
 			decision.State = coredata.DocumentVersionApprovalDecisionStateApproved
@@ -400,6 +379,18 @@ func (s *DocumentApprovalService) Approve(
 
 			if err := decision.Update(ctx, tx, scope); err != nil {
 				return fmt.Errorf("cannot update approval decision: %w", err)
+			}
+
+			if err := notification.Resolve(
+				ctx,
+				tx,
+				scope,
+				document.OrganizationID,
+				decision.ApproverID,
+				coredata.NotificationTypeDocumentApprovalRequested,
+				document.ID,
+			); err != nil {
+				return fmt.Errorf("cannot resolve approval notification: %w", err)
 			}
 
 			if err := s.maybeApproveQuorum(ctx, scope, tx, quorum.ID); err != nil {
@@ -418,7 +409,7 @@ func (s *DocumentApprovalService) Approve(
 				return nil
 			}
 
-			if err := s.svc.Documents.emitDocumentEventInTx(
+			if err := s.svc.Documents.emitDocumentEvent(
 				ctx,
 				scope,
 				tx,
@@ -427,6 +418,7 @@ func (s *DocumentApprovalService) Approve(
 				documentVersion,
 				nil,
 				&quorum.ID,
+				updatedFromQuorum,
 			); err != nil {
 				return fmt.Errorf("cannot emit approval quorum updated webhook: %w", err)
 			}
@@ -461,7 +453,7 @@ func (s *DocumentApprovalService) Reject(
 			}
 
 			if document.ArchivedAt != nil {
-				return &ErrDocumentArchived{}
+				return &collaboration.ErrDocumentArchived{}
 			}
 
 			quorum, profile, err := s.loadQuorumAndProfile(ctx, scope, tx, req.DocumentVersionID, req.IdentityID, documentVersion.OrganizationID)
@@ -489,6 +481,13 @@ func (s *DocumentApprovalService) Reject(
 				return fmt.Errorf("cannot update approval decision: %w", err)
 			}
 
+			approverIDs, err := pendingApprovalRecipientIDs(ctx, tx, scope, quorum.ID)
+			if err != nil {
+				return fmt.Errorf("cannot load pending approvers: %w", err)
+			}
+
+			approverIDs = append(approverIDs, decision.ApproverID)
+
 			quorum.Status = coredata.DocumentVersionApprovalQuorumStatusRejected
 			quorum.UpdatedAt = now
 
@@ -501,22 +500,14 @@ func (s *DocumentApprovalService) Reject(
 				return fmt.Errorf("cannot void pending decisions: %w", err)
 			}
 
-			documentVersion.Status = coredata.DocumentVersionStatusDraft
-			if document.CurrentPublishedMajor != nil {
-				documentVersion.Major = *document.CurrentPublishedMajor
-				documentVersion.Minor = *document.CurrentPublishedMinor + 1
-			} else {
-				documentVersion.Major = 0
-				documentVersion.Minor = 1
-			}
-
+			documentVersion.Status = coredata.DocumentVersionStatusRejected
 			documentVersion.UpdatedAt = now
 
 			if err := documentVersion.Update(ctx, tx, scope); err != nil {
 				return fmt.Errorf("cannot update document version status: %w", err)
 			}
 
-			if err := s.svc.Documents.emitDocumentEventInTx(
+			if err := s.svc.Documents.emitDocumentEvent(
 				ctx,
 				scope,
 				tx,
@@ -525,11 +516,12 @@ func (s *DocumentApprovalService) Reject(
 				documentVersion,
 				nil,
 				&quorum.ID,
+				nil,
 			); err != nil {
 				return fmt.Errorf("cannot emit approval quorum rejected webhook: %w", err)
 			}
 
-			if err := s.svc.Documents.emitDocumentEventInTx(
+			if err := s.svc.Documents.emitDocumentEvent(
 				ctx,
 				scope,
 				tx,
@@ -538,8 +530,20 @@ func (s *DocumentApprovalService) Reject(
 				documentVersion,
 				nil,
 				nil,
+				nil,
 			); err != nil {
 				return fmt.Errorf("cannot emit document version rejected webhook: %w", err)
+			}
+
+			if err := resolveApprovalNotifications(
+				ctx,
+				tx,
+				scope,
+				document.OrganizationID,
+				document.ID,
+				approverIDs,
+			); err != nil {
+				return fmt.Errorf("cannot resolve approval notifications: %w", err)
 			}
 
 			return nil
@@ -575,7 +579,7 @@ func (s *DocumentApprovalService) VoidApproval(
 			}
 
 			if document.ArchivedAt != nil {
-				return &ErrDocumentArchived{}
+				return &collaboration.ErrDocumentArchived{}
 			}
 
 			if documentVersion.Status != coredata.DocumentVersionStatusPendingApproval {
@@ -591,49 +595,7 @@ func (s *DocumentApprovalService) VoidApproval(
 				return &ErrDocumentVersionNotPendingApproval{}
 			}
 
-			now := time.Now()
-
-			quorum.Status = coredata.DocumentVersionApprovalQuorumStatusVoided
-			quorum.UpdatedAt = now
-
-			if err := quorum.Update(ctx, tx, scope); err != nil {
-				return fmt.Errorf("cannot update approval quorum: %w", err)
-			}
-
-			decisions := &coredata.DocumentVersionApprovalDecisions{}
-			if err := decisions.VoidPendingByQuorumID(ctx, tx, scope, quorum.ID, now); err != nil {
-				return fmt.Errorf("cannot void pending decisions: %w", err)
-			}
-
-			documentVersion.Status = coredata.DocumentVersionStatusDraft
-			if document.CurrentPublishedMajor != nil {
-				documentVersion.Major = *document.CurrentPublishedMajor
-				documentVersion.Minor = *document.CurrentPublishedMinor + 1
-			} else {
-				documentVersion.Major = 0
-				documentVersion.Minor = 1
-			}
-
-			documentVersion.UpdatedAt = now
-
-			if err := documentVersion.Update(ctx, tx, scope); err != nil {
-				return fmt.Errorf("cannot update document version status: %w", err)
-			}
-
-			if err := s.svc.Documents.emitDocumentEventInTx(
-				ctx,
-				scope,
-				tx,
-				documentVersion.DocumentID,
-				coredata.WebhookEventTypeDocumentVersionApprovalQuorumVoided,
-				documentVersion,
-				nil,
-				&quorum.ID,
-			); err != nil {
-				return fmt.Errorf("cannot emit approval quorum voided webhook: %w", err)
-			}
-
-			return nil
+			return s.voidApprovalInTx(ctx, scope, tx, document, documentVersion, quorum)
 		},
 	)
 	if err != nil {
@@ -641,6 +603,176 @@ func (s *DocumentApprovalService) VoidApproval(
 	}
 
 	return quorum, documentVersion, nil
+}
+
+func (s *DocumentApprovalService) voidApprovalInTx(
+	ctx context.Context, scope coredata.Scoper,
+	tx pg.Tx,
+	document *coredata.Document,
+	documentVersion *coredata.DocumentVersion,
+	quorum *coredata.DocumentVersionApprovalQuorum,
+) error {
+	approverIDs, err := pendingApprovalRecipientIDs(ctx, tx, scope, quorum.ID)
+	if err != nil {
+		return fmt.Errorf("cannot load pending approvers: %w", err)
+	}
+
+	now := time.Now()
+
+	quorum.Status = coredata.DocumentVersionApprovalQuorumStatusVoided
+	quorum.UpdatedAt = now
+
+	if err := quorum.Update(ctx, tx, scope); err != nil {
+		return fmt.Errorf("cannot update approval quorum: %w", err)
+	}
+
+	decisions := &coredata.DocumentVersionApprovalDecisions{}
+	if err := decisions.VoidPendingByQuorumID(ctx, tx, scope, quorum.ID, now); err != nil {
+		return fmt.Errorf("cannot void pending decisions: %w", err)
+	}
+
+	documentVersion.Status = coredata.DocumentVersionStatusVoided
+	documentVersion.UpdatedAt = now
+
+	if err := documentVersion.Update(ctx, tx, scope); err != nil {
+		return fmt.Errorf("cannot update document version status: %w", err)
+	}
+
+	if err := s.svc.Documents.emitDocumentEvent(
+		ctx,
+		scope,
+		tx,
+		documentVersion.DocumentID,
+		coredata.WebhookEventTypeDocumentVersionApprovalQuorumVoided,
+		documentVersion,
+		nil,
+		&quorum.ID,
+		nil,
+	); err != nil {
+		return fmt.Errorf("cannot emit approval quorum voided webhook: %w", err)
+	}
+
+	if err := resolveApprovalNotifications(
+		ctx,
+		tx,
+		scope,
+		document.OrganizationID,
+		document.ID,
+		approverIDs,
+	); err != nil {
+		return fmt.Errorf("cannot resolve approval notifications: %w", err)
+	}
+
+	return nil
+}
+
+func pendingApprovalRecipientIDs(
+	ctx context.Context,
+	tx pg.Tx,
+	scope coredata.Scoper,
+	quorumID gid.GID,
+) ([]gid.GID, error) {
+	var decisions coredata.DocumentVersionApprovalDecisions
+
+	err := decisions.LoadByQuorumID(
+		ctx,
+		tx,
+		scope,
+		quorumID,
+		page.NewCursor(
+			100,
+			nil,
+			page.Head,
+			page.OrderBy[coredata.DocumentVersionApprovalDecisionOrderField]{
+				Field:     coredata.DocumentVersionApprovalDecisionOrderFieldCreatedAt,
+				Direction: page.OrderDirectionAsc,
+			},
+		),
+		coredata.NewDocumentVersionApprovalDecisionFilter(
+			[]coredata.DocumentVersionApprovalDecisionState{
+				coredata.DocumentVersionApprovalDecisionStatePending,
+			},
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot load pending approval decisions: %w", err)
+	}
+
+	ids := make([]gid.GID, 0, len(decisions))
+	for _, decision := range decisions {
+		ids = append(ids, decision.ApproverID)
+	}
+
+	return ids, nil
+}
+
+func resolveApprovalNotifications(
+	ctx context.Context,
+	tx pg.Tx,
+	scope coredata.Scoper,
+	organizationID gid.GID,
+	documentID gid.GID,
+	approverIDs []gid.GID,
+) error {
+	seen := make(map[gid.GID]struct{}, len(approverIDs))
+	for _, approverID := range approverIDs {
+		if _, ok := seen[approverID]; ok {
+			continue
+		}
+
+		seen[approverID] = struct{}{}
+		if err := notification.Resolve(
+			ctx,
+			tx,
+			scope,
+			organizationID,
+			approverID,
+			coredata.NotificationTypeDocumentApprovalRequested,
+			documentID,
+		); err != nil {
+			return fmt.Errorf("cannot resolve approval notification: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (s *DocumentApprovalService) voidPendingApprovalForDocumentInTx(
+	ctx context.Context, scope coredata.Scoper,
+	tx pg.Tx,
+	document *coredata.Document,
+) error {
+	documentVersion := &coredata.DocumentVersion{}
+	if err := documentVersion.LoadPendingApprovalByDocumentID(ctx, tx, scope, document.ID); err != nil {
+		if errors.Is(err, coredata.ErrResourceNotFound) {
+			return nil
+		}
+
+		return fmt.Errorf("cannot load pending approval: %w", err)
+	}
+
+	if documentVersion.Status != coredata.DocumentVersionStatusPendingApproval {
+		return nil
+	}
+
+	quorum := &coredata.DocumentVersionApprovalQuorum{}
+	if err := quorum.LoadLastByDocumentVersionID(ctx, tx, scope, documentVersion.ID); err != nil {
+		if errors.Is(err, coredata.ErrResourceNotFound) {
+			return nil
+		}
+
+		return fmt.Errorf("cannot load approval quorum: %w", err)
+	}
+
+	if quorum.Status != coredata.DocumentVersionApprovalQuorumStatusPending {
+		return nil
+	}
+
+	if err := s.voidApprovalInTx(ctx, scope, tx, document, documentVersion, quorum); err != nil {
+		return fmt.Errorf("cannot void pending approval: %w", err)
+	}
+
+	return nil
 }
 
 func (s *DocumentApprovalService) GetQuorum(
@@ -867,7 +999,7 @@ func (s *DocumentApprovalService) createDecisions(
 	ctx context.Context, scope coredata.Scoper,
 	tx pg.Tx,
 	quorum *coredata.DocumentVersionApprovalQuorum,
-	organizationID gid.GID,
+	document *coredata.Document,
 	approverIDs []gid.GID,
 	now time.Time,
 ) error {
@@ -875,7 +1007,7 @@ func (s *DocumentApprovalService) createDecisions(
 	for _, approverID := range approverIDs {
 		decisions = append(decisions, &coredata.DocumentVersionApprovalDecision{
 			ID:             gid.New(scope.GetTenantID(), coredata.DocumentVersionApprovalDecisionEntityType),
-			OrganizationID: organizationID,
+			OrganizationID: document.OrganizationID,
 			QuorumID:       quorum.ID,
 			ApproverID:     approverID,
 			State:          coredata.DocumentVersionApprovalDecisionStatePending,
@@ -888,6 +1020,23 @@ func (s *DocumentApprovalService) createDecisions(
 		return fmt.Errorf("cannot insert approval decisions: %w", err)
 	}
 
+	for _, decision := range decisions {
+		if err := notification.Insert(
+			ctx,
+			tx,
+			scope,
+			notification.InsertRequest{
+				OrganizationID:     document.OrganizationID,
+				RecipientProfileID: decision.ApproverID,
+				Type:               coredata.NotificationTypeDocumentApprovalRequested,
+				SubjectID:          document.ID,
+				Title:              document.Title,
+			},
+		); err != nil {
+			return fmt.Errorf("cannot insert approval notification: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -895,28 +1044,175 @@ func (s *DocumentApprovalService) generateApprovalPDF(
 	ctx context.Context, scope coredata.Scoper,
 	documentVersionID gid.GID,
 ) ([]byte, error) {
-	var pdfData []byte
+	var prepared *preparedDocumentExport
 
 	err := s.svc.pg.WithConn(
 		ctx,
 		func(ctx context.Context, conn pg.Querier) error {
 			var err error
 
-			pdfData, err = exportDocumentPDF(
-				ctx,
-				s.svc,
-				s.html2pdfConverter,
-				conn,
-				scope,
-				documentVersionID,
-				ExportPDFOptions{},
-			)
+			prepared, err = prepareDocumentExport(ctx, conn, scope, documentVersionID, ExportPDFOptions{}, s.svc.logger)
+			if err != nil {
+				return err
+			}
 
-			return err
+			return nil
 		},
 	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot prepare approval PDF: %w", err)
+	}
 
-	return pdfData, err
+	pdf, err := renderPreparedDocumentExport(ctx, s.svc, s.html2pdfConverter, prepared)
+	if err != nil {
+		return nil, fmt.Errorf("cannot render approval PDF: %w", err)
+	}
+
+	return pdf, nil
+}
+
+func (s *DocumentApprovalService) generateAndUploadQuorumPDF(
+	ctx context.Context,
+	scope coredata.Scoper,
+	quorum *coredata.DocumentVersionApprovalQuorum,
+) error {
+	if quorum == nil || quorum.FileID != nil || quorum.PdfClaimedAt == nil {
+		return nil
+	}
+
+	var (
+		pdfInput *documentPDFInput
+		skip     bool
+	)
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			holdsClaim, err := quorum.HasPDFClaim(ctx, conn, scope)
+			if err != nil {
+				return fmt.Errorf("cannot check PDF claim: %w", err)
+			}
+
+			if !holdsClaim {
+				skip = true
+
+				return nil
+			}
+
+			version := &coredata.DocumentVersion{}
+			if err := version.LoadByID(ctx, conn, scope, quorum.VersionID); err != nil {
+				return fmt.Errorf("cannot load document version: %w", err)
+			}
+
+			pdfInput, err = loadDocumentPDFInput(ctx, conn, scope, version, s.svc.logger)
+			if err != nil {
+				return fmt.Errorf("cannot load document PDF input: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("cannot load quorum document PDF data: %w", err)
+	}
+
+	if skip {
+		return nil
+	}
+
+	pdfInput.content = docgen.EmbedContentImages(ctx, s.svc.logger, pdfInput.content, pdfInput.imageFiles, s.svc.fileManager)
+
+	pdfData, err := renderDocumentPDF(
+		ctx,
+		s.svc,
+		s.html2pdfConverter,
+		pdfInput,
+		ExportPDFOptions{},
+	)
+	if err != nil {
+		return fmt.Errorf("cannot generate quorum document PDF: %w", err)
+	}
+
+	err = s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			holdsClaim, err := quorum.HasPDFClaim(ctx, conn, scope)
+			if err != nil {
+				return err
+			}
+
+			if !holdsClaim {
+				skip = true
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("cannot load approval quorum: %w", err)
+	}
+
+	if skip {
+		return nil
+	}
+
+	now := time.Now()
+
+	fileRecord := &coredata.File{
+		ID:             gid.New(scope.GetTenantID(), coredata.FileEntityType),
+		OrganizationID: quorum.OrganizationID,
+		BucketName:     s.svc.bucket,
+		MimeType:       "application/pdf",
+		FileName:       fmt.Sprintf("approval-quorum-%s.pdf", quorum.ID),
+		FileKey:        uuid.MustNewV4().String(),
+		Visibility:     coredata.FileVisibilityPrivate,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	fileSize, err := s.svc.fileManager.PutFile(
+		ctx,
+		fileRecord,
+		bytes.NewReader(pdfData),
+		map[string]string{
+			"type":      "approval-quorum-document",
+			"quorum-id": quorum.ID.String(),
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("cannot upload quorum document PDF: %w", err)
+	}
+
+	fileRecord.FileSize = fileSize
+
+	err = s.svc.pg.WithTx(
+		ctx,
+		func(ctx context.Context, tx pg.Tx) error {
+			if err := fileRecord.Insert(ctx, tx, scope); err != nil {
+				return fmt.Errorf("cannot insert quorum document file: %w", err)
+			}
+
+			attached, err := quorum.AttachPDFFile(ctx, tx, scope, fileRecord.ID, now)
+			if err != nil {
+				return fmt.Errorf("cannot attach quorum document file: %w", err)
+			}
+
+			if !attached {
+				return errQuorumPDFClaimLost
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		if errors.Is(err, errQuorumPDFClaimLost) {
+			return nil
+		}
+
+		return fmt.Errorf("cannot save quorum document PDF: %w", err)
+	}
+
+	return nil
 }
 
 func (s *DocumentApprovalService) countDecisions(
@@ -983,7 +1279,7 @@ func (s *DocumentApprovalService) maybeApproveQuorum(
 		return fmt.Errorf("cannot publish version: %w", err)
 	}
 
-	if err := s.svc.Documents.emitDocumentEventInTx(
+	if err := s.svc.Documents.emitDocumentEvent(
 		ctx,
 		scope,
 		tx,
@@ -992,17 +1288,19 @@ func (s *DocumentApprovalService) maybeApproveQuorum(
 		version,
 		nil,
 		&quorum.ID,
+		nil,
 	); err != nil {
 		return fmt.Errorf("cannot emit approval quorum approved webhook: %w", err)
 	}
 
-	if err := s.svc.Documents.emitDocumentEventInTx(
+	if err := s.svc.Documents.emitDocumentEvent(
 		ctx,
 		scope,
 		tx,
 		version.DocumentID,
 		coredata.WebhookEventTypeDocumentVersionPublished,
 		version,
+		nil,
 		nil,
 		nil,
 	); err != nil {

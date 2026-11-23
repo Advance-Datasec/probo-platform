@@ -1,12 +1,9 @@
 type Organization implements Node {
   id: ID!
   name: String!
+  legalName: String
   logo: File @goField(forceResolver: true)
   horizontalLogo: File @goField(forceResolver: true)
-  email: String
-  description: String
-  websiteUrl: String
-  headquarterAddress: String
   createdAt: Datetime!
   updatedAt: Datetime!
 
@@ -16,6 +13,7 @@ type Organization implements Node {
     last: Int
     before: CursorKey
     orderBy: ProfileOrder
+    filter: ProfileFilter
   ): ProfileConnection @goField(forceResolver: true)
 
   samlConfigurations(
@@ -39,7 +37,15 @@ type Organization implements Node {
 
   viewer: Profile @goField(forceResolver: true)
 
-  permission(action: String!): Boolean!
+  employeePortals(
+    first: Int
+    after: CursorKey
+    last: Int
+    before: CursorKey
+    orderBy: EmployeePortalOrder
+  ): EmployeePortalConnection @goField(forceResolver: true)
+
+  permission(action: String!, attributes: Map): Boolean!
     @goField(forceResolver: true)
     @authentication(required: PRESENT)
 }
@@ -61,6 +67,7 @@ extend type Mutation {
 
 input CreateOrganizationInput {
   name: String!
+  legalName: String
   logoFile: Upload
   horizontalLogoFile: Upload
 }
@@ -68,12 +75,9 @@ input CreateOrganizationInput {
 input UpdateOrganizationInput {
   organizationId: ID!
   name: String
+  legalName: String @goField(omittable: true)
   logoFile: Upload
   horizontalLogoFile: Upload
-  description: String @goField(omittable: true)
-  websiteUrl: String @goField(omittable: true)
-  email: String @goField(omittable: true)
-  headquarterAddress: String @goField(omittable: true)
 }
 
 input DeleteOrganizationInput {

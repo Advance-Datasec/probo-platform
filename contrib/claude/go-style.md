@@ -5,7 +5,7 @@
 - HTTP server: `go.gearno.de/kit/httpserver`
 - HTTP client: `go.gearno.de/kit/httpclient`
 - Tracing: OpenTelemetry (`go.opentelemetry.io/otel`)
-- Pointers: Go 1.26 — use `new(expr)` to create pointers to values (e.g. `new(1)`, `new("foo")`, `new(time.Now())`). Use `go.gearno.de/x/ref` only for dereference helpers (`ref.UnrefOrZero`, etc.)
+- Pointers: use `new(expr)` to create pointers to values (e.g. `new(1)`, `new("foo")`, `new(time.Now())`). Use `go.gearno.de/x/ref` only for dereference helpers (`ref.UnrefOrZero`, etc.)
 
 ## Grouped declarations
 
@@ -152,7 +152,7 @@ import (
 	"go.gearno.de/kit/log"
 	"go.probo.inc/probo/pkg/iam"
 	"go.probo.inc/probo/pkg/probo"
-	"go.probo.inc/probo/pkg/trust"
+	complianceportal_v1 "go.probo.inc/probo/pkg/server/api/complianceportal/v1"
 )
 ```
 
@@ -189,6 +189,18 @@ func (s *Service) DoSomething(ctx context.Context) error {
 	}
 
 	return nil
+}
+```
+
+Do **not** return a defensive error for a broken invariant that cannot happen on the real call path (for example a claimed agent execution with no `ProcessingOwnerToken`). That is a programming error: **panic**. Return errors for recoverable operational failures (not found, lease lost, upstream, validation). Panic when continuing would mean the program is in an impossible state.
+
+```go
+// Good — Claim always sets the token; a nil token is unrecoverable
+ownerToken := *execution.ProcessingOwnerToken
+
+// Bad — pretends an impossible state is a normal failure
+if execution.ProcessingOwnerToken == nil || *execution.ProcessingOwnerToken == "" {
+	return fmt.Errorf("claimed agent execution has no owner token")
 }
 ```
 
@@ -238,7 +250,13 @@ func NewBridge(provider provider.Provider, client *scimclient.Client, opts ...Op
 
 ## Interfaces
 
-Define interfaces in the consumer package. Keep them small. Verify satisfaction at compile time:
+Define an interface when the package has more than one implementation, or when several unrelated types already share a small behavior the consumer needs.
+
+Do not define an interface only to inject a dependency. Pass the concrete type (`*html2pdf.Converter`, `*filemanager.Service`).
+
+Do not define an interface so a test can substitute a fake. Test the decision and formatting logic directly. Leave I/O to the package that owns it.
+
+When an interface is warranted, define it in the consumer package. Keep it small. Verify satisfaction at compile time:
 
 ```go
 var (
@@ -253,7 +271,7 @@ Always first parameter. Private struct keys for context values:
 
 ```go
 type ctxKey struct{ name string }
-var trustCenterIDKey = &ctxKey{name: "trust_center_id"}
+var compliancePortalIDKey = &ctxKey{name: "compliance_portal_id"}
 ```
 
 ## URL and query parameter construction

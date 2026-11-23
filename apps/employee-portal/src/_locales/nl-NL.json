@@ -1,0 +1,254 @@
+{
+  "notifications": {
+    "label": "Meldingen",
+    "unread": "{{count}} ongelezen",
+    "empty": "Geen meldingen",
+    "documentSignatureRequested": "{{title}} is klaar voor uw handtekening",
+    "documentApprovalRequested": "{{title}} wacht op uw goedkeuring",
+    "taskAssigned": "{{title}} is aan u toegewezen",
+    "taskMentioned": "U bent vermeld in {{title}}",
+    "settings": "Meldingsinstellingen",
+    "markAllRead": "Alles als gelezen markeren"
+  },
+  "size": {
+    "B": "B",
+    "KB": "KB",
+    "MB": "MB",
+    "GB": "GB",
+    "TB": "TB"
+  },
+  "ui": {
+    "richEditor": {
+      "file": "Bestand",
+      "imageUnavailable": "Afbeelding niet beschikbaar",
+      "resizeImage": "Afbeelding vergroten of verkleinen",
+      "enlargeImage": "Afbeelding vergroten",
+      "enlargeImageNamed": "{{name}} vergroten",
+      "closeImage": "Afbeelding sluiten",
+      "uploading": "{{fileName}} uploaden…",
+      "uploadFailed": "Uploaden mislukt",
+      "couldNotUpload": "Kan {{fileName}} niet uploaden",
+      "tooLarge": "{{fileName}} is te groot",
+      "unsupported": "{{fileName}} is geen ondersteund bestand",
+      "attachFiles": "Bestanden bijvoegen",
+      "mentionMembers": "Een lid vermelden",
+      "mentionLoading": "Zoeken…",
+      "mentionNoResults": "Geen leden gevonden"
+    }
+  },
+  "topBar": {
+    "tagline": "Medewerkersportaal"
+  },
+  "consoleFooter": {
+    "proboConsole": "Probo-console"
+  },
+  "userMenu": {
+    "notifications": "Meldingen",
+    "oauthTokens": "OAuth-tokens",
+    "switchToDarkMode": "Overschakelen naar donkere modus",
+    "switchToLightMode": "Overschakelen naar lichte modus",
+    "help": "Help",
+    "signOut": "Uitloggen",
+    "signOutFailed": "Uitloggen mislukt"
+  },
+  "editAvatar": {
+    "title": "Profielfoto",
+    "description": "Upload een openbare foto.",
+    "messages": {
+      "updated": "Profielfoto bijgewerkt.",
+      "removed": "Profielfoto verwijderd."
+    },
+    "errors": {
+      "update": "Profielfoto bijwerken mislukt",
+      "remove": "Profielfoto verwijderen mislukt",
+      "invalidFile": "Gebruik een JPEG of PNG van maximaal 5 MB."
+    },
+    "actions": {
+      "upload": "Foto uploaden",
+      "replace": "Foto vervangen",
+      "remove": "Foto verwijderen",
+      "close": "Sluiten",
+      "change": "Profielfoto wijzigen"
+    }
+  },
+  "organizationsPage": {
+    "title": "Uw organisaties",
+    "searchPlaceholder": "Organisaties zoeken",
+    "empty": "U heeft nog geen toegang tot medewerkersportalen.",
+    "emptySearch": "Geen organisaties komen overeen met deze zoekopdracht.",
+    "status": {
+      "authenticated": "Geverifieerd",
+      "sessionExpired": "Sessie verlopen",
+      "authenticationRequired": "Authenticatie vereist"
+    },
+    "actions": {
+      "open": "Openen",
+      "continue": "Doorgaan"
+    }
+  },
+  "breadcrumb": {
+    "nav": "Kruimelpad"
+  },
+  "homePage": {
+    "breadcrumb": "Home",
+    "welcome": "Welkom {{name}}.",
+    "welcomeFallback": "Welkom.",
+    "getStarted": {
+      "title": "Aan de slag",
+      "description": "Voltooi de vereiste stappen om uw medewerkersportaal in te stellen.",
+      "signatures": {
+        "count_one": "{{count}} document om te ondertekenen",
+        "count_other": "{{count}} documenten om te ondertekenen",
+        "description": "Bekijk en onderteken het document dat aan u is toegewezen.",
+        "action": "Ondertekenen"
+      },
+      "approvals": {
+        "count_one": "{{count}} document om goed te keuren",
+        "count_other": "{{count}} documenten om goed te keuren",
+        "description": "Bekijk en keur het document goed dat aan u is toegewezen.",
+        "action": "Goedkeuren"
+      }
+    },
+    "dashboard": {
+      "view": "Bekijken",
+      "allDone": "U bent klaar",
+      "documents": {
+        "title": "Documenten",
+        "description": "Onderteken en keur toegewezen documenten goed.",
+        "empty": "Nog niets om te beoordelen",
+        "pendingCount_one": "{{count}} beoordeling open",
+        "pendingCount_other": "{{count}} beoordelingen open",
+        "action": "Documenten beoordelen"
+      },
+      "tasks": {
+        "title": "Mijn taken",
+        "description": "Bekijk en voltooi toegewezen taken.",
+        "empty": "Nog niets te doen",
+        "pendingCount_one": "{{count}} taak te doen",
+        "pendingCount_other": "{{count}} taken te doen",
+        "action": "Naar taken"
+      },
+      "signatures": {
+        "title": "Handtekeningen",
+        "description": "Onderteken toegewezen documenten.",
+        "empty": "Nog niets om te ondertekenen",
+        "pendingCount_one": "{{count}} document om te ondertekenen",
+        "pendingCount_other": "{{count}} documenten om te ondertekenen",
+        "action": "Beginnen met ondertekenen"
+      },
+      "approvals": {
+        "title": "Goedkeuringen",
+        "description": "Bekijk documenten die wachten op goedkeuring.",
+        "empty": "Nog niets om goed te keuren",
+        "pendingCount_one": "{{count}} document om goed te keuren",
+        "pendingCount_other": "{{count}} documenten om goed te keuren",
+        "action": "Beginnen met goedkeuren"
+      },
+      "devices": {
+        "title": "Apparaten",
+        "description": "Beheer uw werkapparaten.",
+        "connected": "Apparaat verbonden",
+        "action": "Apparaat registreren"
+      },
+      "slack": {
+        "title": "Slack",
+        "description": "Koppel uw Slack-account zodat Probot u kan helpen.",
+        "connected": "Slack gekoppeld",
+        "hint": "Voer <cmd>/probot login</cmd> uit in Slack"
+      }
+    }
+  },
+  "common": {
+    "error": "Er is iets misgegaan"
+  },
+  "pagination": {
+    "previous": "Vorige",
+    "next": "Volgende"
+  },
+  "queue": {
+    "previous": "Vorig document",
+    "next": "Volgend document",
+    "close": "Sluiten",
+    "progressSignatures": "Document {{current}} van {{total}} om te ondertekenen",
+    "progressApprovals": "Document {{current}} van {{total}} om goed te keuren",
+    "empty": "Er staan geen documenten meer in deze wachtrij"
+  },
+  "viewer": {
+    "pageOf": "Pagina {{current}} van {{total}}",
+    "previousPage": "Vorige pagina",
+    "nextPage": "Volgende pagina",
+    "zoomIn": "Inzoomen",
+    "zoomOut": "Uitzoomen",
+    "download": "PDF downloaden"
+  },
+  "documents": {
+    "lastUpdated": "Laatst bijgewerkt",
+    "columns": {
+      "title": "Titel",
+      "classification": "Classificatie",
+      "type": "Type",
+      "status": "Status",
+      "action": "Actie"
+    },
+    "types": {
+      "other": "Overig",
+      "governance": "Governance",
+      "policy": "Beleid",
+      "procedure": "Procedure",
+      "plan": "Plan",
+      "register": "Register",
+      "record": "Registratie",
+      "report": "Rapport",
+      "template": "Sjabloon",
+      "statement_of_applicability": "Verklaring van toepasselijkheid"
+    },
+    "classifications": {
+      "public": "Openbaar",
+      "internal": "Intern",
+      "confidential": "Vertrouwelijk",
+      "secret": "Geheim"
+    },
+    "versions": {
+      "heading": "Versiegeschiedenis",
+      "count_one": "{{count}} versie",
+      "count_other": "{{count}} versies",
+      "label": "v{{major}}.{{minor}}",
+      "current": "Huidig",
+      "select": "Versie {{major}}.{{minor}} bekijken",
+      "status": {
+        "inReview": "In beoordeling",
+        "approved": "Goedgekeurd",
+        "rejected": "Afgewezen",
+        "voided": "Nietig verklaard",
+        "signed": "Ondertekend"
+      }
+    }
+  },
+  "errors": {
+    "notFound": {
+      "title": "Pagina niet gevonden",
+      "description": "De pagina die u zoekt bestaat niet of is verplaatst."
+    },
+    "forbidden": {
+      "title": "Toegang geweigerd",
+      "description": "U heeft geen rechten om deze pagina te bekijken. Ga terug naar uw organisaties, of neem contact op met support als u denkt dat dit een vergissing is."
+    },
+    "serverError": {
+      "title": "Er is iets misgegaan",
+      "description": "Er is iets misgegaan aan onze kant. Probeer het opnieuw, of neem contact op met support als het probleem aanhoudt."
+    },
+    "generic": {
+      "title": "Pagina kan niet worden geladen",
+      "description": "We konden deze pagina niet laden. Probeer het opnieuw, of neem contact op met support als het probleem aanhoudt."
+    },
+    "actions": {
+      "tryAgain": "Opnieuw proberen",
+      "backToOrganizations": "Terug naar organisaties",
+      "contactSupport": "Contact opnemen met support"
+    },
+    "inline": {
+      "message": "Inhoud kan niet worden geladen",
+      "retry": "Opnieuw proberen"
+    }
+  }
+}

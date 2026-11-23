@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -28,19 +34,27 @@ import (
 
 type (
 	DetectedTracker struct {
-		ID               gid.GID       `db:"id"`
-		CookieBannerID   gid.GID       `db:"cookie_banner_id"`
-		TrackerPatternID *gid.GID      `db:"tracker_pattern_id"`
-		TrackerType      TrackerType   `db:"tracker_type"`
-		Identifier       string        `db:"identifier"`
-		MaxAgeSeconds    *int          `db:"max_age_seconds"`
-		Source           *CookieSource `db:"source"`
-		ValueSize        *int          `db:"value_size"`
-		InitiatorURL     *string       `db:"initiator_url"`
-		InitiatorDomain  *string       `db:"initiator_domain"`
-		LastDetectedAt   time.Time     `db:"last_detected_at"`
-		CreatedAt        time.Time     `db:"created_at"`
-		UpdatedAt        time.Time     `db:"updated_at"`
+		ID                 gid.GID                 `db:"id"`
+		CookieBannerID     gid.GID                 `db:"cookie_banner_id"`
+		TrackerPatternID   *gid.GID                `db:"tracker_pattern_id"`
+		TrackerType        TrackerType             `db:"tracker_type"`
+		Identifier         string                  `db:"identifier"`
+		MaxAgeSeconds      *int                    `db:"max_age_seconds"`
+		Source             *CookieSource           `db:"source"`
+		ObservedBy         DetectedTrackerObserver `db:"observed_by"`
+		ValueSize          *int                    `db:"value_size"`
+		InitiatorURL       *string                 `db:"initiator_url"`
+		InitiatorDomain    *string                 `db:"initiator_domain"`
+		CookieDomain       *string                 `db:"cookie_domain"`
+		HostOnly           *bool                   `db:"host_only"`
+		HTTPOnly           *bool                   `db:"http_only"`
+		Secure             *bool                   `db:"secure"`
+		SameSite           *CookieSameSite         `db:"same_site"`
+		Partitioned        *bool                   `db:"partitioned"`
+		SetByURL           *string                 `db:"set_by_url"`
+		CookieBannerScanID *gid.GID                `db:"cookie_banner_scan_id"`
+		CreatedAt          time.Time               `db:"created_at"`
+		UpdatedAt          time.Time               `db:"updated_at"`
 	}
 
 	DetectedTrackers []*DetectedTracker
@@ -48,14 +62,14 @@ type (
 
 func (dt *DetectedTracker) CursorKey(field DetectedTrackerOrderField) page.CursorKey {
 	switch field {
+	case DetectedTrackerOrderFieldCreatedAt:
+		return page.NewCursorKey(dt.ID, dt.CreatedAt)
 	case DetectedTrackerOrderFieldInitiatorURL:
 		if dt.InitiatorURL == nil {
 			return page.NewCursorKey(dt.ID, "")
 		}
 
 		return page.NewCursorKey(dt.ID, *dt.InitiatorURL)
-	case DetectedTrackerOrderFieldLastDetectedAt:
-		return page.NewCursorKey(dt.ID, dt.LastDetectedAt)
 	}
 
 	panic(fmt.Sprintf("unsupported order by: %s", field))
@@ -76,10 +90,18 @@ INSERT INTO detected_trackers (
 	identifier,
 	max_age_seconds,
 	source,
+	observed_by,
 	value_size,
 	initiator_url,
 	initiator_domain,
-	last_detected_at,
+	cookie_domain,
+	host_only,
+	http_only,
+	secure,
+	same_site,
+	partitioned,
+	set_by_url,
+	cookie_banner_scan_id,
 	created_at,
 	updated_at
 ) VALUES (
@@ -91,41 +113,78 @@ INSERT INTO detected_trackers (
 	@identifier,
 	@max_age_seconds,
 	@source,
+	@observed_by,
 	@value_size,
 	@initiator_url,
 	@initiator_domain,
-	@last_detected_at,
+	@cookie_domain,
+	@host_only,
+	@http_only,
+	@secure,
+	@same_site,
+	@partitioned,
+	@set_by_url,
+	@cookie_banner_scan_id,
 	@created_at,
 	@updated_at
 )
-ON CONFLICT (cookie_banner_id, tracker_type, identifier) DO UPDATE
-	SET last_detected_at = EXCLUDED.last_detected_at,
-		source = CASE WHEN detected_trackers.source IS NULL OR (
-				detected_trackers.source != @source_script AND EXCLUDED.source = @source_script
+ON CONFLICT (cookie_banner_id, tracker_type, identifier, COALESCE(cookie_domain, ''), observed_by) DO UPDATE
+	SET source = CASE
+			WHEN detected_trackers.source IS NULL THEN EXCLUDED.source
+			WHEN (
+				CASE EXCLUDED.source
+					WHEN 'SCRIPT' THEN 3
+					WHEN 'EXTENSION' THEN 2
+					WHEN 'HTTP' THEN 1
+					ELSE 0
+				END
+			) > (
+				CASE detected_trackers.source
+					WHEN 'SCRIPT' THEN 3
+					WHEN 'EXTENSION' THEN 2
+					WHEN 'HTTP' THEN 1
+					ELSE 0
+				END
 			) THEN EXCLUDED.source
 			ELSE detected_trackers.source
 		END,
 		initiator_url = COALESCE(EXCLUDED.initiator_url, detected_trackers.initiator_url),
 		initiator_domain = COALESCE(EXCLUDED.initiator_domain, detected_trackers.initiator_domain),
-		updated_at = EXCLUDED.updated_at
+		host_only = COALESCE(detected_trackers.host_only, EXCLUDED.host_only),
+		max_age_seconds = COALESCE(detected_trackers.max_age_seconds, EXCLUDED.max_age_seconds),
+		value_size = COALESCE(detected_trackers.value_size, EXCLUDED.value_size),
+		http_only = COALESCE(EXCLUDED.http_only, detected_trackers.http_only),
+		secure = COALESCE(EXCLUDED.secure, detected_trackers.secure),
+		same_site = COALESCE(EXCLUDED.same_site, detected_trackers.same_site),
+		partitioned = COALESCE(EXCLUDED.partitioned, detected_trackers.partitioned),
+		set_by_url = COALESCE(EXCLUDED.set_by_url, detected_trackers.set_by_url),
+		cookie_banner_scan_id = COALESCE(EXCLUDED.cookie_banner_scan_id, detected_trackers.cookie_banner_scan_id),
+		updated_at = GREATEST(detected_trackers.updated_at, EXCLUDED.updated_at)
 `
 
 	args := pgx.StrictNamedArgs{
-		"id":                 dt.ID,
-		"tenant_id":          scope.GetTenantID(),
-		"cookie_banner_id":   dt.CookieBannerID,
-		"tracker_pattern_id": dt.TrackerPatternID,
-		"tracker_type":       dt.TrackerType,
-		"identifier":         dt.Identifier,
-		"max_age_seconds":    dt.MaxAgeSeconds,
-		"source":             dt.Source,
-		"source_script":      CookieSourceScript,
-		"value_size":         dt.ValueSize,
-		"initiator_url":      dt.InitiatorURL,
-		"initiator_domain":   dt.InitiatorDomain,
-		"last_detected_at":   dt.LastDetectedAt,
-		"created_at":         dt.CreatedAt,
-		"updated_at":         dt.UpdatedAt,
+		"id":                    dt.ID,
+		"tenant_id":             scope.GetTenantID(),
+		"cookie_banner_id":      dt.CookieBannerID,
+		"tracker_pattern_id":    dt.TrackerPatternID,
+		"tracker_type":          dt.TrackerType,
+		"identifier":            dt.Identifier,
+		"max_age_seconds":       dt.MaxAgeSeconds,
+		"source":                dt.Source,
+		"observed_by":           dt.ObservedBy,
+		"value_size":            dt.ValueSize,
+		"initiator_url":         dt.InitiatorURL,
+		"initiator_domain":      dt.InitiatorDomain,
+		"cookie_domain":         dt.CookieDomain,
+		"host_only":             dt.HostOnly,
+		"http_only":             dt.HTTPOnly,
+		"secure":                dt.Secure,
+		"same_site":             dt.SameSite,
+		"partitioned":           dt.Partitioned,
+		"set_by_url":            dt.SetByURL,
+		"cookie_banner_scan_id": dt.CookieBannerScanID,
+		"created_at":            dt.CreatedAt,
+		"updated_at":            dt.UpdatedAt,
 	}
 
 	result, err := tx.Exec(ctx, q, args)
@@ -134,6 +193,306 @@ ON CONFLICT (cookie_banner_id, tracker_type, identifier) DO UPDATE
 	}
 
 	return result.RowsAffected() > 0, nil
+}
+
+func (dt *DetectedTracker) InsertIfNotExists(
+	ctx context.Context,
+	tx pg.Tx,
+	scope Scoper,
+) (bool, error) {
+	q := `
+INSERT INTO detected_trackers (
+	id,
+	tenant_id,
+	cookie_banner_id,
+	tracker_pattern_id,
+	tracker_type,
+	identifier,
+	max_age_seconds,
+	source,
+	observed_by,
+	value_size,
+	initiator_url,
+	initiator_domain,
+	cookie_domain,
+	host_only,
+	http_only,
+	secure,
+	same_site,
+	partitioned,
+	set_by_url,
+	cookie_banner_scan_id,
+	created_at,
+	updated_at
+) VALUES (
+	@id,
+	@tenant_id,
+	@cookie_banner_id,
+	@tracker_pattern_id,
+	@tracker_type,
+	@identifier,
+	@max_age_seconds,
+	@source,
+	@observed_by,
+	@value_size,
+	@initiator_url,
+	@initiator_domain,
+	@cookie_domain,
+	@host_only,
+	@http_only,
+	@secure,
+	@same_site,
+	@partitioned,
+	@set_by_url,
+	@cookie_banner_scan_id,
+	@created_at,
+	@updated_at
+)
+ON CONFLICT (cookie_banner_id, tracker_type, identifier, COALESCE(cookie_domain, ''), observed_by) DO NOTHING
+`
+
+	args := pgx.StrictNamedArgs{
+		"id":                    dt.ID,
+		"tenant_id":             scope.GetTenantID(),
+		"cookie_banner_id":      dt.CookieBannerID,
+		"tracker_pattern_id":    dt.TrackerPatternID,
+		"tracker_type":          dt.TrackerType,
+		"identifier":            dt.Identifier,
+		"max_age_seconds":       dt.MaxAgeSeconds,
+		"source":                dt.Source,
+		"observed_by":           dt.ObservedBy,
+		"value_size":            dt.ValueSize,
+		"initiator_url":         dt.InitiatorURL,
+		"initiator_domain":      dt.InitiatorDomain,
+		"cookie_domain":         dt.CookieDomain,
+		"host_only":             dt.HostOnly,
+		"http_only":             dt.HTTPOnly,
+		"secure":                dt.Secure,
+		"same_site":             dt.SameSite,
+		"partitioned":           dt.Partitioned,
+		"set_by_url":            dt.SetByURL,
+		"cookie_banner_scan_id": dt.CookieBannerScanID,
+		"created_at":            dt.CreatedAt,
+		"updated_at":            dt.UpdatedAt,
+	}
+
+	result, err := tx.Exec(ctx, q, args)
+	if err != nil {
+		return false, fmt.Errorf("cannot insert detected tracker: %w", err)
+	}
+
+	return result.RowsAffected() > 0, nil
+}
+
+// CountByCookieBannerScanID counts scanner observations stamped with
+// scanID. Storage is localStorage and sessionStorage together. SDK rows
+// are excluded, even when they share the scan id.
+func (dts *DetectedTrackers) CountByCookieBannerScanID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	scanID gid.GID,
+) (cookies int, storage int, err error) {
+	q := `
+SELECT
+	COUNT(id) FILTER (WHERE tracker_type = @cookie_type),
+	COUNT(id) FILTER (WHERE tracker_type IN (@local_storage_type, @session_storage_type))
+FROM
+	detected_trackers
+WHERE
+	%s
+	AND cookie_banner_scan_id = @cookie_banner_scan_id
+	AND observed_by = @observed_by
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"cookie_banner_scan_id": scanID,
+		"observed_by":           DetectedTrackerObserverScanner,
+		"cookie_type":           TrackerTypeCookie,
+		"local_storage_type":    TrackerTypeLocalStorage,
+		"session_storage_type":  TrackerTypeSessionStorage,
+	}
+	maps.Copy(args, scope.SQLArguments())
+
+	if err := conn.QueryRow(ctx, q, args).Scan(&cookies, &storage); err != nil {
+		return 0, 0, fmt.Errorf("cannot count detected trackers by scan: %w", err)
+	}
+
+	return cookies, storage, nil
+}
+
+// LoadByCookieBannerScanID lists scanner observations stamped with scanID.
+// The filter fragment is applied before the cursor fragment, which ends in
+// ORDER BY and LIMIT.
+func (dts *DetectedTrackers) LoadByCookieBannerScanID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	scanID gid.GID,
+	filter *DetectedTrackerFilter,
+	cursor *page.Cursor[DetectedTrackerOrderField],
+) error {
+	q := `
+SELECT
+	id,
+	cookie_banner_id,
+	tracker_pattern_id,
+	tracker_type,
+	identifier,
+	max_age_seconds,
+	source,
+	observed_by,
+	value_size,
+	initiator_url,
+	initiator_domain,
+	cookie_domain,
+	host_only,
+	http_only,
+	secure,
+	same_site,
+	partitioned,
+	set_by_url,
+	cookie_banner_scan_id,
+	created_at,
+	updated_at
+FROM
+	detected_trackers
+WHERE
+	%s
+	AND cookie_banner_scan_id = @cookie_banner_scan_id
+	AND observed_by = @observed_by
+	AND %s
+	AND %s
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment(), filter.SQLFragment(), cursor.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"cookie_banner_scan_id": scanID,
+		"observed_by":           DetectedTrackerObserverScanner,
+	}
+	maps.Copy(args, scope.SQLArguments())
+	maps.Copy(args, filter.SQLArguments())
+	maps.Copy(args, cursor.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query detected trackers by scan: %w", err)
+	}
+
+	trackers, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[DetectedTracker])
+	if err != nil {
+		return fmt.Errorf("cannot collect detected trackers by scan: %w", err)
+	}
+
+	*dts = trackers
+
+	return nil
+}
+
+// CountByCookieBannerScan counts scanner observations stamped with scanID.
+func (dts *DetectedTrackers) CountByCookieBannerScan(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	scanID gid.GID,
+	filter *DetectedTrackerFilter,
+) (int, error) {
+	q := `
+SELECT
+	COUNT(id)
+FROM
+	detected_trackers
+WHERE
+	%s
+	AND cookie_banner_scan_id = @cookie_banner_scan_id
+	AND observed_by = @observed_by
+	AND %s
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment(), filter.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"cookie_banner_scan_id": scanID,
+		"observed_by":           DetectedTrackerObserverScanner,
+	}
+	maps.Copy(args, scope.SQLArguments())
+	maps.Copy(args, filter.SQLArguments())
+
+	var count int
+	if err := conn.QueryRow(ctx, q, args).Scan(&count); err != nil {
+		return 0, fmt.Errorf("cannot count detected trackers by scan: %w", err)
+	}
+
+	return count, nil
+}
+
+// LoadObserversByTrackerPatternIDs returns the distinct observers that
+// reported each pattern. Patterns with no detections are absent from
+// the map.
+func (dts *DetectedTrackers) LoadObserversByTrackerPatternIDs(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	trackerPatternIDs []gid.GID,
+) (map[gid.GID][]DetectedTrackerObserver, error) {
+	observers := make(map[gid.GID][]DetectedTrackerObserver, len(trackerPatternIDs))
+	if len(trackerPatternIDs) == 0 {
+		return observers, nil
+	}
+
+	q := `
+SELECT
+	tracker_pattern_id,
+	array_agg(DISTINCT observed_by::text ORDER BY observed_by::text) AS observers
+FROM
+	detected_trackers
+WHERE
+	%s
+	AND tracker_pattern_id = ANY(@tracker_pattern_ids::text[])
+GROUP BY
+	tracker_pattern_id
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{
+		"tracker_pattern_ids": trackerPatternIDs,
+	}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return nil, fmt.Errorf("cannot query detected tracker observers: %w", err)
+	}
+
+	type patternObservers struct {
+		TrackerPatternID gid.GID  `db:"tracker_pattern_id"`
+		Observers        []string `db:"observers"`
+	}
+
+	collected, err := pgx.CollectRows(rows, pgx.RowToStructByName[patternObservers])
+	if err != nil {
+		return nil, fmt.Errorf("cannot collect detected tracker observers: %w", err)
+	}
+
+	for _, row := range collected {
+		parsed := make([]DetectedTrackerObserver, 0, len(row.Observers))
+		for _, raw := range row.Observers {
+			observer := DetectedTrackerObserver(raw)
+			if !observer.IsValid() {
+				return nil, fmt.Errorf("invalid detected tracker observer %q", raw)
+			}
+
+			parsed = append(parsed, observer)
+		}
+
+		observers[row.TrackerPatternID] = parsed
+	}
+
+	return observers, nil
 }
 
 func (dts *DetectedTrackers) CountByTrackerPatternID(
@@ -215,10 +574,18 @@ SELECT
 	identifier,
 	max_age_seconds,
 	source,
+	observed_by,
 	value_size,
 	initiator_url,
 	initiator_domain,
-	last_detected_at,
+	cookie_domain,
+	host_only,
+	http_only,
+	secure,
+	same_site,
+	partitioned,
+	set_by_url,
+	cookie_banner_scan_id,
 	created_at,
 	updated_at
 FROM
@@ -245,6 +612,72 @@ WHERE
 	trackers, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[DetectedTracker])
 	if err != nil {
 		return fmt.Errorf("cannot collect detected trackers: %w", err)
+	}
+
+	*dts = trackers
+
+	return nil
+}
+
+func (dts *DetectedTrackers) LoadByCookieBannerID(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	cookieBannerID gid.GID,
+	filter *DetectedTrackerFilter,
+	cursor *page.Cursor[DetectedTrackerOrderField],
+) error {
+	if filter == nil {
+		filter = NewDetectedTrackerFilter(nil)
+	}
+
+	q := `
+SELECT
+	id,
+	cookie_banner_id,
+	tracker_pattern_id,
+	tracker_type,
+	identifier,
+	max_age_seconds,
+	source,
+	observed_by,
+	value_size,
+	initiator_url,
+	initiator_domain,
+	cookie_domain,
+	host_only,
+	http_only,
+	secure,
+	same_site,
+	partitioned,
+	set_by_url,
+	cookie_banner_scan_id,
+	created_at,
+	updated_at
+FROM
+	detected_trackers
+WHERE
+	%s
+	AND cookie_banner_id = @cookie_banner_id
+	AND %s
+	AND %s
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment(), filter.SQLFragment(), cursor.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"cookie_banner_id": cookieBannerID}
+	maps.Copy(args, scope.SQLArguments())
+	maps.Copy(args, filter.SQLArguments())
+	maps.Copy(args, cursor.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query detected trackers by cookie banner: %w", err)
+	}
+
+	trackers, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[DetectedTracker])
+	if err != nil {
+		return fmt.Errorf("cannot collect detected trackers by cookie banner: %w", err)
 	}
 
 	*dts = trackers

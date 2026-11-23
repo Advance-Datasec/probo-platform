@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package types
 
@@ -21,6 +27,7 @@ import (
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/page"
 	"go.probo.inc/probo/pkg/prosemirror"
+	"go.probo.inc/probo/pkg/richtext"
 )
 
 func proseMirrorJSONToMarkdown(pmJSON string) (string, error) {
@@ -33,7 +40,7 @@ func proseMirrorJSONToMarkdown(pmJSON string) (string, error) {
 		return "", fmt.Errorf("cannot parse prosemirror json: %w", err)
 	}
 
-	md, err := prosemirror.RenderMarkdown(node)
+	md, err := richtext.DocumentMarkdown.Render(node)
 	if err != nil {
 		return "", fmt.Errorf("cannot render markdown: %w", err)
 	}
@@ -41,19 +48,49 @@ func proseMirrorJSONToMarkdown(pmJSON string) (string, error) {
 	return md, nil
 }
 
+// richTextToMarkdown converts stored ProseMirror JSON to markdown.
+// Used by task and other MCP surfaces that still expose markdown.
+func richTextToMarkdown(s string) (string, error) {
+	return proseMirrorJSONToMarkdown(s)
+}
+
+func optionalRichTextToMarkdown(s *string) (*string, error) {
+	if s == nil {
+		return nil, nil
+	}
+
+	md, err := richTextToMarkdown(*s)
+	if err != nil {
+		return nil, err
+	}
+
+	return &md, nil
+}
+
 func NewDocument(d *coredata.Document) *Document {
 	return &Document{
 		ID:                    d.ID,
 		OrganizationID:        d.OrganizationID,
+		Title:                 d.Title,
+		Classification:        d.Classification,
+		DocumentType:          d.DocumentType,
+		Orientation:           d.Orientation,
+		Content:               d.Content,
 		CurrentPublishedMajor: d.CurrentPublishedMajor,
 		CurrentPublishedMinor: d.CurrentPublishedMinor,
 		WriteMode:             d.WriteMode,
-		TrustCenterVisibility: d.TrustCenterVisibility,
 		Status:                d.Status,
 		ArchivedAt:            d.ArchivedAt,
 		CreatedAt:             d.CreatedAt,
 		UpdatedAt:             d.UpdatedAt,
 	}
+}
+
+func NewDocumentWithHeads(d *coredata.Document, heads []string) *Document {
+	document := NewDocument(d)
+	document.CollaborationHeads = heads
+
+	return document
 }
 
 func NewListControlDocumentsOutput(documentPage *page.Page[*coredata.Document, coredata.DocumentOrderField]) ListControlDocumentsOutput {
@@ -75,7 +112,7 @@ func NewListControlDocumentsOutput(documentPage *page.Page[*coredata.Document, c
 	}
 }
 
-func NewListMeasureDocumentsOutput(documentPage *page.Page[*coredata.Document, coredata.DocumentOrderField]) ListMeasureDocumentsOutput {
+func NewListInternalControlDocumentsOutput(documentPage *page.Page[*coredata.Document, coredata.DocumentOrderField]) ListInternalControlDocumentsOutput {
 	documents := make([]*Document, 0, len(documentPage.Data))
 	for _, d := range documentPage.Data {
 		documents = append(documents, NewDocument(d))
@@ -88,7 +125,7 @@ func NewListMeasureDocumentsOutput(documentPage *page.Page[*coredata.Document, c
 		nextCursor = &cursorKey
 	}
 
-	return ListMeasureDocumentsOutput{
+	return ListInternalControlDocumentsOutput{
 		NextCursor: nextCursor,
 		Documents:  documents,
 	}
@@ -113,19 +150,13 @@ func NewListDocumentsOutput(documentPage *page.Page[*coredata.Document, coredata
 	}
 }
 
-func NewAddDocumentOutput(doc *coredata.Document, docVersion *coredata.DocumentVersion) AddDocumentOutput {
+func NewAddDocumentOutput(doc *coredata.Document) AddDocumentOutput {
 	return AddDocumentOutput{
-		Document:        NewDocument(doc),
-		DocumentVersion: NewDocumentVersion(docVersion),
+		Document: NewDocument(doc),
 	}
 }
 
 func NewDocumentVersion(dv *coredata.DocumentVersion) *DocumentVersion {
-	contentMD, err := proseMirrorJSONToMarkdown(dv.Content)
-	if err != nil {
-		panic(fmt.Errorf("cannot convert document version content to markdown: %w", err))
-	}
-
 	return &DocumentVersion{
 		ID:             dv.ID,
 		OrganizationID: dv.OrganizationID,
@@ -135,7 +166,7 @@ func NewDocumentVersion(dv *coredata.DocumentVersion) *DocumentVersion {
 		Minor:          dv.Minor,
 		Classification: dv.Classification,
 		DocumentType:   dv.DocumentType,
-		Content:        contentMD,
+		Content:        dv.Content,
 		Changelog:      dv.Changelog,
 		Status:         dv.Status,
 		PublishedAt:    dv.PublishedAt,

@@ -1,49 +1,68 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
-// Use of this source code is governed by the ISC license
+// Use of this source code is governed by the MIT license
 // that can be found in the LICENSE file.
 
 import { CodeIcon, EyeIcon } from "@phosphor-icons/react";
 import type { ReactNodeViewProps } from "@tiptap/react";
 import { NodeViewContent, NodeViewWrapper } from "@tiptap/react";
-import mermaid from "mermaid";
 import { useEffect, useId, useState } from "react";
 
-import { mermaidRenderConfig } from "../mermaidConfig";
+import { mermaidRenderErrorToast, renderMermaidDiagram } from "../lib/mermaid";
+import useToast from "../v2/Toaster/useToast";
 
 type MermaidMode = "code" | "preview";
 
+type MermaidRenderState = {
+  source: string;
+  svg: string | null;
+  hasError: boolean;
+};
+
 function MermaidPreview({ chart }: { chart: string }) {
   const id = useId().replace(/:/g, "");
-  const [svg, setSvg] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [renderState, setRenderState] = useState<MermaidRenderState>({
+    source: "",
+    svg: null,
+    hasError: false,
+  });
+  const toast = useToast();
 
   const source = chart.trim();
+  const svg = renderState.source === source ? renderState.svg : null;
+  const hasError = renderState.source === source && renderState.hasError;
 
   useEffect(() => {
-    if (source.length === 0) return;
+    if (source.length === 0) {
+      return;
+    }
 
     let cancelled = false;
 
-    mermaid.initialize(mermaidRenderConfig);
-
-    mermaid
-      .render(`mermaid-editor-${id}`, source)
+    renderMermaidDiagram(`mermaid-editor-${id}`, source)
       .then((result) => {
         if (!cancelled) {
-          setSvg(result.svg);
-          setError(null);
+          setRenderState({
+            source,
+            svg: result.svg,
+            hasError: false,
+          });
         }
       })
-      .catch((err: unknown) => {
+      .catch(() => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
+          setRenderState({
+            source,
+            svg: null,
+            hasError: true,
+          });
+          toast.add(mermaidRenderErrorToast);
         }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [source, id]);
+  }, [source, id, toast]);
 
   if (source.length === 0) {
     return (
@@ -53,10 +72,10 @@ function MermaidPreview({ chart }: { chart: string }) {
     );
   }
 
-  if (error) {
+  if (hasError) {
     return (
       <div className="mermaid-error">
-        {error}
+        Unable to render diagram. Check the syntax and try again.
       </div>
     );
   }

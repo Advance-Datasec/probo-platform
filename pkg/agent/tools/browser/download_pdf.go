@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package browser
 
@@ -27,8 +33,8 @@ import (
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
+	"go.gearno.de/kit/httpclient"
 	"go.probo.inc/probo/pkg/agent"
-	"go.probo.inc/probo/pkg/agent/tools/internal/netcheck"
 )
 
 type (
@@ -44,10 +50,8 @@ type (
 )
 
 func DownloadPDFTool() agent.Tool {
-	client := &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: netcheck.NewPinnedTransport(),
-	}
+	client := httpclient.DefaultPooledClient(httpclient.WithSSRFProtection())
+	client.Timeout = 30 * time.Second
 
 	return agent.FunctionTool(
 		"download_pdf",
@@ -123,7 +127,7 @@ func DownloadPDFTool() agent.Tool {
 			// Get page count.
 			conf := model.NewDefaultConfiguration()
 
-			pageCount, err := api.PageCountFile(tmpFile)
+			pageCount, err := api.PageCountFile(ctx, tmpFile)
 			if err != nil {
 				return agent.ResultJSON(
 					downloadPDFResult{
@@ -132,41 +136,28 @@ func DownloadPDFTool() agent.Tool {
 				), nil
 			}
 
-			// Extract content to output dir.
-			outDir := filepath.Join(tmpDir, "out")
-			if err := os.MkdirAll(outDir, 0o700); err != nil {
-				return agent.ResultJSON(
-					downloadPDFResult{
-						ErrorDetail: fmt.Sprintf("cannot create output dir: %s", err),
-					},
-				), nil
-			}
+			// Extract content, digesting each page's content stream.
+			var sb strings.Builder
 
 			reader := bytes.NewReader(body)
-			if err := api.ExtractContent(reader, outDir, "content", nil, conf); err != nil {
+			digest := func(r io.Reader, _ int) error {
+				content, err := io.ReadAll(r)
+				if err != nil {
+					return err
+				}
+
+				sb.Write(content)
+				sb.WriteString("\n")
+
+				return nil
+			}
+
+			if err := api.ExtractContent(ctx, reader, nil, digest, conf); err != nil {
 				return agent.ResultJSON(
 					downloadPDFResult{
 						ErrorDetail: fmt.Sprintf("cannot extract PDF content: %s", err),
 					},
 				), nil
-			}
-
-			// Read all extracted content files.
-			var sb strings.Builder
-
-			entries, _ := os.ReadDir(outDir)
-			for _, entry := range entries {
-				if entry.IsDir() {
-					continue
-				}
-
-				content, err := os.ReadFile(filepath.Join(outDir, entry.Name()))
-				if err != nil {
-					continue
-				}
-
-				sb.Write(content)
-				sb.WriteString("\n")
 			}
 
 			text := sb.String()

@@ -1,0 +1,311 @@
+{
+  "detailsPage": {
+    "notFound": "Tâche introuvable",
+    "back": "Tâches",
+    "empty": "—",
+    "none": "Aucun",
+    "linkInternalControls": "Lier à des contrôles internes",
+    "searchInternalControls": "Rechercher des contrôles internes",
+    "noInternalControls": "Aucun contrôle interne",
+    "findings": "Constats",
+    "noFindings": "Aucun constat lié",
+    "searchFindings": "Rechercher des constats",
+    "noFindingsFound": "Aucun constat trouvé",
+    "findingsLoadError": "Impossible de charger les constats",
+    "internalControlsLoadError": "Impossible de charger les contrôles internes",
+    "noDescription": "Aucune description",
+    "unassigned": "Non assigné",
+    "fields": {
+      "name": "Nom",
+      "description": "Description",
+      "descriptionPlaceholder": "Écrire une description…",
+      "state": "État",
+      "priority": "Priorité",
+      "assignedTo": "Assigné à",
+      "linear": "Linear",
+      "internalControls": "Contrôles internes",
+      "timeEstimate": "Estimation de temps",
+      "timeEstimateUnit": "Unité d'estimation",
+      "deadline": "Échéance",
+      "recurrence": "Répétition",
+      "recurrenceUnit": "Unité de répétition",
+      "createdAt": "Créé le",
+      "updatedAt": "Mis à jour le",
+      "asana": "Asana"
+    },
+    "duration": {
+      "S": "Secondes",
+      "M": "Minutes",
+      "H": "Heures",
+      "D": "Jours",
+      "W": "Semaines",
+      "MO": "Mois",
+      "Y": "Années"
+    },
+    "states": {
+      "backlog": "Backlog",
+      "todo": "À faire",
+      "inProgress": "En cours",
+      "done": "Terminé",
+      "canceled": "Annulé",
+      "duplicate": "Doublon"
+    },
+    "priorities": {
+      "urgent": "Urgente",
+      "high": "Haute",
+      "medium": "Moyenne",
+      "low": "Basse"
+    },
+    "doesNotRepeat": "Ne se répète pas",
+    "hints": {
+      "recurrenceNeedsDeadline": "Définissez une échéance avant d'ajouter un intervalle de répétition"
+    },
+    "actions": {
+      "addEstimate": "Ajouter une estimation",
+      "clearEstimate": "Effacer l'estimation",
+      "addRecurrence": "Ajouter un intervalle",
+      "clearRecurrence": "Effacer l'intervalle",
+      "delete": "Supprimer",
+      "loadMoreInternalControls": "Charger plus",
+      "loadMoreFindings": "Charger plus",
+      "removeInternalControl": "Retirer",
+      "unlinkFinding": "Dissocier le constat",
+      "cancel": "Annuler",
+      "retry": "Réessayer"
+    },
+    "delete": {
+      "title": "Supprimer la tâche",
+      "description": "Êtes-vous sûr de vouloir supprimer cette tâche ?",
+      "loadError": "Les contrôles internes restants n'ont pas pu être chargés.",
+      "confirm": "Supprimer"
+    },
+    "messages": {
+      "updated": "Tâche mise à jour avec succès.",
+      "deleted": "Tâche supprimée avec succès."
+    },
+    "linear": {
+      "connect": "Connecter Linear",
+      "publish": "Créer",
+      "link": "Lier",
+      "linkTo": "Lier à",
+      "unlink": "Dissocier",
+      "team": "Équipe Linear",
+      "issue": "Issue Linear",
+      "chooseTeam": "Sélectionner une équipe",
+      "noTeam": "Aucune équipe",
+      "chooseIssue": "Sélectionner une issue",
+      "newIssue": "Nouvelle issue",
+      "searchTeam": "Rechercher par nom ou identifiant",
+      "searchIssue": "Rechercher par nom ou identifiant",
+      "linkHint": "Lier à une issue Linear",
+      "linkedIssue": "Liée à l'issue <issue>{{issue}}</issue>",
+      "noResults": "Aucun résultat",
+      "loadMore": "Charger plus",
+      "retry": "Réessayer",
+      "createWithoutTeam": "Créer sans équipe Linear",
+      "published": "Tâche créée dans Linear.",
+      "linked": "Tâche liée à Linear.",
+      "unlinked": "Issue Linear dissociée.",
+      "errors": {
+        "publish": "Échec de la création dans Linear",
+        "link": "Échec de la liaison vers Linear",
+        "unlink": "Échec de la dissociation de l'issue Linear",
+        "load": "Impossible d'afficher Linear"
+      }
+    },
+    "errors": {
+      "delete": "Échec de la suppression de la tâche",
+      "update": "Échec de la mise à jour de la tâche",
+      "content": "Impossible d'afficher cette description",
+      "linkFinding": "Échec de la liaison du constat",
+      "unlinkFinding": "Échec de la dissociation du constat"
+    },
+    "comments": {
+      "title": "Commentaires",
+      "empty": "Aucun commentaire pour le moment",
+      "authorFallback": "Quelqu'un",
+      "fields": {
+        "comment": "Commentaire",
+        "leaveAComment": "Laisser un commentaire…"
+      },
+      "actions": {
+        "submit": "Ajouter un commentaire",
+        "send": "Envoyer",
+        "edit": "Modifier le commentaire",
+        "save": "Enregistrer",
+        "cancel": "Annuler",
+        "delete": "Supprimer le commentaire",
+        "showMore": "Afficher plus"
+      },
+      "delete": {
+        "title": "Supprimer le commentaire",
+        "description": "Voulez-vous vraiment supprimer ce commentaire ?",
+        "confirm": "Supprimer"
+      },
+      "messages": {
+        "created": "Commentaire ajouté avec succès.",
+        "updated": "Commentaire mis à jour avec succès.",
+        "deleted": "Commentaire supprimé avec succès."
+      },
+      "errors": {
+        "create": "Échec de l'ajout du commentaire",
+        "update": "Échec de la mise à jour du commentaire",
+        "delete": "Échec de la suppression du commentaire",
+        "content": "Impossible d'afficher ce commentaire",
+        "contentRequired": "Saisissez un commentaire",
+        "contentTooLong": "Le commentaire ne doit pas dépasser {{max}} caractères"
+      }
+    },
+    "activity": {
+      "title": "Activité",
+      "empty": "Aucune activité pour le moment",
+      "actorFallback": "Quelqu'un",
+      "justNow": "à l'instant",
+      "commented": "<name>{{name}}</name> <time>{{time}}</time>",
+      "actions": {
+        "showMore": "Afficher plus"
+      }
+    },
+    "asana": {
+      "noResults": "Aucun résultat",
+      "loadMore": "Charger plus",
+      "errors": {
+        "load": "Impossible d'afficher Asana",
+        "publish": "Échec de la création de la tâche dans Asana",
+        "link": "Échec de la liaison de la tâche à Asana",
+        "unlink": "Échec de la dissociation de la tâche Asana"
+      },
+      "publish": "Créer",
+      "link": "Lier",
+      "linkTo": "Lier à",
+      "unlink": "Délier",
+      "project": "Projet Asana",
+      "task": "Tâche Asana",
+      "chooseProject": "Choisir un projet",
+      "noProject": "Aucun projet",
+      "chooseTask": "Choisir une tâche",
+      "newTask": "Nouvelle tâche",
+      "searchProject": "Rechercher par nom",
+      "searchTask": "Rechercher par nom",
+      "linkHint": "Lier à Asana",
+      "linkedTask": "Liée à la tâche <task>{{task}}</task>",
+      "published": "Tâche créée dans Asana.",
+      "linked": "Tâche liée à Asana.",
+      "unlinked": "Tâche Asana déliée."
+    }
+  },
+  "settingsDialog": {
+    "trigger": "Paramètres",
+    "title": "Paramètres",
+    "integrations": {
+      "title": "Intégrations des tâches",
+      "description": "Connectez Linear ou Asana pour publier des tâches et synchroniser dans les deux sens le nom, la description, l'échéance, l'assigné, les commentaires, les fichiers et les mentions. Les personnes correspondent par e-mail."
+    },
+    "linear": {
+      "name": "Linear",
+      "description": "Synchronise aussi l'état et la priorité.",
+      "defaultTeam": "Équipe par défaut",
+      "defaultTeamDescription": "Les nouvelles tâches utilisent cette équipe Linear, sauf si une autre équipe est choisie.",
+      "defaultTeamReadOnly": "Vous n'avez pas l'autorisation de modifier l'équipe par défaut.",
+      "noDefaultTeam": "Aucune équipe par défaut",
+      "issueImport": "Importer les nouvelles issues",
+      "issueImportDescription": "Actif crée une tâche Probo pour chaque nouvelle issue de l'équipe par défaut et la garde synchronisée.",
+      "issueImportReadOnly": "Vous n'avez pas l'autorisation de modifier l'import des issues.",
+      "issueImportNeedsTeam": "Choisissez une équipe par défaut avant d'activer l'import des issues.",
+      "issueImportStatus": {
+        "active": "Actif",
+        "inactive": "Inactif"
+      },
+      "disconnect": {
+        "title": "Déconnecter Linear ?",
+        "description": "Les tâches ne seront plus synchronisées avec Linear. Vous pourrez vous reconnecter plus tard.",
+        "confirm": "Déconnecter"
+      },
+      "messages": {
+        "disconnected": "Linear déconnecté.",
+        "defaultTeamSaved": "Équipe par défaut enregistrée.",
+        "issueImportSaved": "Import des issues enregistré."
+      },
+      "errors": {
+        "connect": "Échec de la connexion à Linear",
+        "disconnect": "Échec de la déconnexion de Linear",
+        "defaultTeam": "Échec de l'enregistrement de l'équipe par défaut",
+        "issueImport": "Échec de l'enregistrement de l'import des issues"
+      }
+    },
+    "status": {
+      "connected": "Connecté",
+      "notConnected": "Non connecté"
+    },
+    "actions": {
+      "connect": "Connecter",
+      "disconnect": "Déconnecter",
+      "close": "Fermer"
+    },
+    "asana": {
+      "name": "Asana",
+      "description": "Utilise une correspondance de projet pour l'état et la priorité.",
+      "defaultProject": "Projet par défaut",
+      "defaultProjectDescription": "Les nouvelles tâches sont publiées dans ce projet, sauf si un autre projet est choisi. Laissez-le vide pour garder les nouvelles tâches dans Probo.",
+      "noDefaultProject": "Aucun projet par défaut",
+      "searchProject": "Rechercher des projets",
+      "chooseProject": "Choisir un projet",
+      "taskImport": "Importer les nouvelles tâches",
+      "taskImportDescription": "Actif crée une tâche Probo pour chaque nouvelle tâche du projet par défaut.",
+      "taskImportReadOnly": "Vous n'avez pas l'autorisation de modifier l'import des tâches.",
+      "taskImportNeedsProject": "Choisissez un projet par défaut avant d'activer l'import des tâches.",
+      "taskImportStatus": {
+        "active": "Actif",
+        "inactive": "Inactif"
+      },
+      "mapping": "Correspondance des états et des priorités",
+      "customFieldsUnavailable": "La priorité ne peut pas être mise en correspondance, car cet espace de travail Asana n'inclut pas les champs personnalisés. L'état peut toujours suivre les sections. L'espace Asana connecté doit passer à une offre payante pour faire correspondre la priorité.",
+      "mappingHint": "Choisissez un projet pour associer ses sections et son champ de priorité. Tant qu'aucune correspondance n'est enregistrée, l'état suit le statut terminé d'Asana.",
+      "loadingMapping": "Chargement du projet…",
+      "noSection": "Ne pas déplacer la section",
+      "priorityField": "Champ de priorité",
+      "noPriority": "Ne pas synchroniser la priorité",
+      "noOption": "Ignorer",
+      "saveMapping": "Enregistrer la correspondance",
+      "deleteMapping": "Supprimer la correspondance",
+      "deleteMappingTitle": "Supprimer la correspondance ?",
+      "deleteMappingDescription": "L'état suivra le statut terminé d'Asana jusqu'à ce qu'une nouvelle correspondance soit enregistrée.",
+      "disconnect": {
+        "title": "Déconnecter Asana ?",
+        "description": "Les tâches ne seront plus synchronisées avec Asana. Vous pourrez reconnecter plus tard.",
+        "confirm": "Déconnecter"
+      },
+      "messages": {
+        "disconnected": "Asana déconnecté.",
+        "defaultProjectSaved": "Projet par défaut enregistré.",
+        "taskImportSaved": "Import des tâches enregistré.",
+        "mappingSaved": "Correspondance enregistrée.",
+        "mappingDeleted": "Correspondance supprimée."
+      },
+      "errors": {
+        "connect": "Échec de la connexion à Asana",
+        "disconnect": "Échec de la déconnexion d'Asana",
+        "defaultProject": "Échec de l'enregistrement du projet par défaut",
+        "taskImport": "Échec de l'enregistrement de l'import",
+        "mapping": "Échec de l'enregistrement de la correspondance",
+        "deleteMapping": "Échec de la suppression de la correspondance"
+      }
+    }
+  },
+  "newPage": {
+    "title": "Ajouter une tâche",
+    "fields": {
+      "namePlaceholder": "Nom de la tâche"
+    },
+    "actions": {
+      "create": "Créer la tâche"
+    },
+    "messages": {
+      "created": "Tâche créée avec succès."
+    },
+    "errors": {
+      "create": "Échec de la création de la tâche",
+      "nameRequired": "Saisissez un nom de tâche"
+    }
+  }
+}

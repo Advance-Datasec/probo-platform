@@ -23,6 +23,10 @@ enum RiskOrderField
             value: "go.probo.inc/probo/pkg/coredata.RiskOrderFieldUpdatedAt"
         )
     NAME @goEnum(value: "go.probo.inc/probo/pkg/coredata.RiskOrderFieldName")
+    REFERENCE_ID
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.RiskOrderFieldReferenceID"
+        )
     CATEGORY
         @goEnum(value: "go.probo.inc/probo/pkg/coredata.RiskOrderFieldCategory")
     TREATMENT
@@ -55,31 +59,40 @@ input RiskFilter {
     query: String
 }
 
-type Risk implements Node {
+type Risk implements Node & Taggable {
+    tags(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: TagOrder
+    ): TagConnection! @goField(forceResolver: true)
+
     id: ID!
+    referenceId: String!
     name: String!
     description: String
     category: String!
-    treatment: RiskTreatment!
-    inherentLikelihood: Int!
-    inherentImpact: Int!
-    inherentRiskScore: Int!
-    residualLikelihood: Int!
-    residualImpact: Int!
-    residualRiskScore: Int!
+    treatment: RiskTreatment
+    inherentLikelihood: Int
+    inherentImpact: Int
+    inherentRiskScore: Int
+    residualLikelihood: Int
+    residualImpact: Int
+    residualRiskScore: Int
     note: String!
 
     owner: Profile @goField(forceResolver: true)
     organization: Organization! @goField(forceResolver: true)
 
-    measures(
+    internalControls(
         first: Int
         after: CursorKey
         last: Int
         before: CursorKey
-        orderBy: MeasureOrder
-        filter: MeasureFilter
-    ): MeasureConnection! @goField(forceResolver: true)
+        orderBy: InternalControlOrder
+        filter: InternalControlFilter
+    ): InternalControlConnection! @goField(forceResolver: true)
 
     documents(
         first: Int
@@ -112,8 +125,19 @@ type Risk implements Node {
         after: CursorKey
         last: Int
         before: CursorKey
-        orderBy: RiskAssessmentScenarioOrder
-    ): RiskAssessmentScenarioConnection! @goField(forceResolver: true)
+        orderBy: RiskAnalysisScenarioOrder
+    ): RiskAnalysisScenarioConnection! @goField(forceResolver: true)
+
+    treatmentPlans(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: TreatmentPlanOrder
+        filter: TreatmentPlanFilter
+    ): TreatmentPlanConnection! @goField(forceResolver: true)
+
+    riskAnalysisHistoryCount: Int! @goField(forceResolver: true)
 
     createdAt: Datetime!
     updatedAt: Datetime!
@@ -139,12 +163,12 @@ extend type Mutation {
     createRisk(input: CreateRiskInput!): CreateRiskPayload!
     updateRisk(input: UpdateRiskInput!): UpdateRiskPayload!
     deleteRisk(input: DeleteRiskInput!): DeleteRiskPayload!
-    createRiskMeasureMapping(
-        input: CreateRiskMeasureMappingInput!
-    ): CreateRiskMeasureMappingPayload!
-    deleteRiskMeasureMapping(
-        input: DeleteRiskMeasureMappingInput!
-    ): DeleteRiskMeasureMappingPayload!
+    createRiskInternalControlMapping(
+        input: CreateRiskInternalControlMappingInput!
+    ): CreateRiskInternalControlMappingPayload!
+    deleteRiskInternalControlMapping(
+        input: DeleteRiskInternalControlMappingInput!
+    ): DeleteRiskInternalControlMappingPayload!
     createRiskDocumentMapping(
         input: CreateRiskDocumentMappingInput!
     ): CreateRiskDocumentMappingPayload!
@@ -178,12 +202,6 @@ input CreateRiskInput {
     name: String!
     description: String
     category: String!
-    ownerId: ID
-    treatment: RiskTreatment!
-    inherentLikelihood: Int!
-    inherentImpact: Int!
-    residualLikelihood: Int
-    residualImpact: Int
     note: String
 }
 
@@ -192,12 +210,6 @@ input UpdateRiskInput {
     name: String
     description: String @goField(omittable: true)
     category: String
-    ownerId: ID @goField(omittable: true)
-    treatment: RiskTreatment
-    inherentLikelihood: Int
-    inherentImpact: Int
-    residualLikelihood: Int
-    residualImpact: Int
     note: String
 }
 
@@ -205,14 +217,14 @@ input DeleteRiskInput {
     riskId: ID!
 }
 
-input CreateRiskMeasureMappingInput {
+input CreateRiskInternalControlMappingInput {
     riskId: ID!
-    measureId: ID!
+    internalControlId: ID!
 }
 
-input DeleteRiskMeasureMappingInput {
+input DeleteRiskInternalControlMappingInput {
     riskId: ID!
-    measureId: ID!
+    internalControlId: ID!
 }
 
 input CreateRiskDocumentMappingInput {
@@ -247,13 +259,13 @@ type DeleteRiskPayload {
     deletedRiskId: ID!
 }
 
-type CreateRiskMeasureMappingPayload {
+type CreateRiskInternalControlMappingPayload {
     riskEdge: RiskEdge!
-    measureEdge: MeasureEdge!
+    internalControlEdge: InternalControlEdge!
 }
 
-type DeleteRiskMeasureMappingPayload {
-    deletedMeasureId: ID!
+type DeleteRiskInternalControlMappingPayload {
+    deletedInternalControlId: ID!
     deletedRiskId: ID!
 }
 

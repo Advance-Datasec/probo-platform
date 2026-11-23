@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
-// Use of this source code is governed by the ISC license
+// Use of this source code is governed by the MIT license
 // that can be found in the LICENSE file.
 
-import { tv } from "tailwind-variants";
+import { tv } from "tailwind-variants/lite";
 
 export const optionsMenuVariants = tv({
   slots: {
@@ -11,5 +11,14 @@ export const optionsMenuVariants = tv({
       "rounded text-txt-tertiary hover:bg-subtle hover:text-txt-primary cursor-grab active:cursor-grabbing",
     ],
     menu: ["rounded-lg border border-border-mid bg-level-0 p-1 shadow-mid z-30"],
+  },
+  variants: {
+    compact: {
+      true: { trigger: "!size-4" },
+      false: {},
+    },
+  },
+  defaultVariants: {
+    compact: false,
   },
 });

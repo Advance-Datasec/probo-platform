@@ -1,0 +1,21 @@
+{
+  "name": "probo",
+  "version": "0.6.1",
+  "description": "Open-source compliance workflows and the using-prb CLI skill (Claude Code, Codex, OpenCode)",
+  "author": {
+    "name": "Probo Inc",
+    "email": "hello@probo.com"
+  },
+  "homepage": "https://github.com/getprobo/probo/tree/main/packages/skills",
+  "repository": "https://github.com/getprobo/probo",
+  "license": "MIT",
+  "keywords": [
+    "probo",
+    "compliance",
+    "grc",
+    "mcp",
+    "open-source"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}

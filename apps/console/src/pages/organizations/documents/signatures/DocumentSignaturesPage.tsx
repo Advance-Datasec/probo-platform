@@ -1,20 +1,26 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
 import { Checkbox, Spinner } from "@probo/ui";
 import { Suspense, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { type PreloadedQuery, usePreloadedQuery } from "react-relay";
 import { graphql } from "relay-runtime";
 
@@ -27,14 +33,15 @@ export const documentSignaturesPageQuery = graphql`
   query DocumentSignaturesPageQuery($documentId: ID! $organizationId: ID! $versionId: ID! $versionSpecified: Boolean!) {
     organization: node(id: $organizationId) {
       __typename
-      ...DocumentSignatureList_peopleFragment @arguments(filter: { contractEnded: false, state: ACTIVE })
+      ...DocumentSignatureList_peopleFragment @arguments(filter: { contractEnded: false, states: [ACTIVE] })
     }
     # We use this on /documents/:documentId
     document: node(id: $documentId) @skip(if: $versionSpecified) {
       __typename
       ... on Document {
-        lastVersion: versions(
+        publishedVersion: versions(
           first: 1
+          filter: { statuses: [PUBLISHED] }
           orderBy: { field: CREATED_AT, direction: DESC }
         ) {
           edges {
@@ -58,7 +65,7 @@ type SignatureState = "REQUESTED" | "SIGNED";
 export function DocumentSignaturesPage(props: { queryRef: PreloadedQuery<DocumentSignaturesPageQuery> }) {
   const { queryRef } = props;
 
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   const {
     organization,
@@ -83,7 +90,7 @@ export function DocumentSignaturesPage(props: { queryRef: PreloadedQuery<Documen
     <div className="space-y-4">
       <div className="flex items-center gap-4 pb-2 border-b border-border-solid">
         <span className="text-sm text-txt-secondary">
-          {__("Filter by state:")}
+          {t("documentSignaturesPage.filter.label")}
         </span>
         <div className="flex items-center gap-2">
           <Checkbox
@@ -94,7 +101,7 @@ export function DocumentSignaturesPage(props: { queryRef: PreloadedQuery<Documen
             className="text-sm text-txt-secondary cursor-pointer select-none"
             onClick={() => handleSelectState("REQUESTED")}
           >
-            {__("Requested")}
+            {t("documentSignaturesPage.states.requested")}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -106,18 +113,26 @@ export function DocumentSignaturesPage(props: { queryRef: PreloadedQuery<Documen
             className="text-sm text-txt-secondary cursor-pointer select-none"
             onClick={() => handleSelectState("SIGNED")}
           >
-            {__("Signed")}
+            {t("documentSignaturesPage.states.signed")}
           </span>
         </div>
       </div>
       <Suspense fallback={<Spinner centered />}>
-        <DocumentSignatureList
-          peopleFragmentRef={organization}
-          versionFragmentRef={
-            (version ?? document?.lastVersion.edges[0].node) as DocumentSignatureList_versionFragment$key
-          }
-          selectedStates={selectedStates}
-        />
+        {version ?? document?.publishedVersion.edges[0]?.node
+          ? (
+              <DocumentSignatureList
+                peopleFragmentRef={organization}
+                versionFragmentRef={
+                  (version ?? document?.publishedVersion.edges[0].node) as DocumentSignatureList_versionFragment$key
+                }
+                selectedStates={selectedStates}
+              />
+            )
+          : (
+              <p className="text-sm text-txt-secondary">
+                {t("documentSignaturesPage.empty")}
+              </p>
+            )}
       </Suspense>
     </div>
   );

@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -37,11 +43,22 @@ import (
 type ClickUpDriver struct {
 	httpClient *http.Client
 	teamID     string
+	baseURL    string
 }
 
 var _ Driver = (*ClickUpDriver)(nil)
 
-func NewClickUpDriver(httpClient *http.Client, teamID string) *ClickUpDriver {
+const clickupTeamSegment = "team"
+
+// clickupDefaultBaseURL is the ClickUp API root. It backs only the exported
+// ListClickUpOrganizations, and only when its caller resolves no APIBase for
+// the provider (unregistered, or registered without one). Every other path
+// goes through the injected baseURL instead.
+const clickupDefaultBaseURL = "https://api.clickup.com/api/v2"
+
+// NewClickUpDriver builds a driver against baseURL, the versioned ClickUp
+// API origin (e.g. https://api.clickup.com/api/v2).
+func NewClickUpDriver(httpClient *http.Client, teamID, baseURL string) *ClickUpDriver {
 	return &ClickUpDriver{
 		httpClient: &http.Client{
 			Transport: &retryRoundTripper{
@@ -49,7 +66,8 @@ func NewClickUpDriver(httpClient *http.Client, teamID string) *ClickUpDriver {
 				maxRetries: 3,
 			},
 		},
-		teamID: teamID,
+		teamID:  teamID,
+		baseURL: baseURL,
 	}
 }
 
@@ -71,7 +89,7 @@ type clickupTeamResponse struct {
 }
 
 func (d *ClickUpDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error) {
-	endpoint, err := url.JoinPath("https://api.clickup.com", "api", "v2", "team", url.PathEscape(d.teamID))
+	endpoint, err := url.JoinPath(d.baseURL, clickupTeamSegment, url.PathEscape(d.teamID))
 	if err != nil {
 		return nil, fmt.Errorf("cannot build clickup team URL: %w", err)
 	}
@@ -108,7 +126,7 @@ func (d *ClickUpDriver) ListAccounts(ctx context.Context) ([]AccountRecord, erro
 			Email:       m.User.Email,
 			FullName:    m.User.Username,
 			Roles:       roles,
-			IsAdmin:     isAdmin,
+			IsAdmin:     new(isAdmin),
 			ExternalID:  m.User.ID.String(),
 			MFAStatus:   coredata.MFAStatusUnknown,
 			AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
@@ -166,4 +184,110 @@ func parseClickUpTime(raw string) (time.Time, error) {
 	}
 
 	return time.UnixMilli(ms).UTC(), nil
+}
+
+// clickupNameResolver resolves the ClickUp team name.
+type clickupNameResolver struct {
+	httpClient *http.Client
+	teamID     string
+	baseURL    string
+}
+
+// NewClickUpNameResolver resolves the team name against baseURL, the
+// versioned ClickUp API origin (e.g. https://api.clickup.com/api/v2).
+func NewClickUpNameResolver(httpClient *http.Client, teamID, baseURL string) NameResolver {
+	return &clickupNameResolver{httpClient: httpClient, teamID: teamID, baseURL: baseURL}
+}
+
+func (r *clickupNameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
+	if r.teamID == "" {
+		return "", nil
+	}
+
+	endpoint, err := url.JoinPath(r.baseURL, clickupTeamSegment, url.PathEscape(r.teamID))
+	if err != nil {
+		return "", fmt.Errorf("cannot build clickup team URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("cannot create clickup team request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	httpResp, err := r.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("cannot execute clickup team request: %w", err)
+	}
+
+	defer func() { _ = httpResp.Body.Close() }()
+
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return "", nameStatusError("clickup team", httpResp.StatusCode)
+	}
+
+	var resp struct {
+		Team struct {
+			Name string `json:"name"`
+		} `json:"team"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		return "", fmt.Errorf("cannot decode clickup team response: %w", err)
+	}
+
+	return resp.Team.Name, nil
+}
+
+// ListClickUpOrganizations fetches the ClickUp teams (workspaces) the
+// authenticated user belongs to, from baseURL ("" for the ClickUp SaaS API).
+func ListClickUpOrganizations(ctx context.Context, httpClient *http.Client, baseURL string) ([]Organization, error) {
+	if baseURL == "" {
+		baseURL = clickupDefaultBaseURL
+	}
+
+	endpoint, err := url.JoinPath(baseURL, clickupTeamSegment)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build clickup organizations URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create clickup organizations request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("cannot fetch clickup organizations: %w", err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cannot fetch clickup organizations: unexpected status %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Teams []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"teams"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("cannot decode clickup organizations response: %w", err)
+	}
+
+	result := make([]Organization, len(body.Teams))
+	for i, t := range body.Teams {
+		displayName := t.Name
+		if displayName == "" {
+			displayName = t.ID
+		}
+
+		result[i] = Organization{Slug: t.ID, DisplayName: displayName}
+	}
+
+	return result, nil
 }

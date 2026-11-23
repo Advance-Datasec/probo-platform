@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package types
 
@@ -28,37 +34,33 @@ type (
 	// TrackerPattern is the Go model bound to the GraphQL TrackerPattern
 	// type via @goModel. The first block contains the fields gqlgen
 	// fulfills directly from the model; resolver-only fields
-	// (cookieCategory, detectedTrackers, thirdParty, commonThirdParty,
-	// detectedCount, permission) are populated by the resolver.
-	//
-	// ThirdPartyID is not exposed in GraphQL — it is a foreign-key
-	// handle the resolver uses to load the linked org-scoped third
-	// party without re-querying coredata.
+	// (cookieCategory, detectedTrackers, commonThirdParty, attribution,
+	// sourceCookieBanner, detectedCount, hits, permission) are
+	// populated by the resolver. SourceCookieBannerID is the sibling
+	// banner that promoted source, when one did.
 	//
 	// CommonTrackerPatternID is exposed directly as the
 	// commonTrackerPatternId field: a non-null value indicates the
 	// pattern is linked to the common tracker-pattern catalog, which is
 	// used to debug the provenance of agent-generated descriptions.
 	TrackerPattern struct {
-		ID            gid.GID                          `json:"id"`
-		TrackerType   coredata.TrackerType             `json:"trackerType"`
-		Pattern       string                           `json:"pattern"`
-		MatchType     coredata.TrackerPatternMatchType `json:"matchType"`
-		DisplayName   string                           `json:"displayName"`
-		MaxAgeSeconds *int                             `json:"maxAgeSeconds,omitempty"`
-		Description   string                           `json:"description"`
-		Source        *coredata.CookieSource           `json:"source,omitempty"`
-		Excluded      bool                             `json:"excluded"`
-		LastMatchedAt *time.Time                       `json:"lastMatchedAt,omitempty"`
-		CreatedAt     time.Time                        `json:"createdAt"`
-		UpdatedAt     time.Time                        `json:"updatedAt"`
+		ID                   gid.GID                          `json:"id"`
+		TrackerType          coredata.TrackerType             `json:"trackerType"`
+		Pattern              string                           `json:"pattern"`
+		MatchType            coredata.TrackerPatternMatchType `json:"matchType"`
+		MaxAgeSeconds        *int                             `json:"maxAgeSeconds,omitempty"`
+		Description          string                           `json:"description"`
+		Source               *coredata.CookieSource           `json:"source,omitempty"`
+		SourceCookieBannerID *gid.GID                         `json:"sourceCookieBannerId,omitempty"`
+		Excluded             bool                             `json:"excluded"`
+		CreatedAt            time.Time                        `json:"createdAt"`
+		UpdatedAt            time.Time                        `json:"updatedAt"`
 
 		CookieCategory   *CookieCategory            `json:"cookieCategory,omitempty"`
 		DetectedTrackers *DetectedTrackerConnection `json:"detectedTrackers,omitempty"`
 		DetectedCount    int                        `json:"detectedCount"`
 		Permission       bool                       `json:"permission"`
 
-		ThirdPartyID           *gid.GID `json:"-"`
 		CommonTrackerPatternID *gid.GID `json:"commonTrackerPatternId,omitempty"`
 	}
 
@@ -78,11 +80,28 @@ type (
 		TrackerType      *coredata.TrackerType
 		CookieCategoryID *gid.GID
 		ThirdPartyID     *gid.GID
+		Excluded         *bool
+		Categorized      *bool
+		ObservedBy       []coredata.DetectedTrackerObserver
 	}
 )
 
 func (TrackerPattern) IsNode()          {}
 func (t TrackerPattern) GetID() gid.GID { return t.ID }
+
+func NewCoredataTrackerPatternFilter(filter *TrackerPatternFilter) *coredata.TrackerPatternFilter {
+	if filter == nil {
+		return coredata.NewTrackerPatternFilter(nil, nil, nil)
+	}
+
+	return coredata.NewTrackerPatternFilter(nil, filter.CookieCategoryID, nil).
+		WithExcluded(filter.Excluded).
+		WithCategorized(filter.Categorized).
+		WithQuery(filter.Query).
+		WithSource(filter.Source).
+		WithTrackerType(filter.TrackerType).
+		WithObservedBy(filter.ObservedBy)
+}
 
 func NewTrackerPatternConnection(
 	p *page.Page[*coredata.TrackerPattern, coredata.TrackerPatternOrderField],
@@ -135,15 +154,13 @@ func NewTrackerPatternNode(tp *coredata.TrackerPattern) *TrackerPattern {
 		TrackerType:            tp.TrackerType,
 		Pattern:                tp.Pattern,
 		MatchType:              tp.MatchType,
-		DisplayName:            tp.DisplayName,
 		MaxAgeSeconds:          tp.MaxAgeSeconds,
 		Description:            tp.Description,
 		Source:                 tp.Source,
+		SourceCookieBannerID:   tp.SourceCookieBannerID,
 		Excluded:               tp.Excluded,
-		LastMatchedAt:          tp.LastMatchedAt,
 		CreatedAt:              tp.CreatedAt,
 		UpdatedAt:              tp.UpdatedAt,
-		ThirdPartyID:           tp.ThirdPartyID,
 		CommonTrackerPatternID: tp.CommonTrackerPatternID,
 	}
 }

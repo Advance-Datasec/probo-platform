@@ -1,21 +1,28 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
-import { Avatar, Field, Option, Select } from "@probo/ui";
+import { Field, Option, Select } from "@probo/ui";
+import { Avatar } from "@probo/ui/src/v2/Avatar/Avatar";
 import { type ComponentProps, Suspense } from "react";
 import { type Control, Controller, type FieldPath, type FieldValues } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 
 import { usePeople } from "#/hooks/graph/PeopleGraph";
 
@@ -36,10 +43,19 @@ export function PeopleSelectField<TFieldValues extends FieldValues = FieldValues
   control,
   ...props
 }: Props<TFieldValues>) {
+  const { t } = useTranslation();
+
   return (
     <Field {...props}>
       <Suspense
-        fallback={<Select variant="editor" loading placeholder="Loading..." />}
+        fallback={(
+          <Select
+            variant="editor"
+            loading
+            placeholder={t("peopleSelectField.placeholder")}
+            className="w-full"
+          />
+        )}
       >
         <PeopleSelectWithQuery<TFieldValues>
           organizationId={organizationId}
@@ -59,7 +75,7 @@ function PeopleSelectWithQuery<TFieldValues extends FieldValues = FieldValues>(
     "organizationId" | "control" | "name" | "disabled" | "optional"
   >,
 ) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const { name, organizationId, control } = props;
   const people = usePeople(organizationId, { contractEnded: false });
 
@@ -72,18 +88,25 @@ function PeopleSelectWithQuery<TFieldValues extends FieldValues = FieldValues>(
           disabled={props.disabled}
           id={name}
           variant="editor"
-          placeholder={__("Select an owner")}
+          placeholder={t("peopleSelectField.placeholder")}
           onValueChange={value =>
             field.onChange(value === "__NONE__" ? null : value)}
-          key={people?.length.toString() ?? "0"}
           {...field}
           className="w-full"
           value={field.value ?? (props.optional ? "__NONE__" : "")}
         >
-          {props.optional && <Option value="__NONE__">{__("None")}</Option>}
+          {props.optional && (
+            <Option value="__NONE__">{t("peopleSelectField.none")}</Option>
+          )}
           {people?.map(p => (
             <Option key={p.id} value={p.id} className="flex gap-2">
-              <Avatar name={p.fullName} />
+              <Avatar
+                name={p.fullName}
+                email={p.emailAddress}
+                src={p.avatar?.downloadUrl}
+                size={1}
+                radius="full"
+              />
               {p.fullName}
             </Option>
           ))}

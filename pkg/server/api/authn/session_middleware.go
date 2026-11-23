@@ -1,34 +1,58 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package authn
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 
-	"github.com/99designs/gqlgen/graphql"
-	"github.com/vektah/gqlparser/v2/gqlerror"
+	"github.com/jackc/puddle/v2"
 	"go.gearno.de/kit/httpserver"
 	"go.gearno.de/kit/log"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/iam"
 	"go.probo.inc/probo/pkg/securecookie"
-	"go.probo.inc/probo/pkg/server/gqlutils"
+	"go.probo.inc/probo/pkg/server/api/clientip"
 )
+
+// ignoreSessionDataUpdateError reports errors that happen because the request is
+// already over. The database client does not wrap the request context error, so
+// a failed write can only be attributed to cancellation when the context was
+// already canceled before the write started; otherwise a real session-not-found
+// or write error must surface. Shutdown closes the pool while a hijacked socket
+// is still leaving the handler, so a closed pool is always ignored.
+func ignoreSessionDataUpdateError(canceledBeforeWrite bool, err error) bool {
+	if canceledBeforeWrite {
+		return true
+	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	return errors.Is(err, puddle.ErrClosedPool)
+}
 
 func NewSessionMiddleware(svc *iam.Service, cookieConfig securecookie.Config) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -46,21 +70,6 @@ func NewSessionMiddleware(svc *iam.Service, cookieConfig securecookie.Config) fu
 				if err != nil {
 					securecookie.Clear(w, cookieConfig)
 					next.ServeHTTP(w, r)
-
-					return
-				}
-
-				apiKey := APIKeyFromContext(ctx)
-				if sessionID != gid.Nil && apiKey != nil {
-					httpserver.RenderJSON(
-						w,
-						http.StatusUnauthorized,
-						&graphql.Response{
-							Errors: gqlerror.List{
-								gqlutils.Conflictf(ctx, "session authentication cannot be used with API key authentication"),
-							},
-						},
-					)
 
 					return
 				}
@@ -97,13 +106,7 @@ func NewSessionMiddleware(svc *iam.Service, cookieConfig securecookie.Config) fu
 				}
 
 				userAgent := r.UserAgent()
-				// TODO: will work well when no layer 7 proxy is in front of the server
-				var ipAddress net.IP
-				if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-					ipAddress = net.ParseIP(host)
-				} else {
-					ipAddress = net.ParseIP(r.RemoteAddr)
-				}
+				ipAddress := net.ParseIP(clientip.Extract(r))
 
 				err = svc.SessionService.UpdateSessionInfo(ctx, session.ID, userAgent, ipAddress)
 				if err != nil {
@@ -122,8 +125,13 @@ func NewSessionMiddleware(svc *iam.Service, cookieConfig securecookie.Config) fu
 
 				next.ServeHTTP(w, r.WithContext(ctx))
 
+				// A collaboration socket is hijacked, so a panic here is written
+				// onto a connection that can no longer carry an HTTP response.
+				// Shutdown closes that socket and then the database pool.
+				canceledBeforeWrite := ctx.Err() != nil
+
 				err = svc.SessionService.UpdateSessionData(ctx, session.ID, session.Data)
-				if err != nil {
+				if err != nil && !ignoreSessionDataUpdateError(canceledBeforeWrite, err) {
 					panic(fmt.Errorf("cannot update session data: %w", err))
 				}
 			},

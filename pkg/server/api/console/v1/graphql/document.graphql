@@ -1,9 +1,5 @@
-enum DocumentVersionStatus
+ enum DocumentVersionStatus
     @goModel(model: "go.probo.inc/probo/pkg/coredata.DocumentVersionStatus") {
-    DRAFT
-        @goEnum(
-            value: "go.probo.inc/probo/pkg/coredata.DocumentVersionStatusDraft"
-        )
     PENDING_APPROVAL
         @goEnum(
             value: "go.probo.inc/probo/pkg/coredata.DocumentVersionStatusPendingApproval"
@@ -11,6 +7,14 @@ enum DocumentVersionStatus
     PUBLISHED
         @goEnum(
             value: "go.probo.inc/probo/pkg/coredata.DocumentVersionStatusPublished"
+        )
+    REJECTED
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.DocumentVersionStatusRejected"
+        )
+    VOIDED
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/coredata.DocumentVersionStatusVoided"
         )
 }
 
@@ -233,6 +237,15 @@ input DocumentFilter {
     documentTypes: [DocumentType!]
     classifications: [DocumentClassification!]
     status: [DocumentStatus!]
+    published: Boolean
+}
+
+input EmployeeDocumentFilter
+    @goModel(
+        model: "go.probo.inc/probo/pkg/server/api/console/v1/types.EmployeeDocumentFilter"
+    ) {
+    signed: Boolean
+    approvalStates: [DocumentVersionApprovalDecisionState!]
 }
 
 input DocumentVersionFilter {
@@ -247,7 +260,7 @@ input DocumentVersionSignatureOrder {
 input DocumentVersionSignatureFilter {
     states: [DocumentVersionSignatureState!]
     activeContract: Boolean
-    state: ProfileState
+    profileStates: [ProfileState!]
 }
 
 input DocumentVersionApprovalQuorumOrder {
@@ -264,13 +277,32 @@ input DocumentVersionApprovalDecisionOrder {
     direction: OrderDirection!
 }
 
-type Document implements Node {
+type Document implements Node & Taggable {
+    tags(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: TagOrder
+    ): TagConnection! @goField(forceResolver: true)
+
     id: ID!
+    title: String!
+    classification: DocumentClassification!
+    documentType: DocumentType!
+    orientation: DocumentVersionOrientation!
+    content: DocumentContent! @goField(forceResolver: true)
     currentPublishedMajor: Int
     currentPublishedMinor: Int
-    trustCenterVisibility: TrustCenterVisibility!
     alias: String @goField(forceResolver: true)
     organization: Organization! @goField(forceResolver: true)
+    compliancePortalDocument(
+        compliancePortalId: ID!
+    ): CompliancePortalDocument @goField(forceResolver: true)
+    employeePortalDocument: EmployeePortalDocument @goField(forceResolver: true)
+    compliancePortalDocumentAccess(
+        compliancePortalAccessId: ID!
+    ): CompliancePortalDocumentAccess @goField(forceResolver: true)
 
     versions(
         first: Int
@@ -280,6 +312,24 @@ type Document implements Node {
         orderBy: DocumentVersionOrder
         filter: DocumentVersionFilter
     ): DocumentVersionConnection! @goField(forceResolver: true)
+
+    commentThreads(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: DocumentCommentThreadOrder
+        filter: DocumentCommentThreadFilter
+    ): DocumentCommentThreadConnection! @goField(forceResolver: true)
+
+    suggestions(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: DocumentSuggestionOrder
+        filter: DocumentSuggestionFilter
+    ): DocumentSuggestionConnection! @goField(forceResolver: true)
 
     controls(
         first: Int
@@ -292,6 +342,16 @@ type Document implements Node {
 
     defaultApprovers: [Profile!]! @goField(forceResolver: true)
 
+    history(
+        first: Int
+        after: CursorKey
+        last: Int
+        before: CursorKey
+        orderBy: DocumentRevisionOrder
+    ): DocumentRevisionConnection! @goField(forceResolver: true)
+
+    revision(id: ID!): DocumentRevision! @goField(forceResolver: true)
+
     writeMode: DocumentWriteMode!
     status: DocumentStatus!
     archivedAt: Datetime
@@ -302,13 +362,27 @@ type Document implements Node {
     permission(action: String!): Boolean! @goField(forceResolver: true)
 }
 
+type DocumentContent
+    @goModel(
+        model: "go.probo.inc/probo/pkg/server/api/console/v1/types.DocumentContent"
+    ) {
+    """
+    Stored ProseMirror document JSON.
+    """
+    prosemirror: String! @goField(forceResolver: true)
+    """
+    Markdown rendition. Computed only when selected.
+    """
+    markdown: String! @goField(forceResolver: true)
+}
+
 type DocumentVersion implements Node {
     id: ID!
     document: Document! @goField(forceResolver: true)
     status: DocumentVersionStatus!
     major: Int!
     minor: Int!
-    content: String!
+    content: DocumentContent!
     changelog: String!
     title: String!
     classification: DocumentClassification!
@@ -346,6 +420,83 @@ type DocumentVersion implements Node {
     updatedAt: Datetime!
 
     permission(action: String!): Boolean! @goField(forceResolver: true)
+}
+
+enum DocumentRevisionOrderField
+    @goModel(
+        model: "go.probo.inc/probo/pkg/collaboration.DocumentRevisionOrderField"
+    ) {
+    ENDED_AT
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/collaboration.DocumentRevisionOrderFieldEndedAt"
+        )
+}
+
+input DocumentRevisionOrder {
+    field: DocumentRevisionOrderField!
+    direction: OrderDirection!
+}
+
+type DocumentRevision
+    @goModel(
+        model: "go.probo.inc/probo/pkg/server/api/console/v1/types.DocumentRevision"
+    ) {
+    id: ID!
+    heads: [String!]!
+    previousHeads: [String!]!
+    actorID: String!
+    authorName: String
+    author: Profile @goField(forceResolver: true)
+    startedAt: Datetime!
+    endedAt: Datetime!
+    changeCount: Int!
+    snapshot: DocumentHistorySnapshot! @goField(forceResolver: true)
+}
+
+type DocumentRevisionConnection
+    @goModel(
+        model: "go.probo.inc/probo/pkg/server/api/console/v1/types.DocumentRevisionConnection"
+    ) {
+    totalCount: Int! @goField(forceResolver: true)
+    edges: [DocumentRevisionEdge!]!
+    pageInfo: PageInfo!
+}
+
+type DocumentRevisionEdge {
+    cursor: CursorKey!
+    node: DocumentRevision!
+}
+
+enum DocumentHistoryHighlightKind
+    @goModel(
+        model: "go.probo.inc/probo/pkg/collaboration.DocumentHistoryHighlightKind"
+    ) {
+    INSERT
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/collaboration.DocumentHistoryHighlightKindInsert"
+        )
+    DELETE
+        @goEnum(
+            value: "go.probo.inc/probo/pkg/collaboration.DocumentHistoryHighlightKindDelete"
+        )
+}
+
+type DocumentHistoryHighlight
+    @goModel(
+        model: "go.probo.inc/probo/pkg/server/api/console/v1/types.DocumentHistoryHighlight"
+    ) {
+    kind: DocumentHistoryHighlightKind!
+    from: Int!
+    to: Int!
+    text: String!
+}
+
+type DocumentHistorySnapshot
+    @goModel(
+        model: "go.probo.inc/probo/pkg/server/api/console/v1/types.DocumentHistorySnapshot"
+    ) {
+    content: DocumentContent!
+    highlights: [DocumentHistoryHighlight!]!
 }
 
 type DocumentVersionSignature implements Node {
@@ -505,6 +656,7 @@ type EmployeeDocumentConnection
     @goModel(
         model: "go.probo.inc/probo/pkg/server/api/console/v1/types.EmployeeDocumentConnection"
     ) {
+    totalCount: Int! @goField(forceResolver: true)
     edges: [EmployeeDocumentEdge!]!
     pageInfo: PageInfo!
 }
@@ -521,6 +673,7 @@ type EmployeeDocumentVersionConnection
     @goModel(
         model: "go.probo.inc/probo/pkg/server/api/console/v1/types.EmployeeDocumentVersionConnection"
     ) {
+    totalCount: Int! @goField(forceResolver: true)
     edges: [EmployeeDocumentVersionEdge!]!
     pageInfo: PageInfo!
 }
@@ -536,7 +689,6 @@ type EmployeeDocumentVersionEdge
 extend type Mutation {
     createDocument(input: CreateDocumentInput!): CreateDocumentPayload!
     updateDocument(input: UpdateDocumentInput!): UpdateDocumentPayload!
-    deleteDocumentDraft(input: DeleteDocumentDraftInput!): DeleteDocumentDraftPayload!
     archiveDocument(input: ArchiveDocumentInput!): ArchiveDocumentPayload!
     unarchiveDocument(input: UnarchiveDocumentInput!): UnarchiveDocumentPayload!
     deleteDocument(input: DeleteDocumentInput!): DeleteDocumentPayload!
@@ -561,9 +713,6 @@ extend type Mutation {
     bulkExportDocuments(
         input: BulkExportDocumentsInput!
     ): BulkExportDocumentsPayload!
-    generateDocumentChangelog(
-        input: GenerateDocumentChangelogInput!
-    ): GenerateDocumentChangelogPayload!
     requestSignature(input: RequestSignatureInput!): RequestSignaturePayload!
     bulkRequestSignatures(
         input: BulkRequestSignaturesInput!
@@ -584,6 +733,18 @@ extend type Mutation {
     exportEmployeeDocumentVersionPDF(
         input: ExportEmployeeDocumentVersionPDFInput!
     ): ExportEmployeeDocumentVersionPDFPayload!
+    restoreDocumentHistory(
+        input: RestoreDocumentHistoryInput!
+    ): RestoreDocumentHistoryPayload!
+}
+
+input RestoreDocumentHistoryInput {
+    documentId: ID!
+    heads: [String!]!
+}
+
+type RestoreDocumentHistoryPayload {
+    document: Document!
 }
 
 input CreateDocumentInput {
@@ -592,7 +753,6 @@ input CreateDocumentInput {
     content: String
     documentType: DocumentType!
     classification: DocumentClassification!
-    trustCenterVisibility: TrustCenterVisibility
     defaultApproverIds: [ID!]
 }
 
@@ -602,12 +762,7 @@ input UpdateDocumentInput {
     content: String
     classification: DocumentClassification
     documentType: DocumentType
-    trustCenterVisibility: TrustCenterVisibility
     defaultApproverIds: [ID!]
-}
-
-input DeleteDocumentDraftInput {
-    documentId: ID!
 }
 
 input ArchiveDocumentInput {
@@ -625,7 +780,8 @@ input DeleteDocumentInput {
 input ExportDocumentVersionPDFInput {
     documentVersionId: ID!
     withWatermark: Boolean!
-    watermarkEmail: EmailAddr
+    watermarkText: String
+    watermarkEmail: EmailAddr @deprecated(reason: "Use watermarkText.")
     withSignatures: Boolean!
 }
 
@@ -665,12 +821,9 @@ input BulkUnarchiveDocumentsInput {
 input BulkExportDocumentsInput {
     documentIds: [ID!]!
     withWatermark: Boolean!
-    watermarkEmail: EmailAddr
+    watermarkText: String
+    watermarkEmail: EmailAddr @deprecated(reason: "Use watermarkText.")
     withSignatures: Boolean!
-}
-
-input GenerateDocumentChangelogInput {
-    documentId: ID!
 }
 
 input RequestSignatureInput {
@@ -703,17 +856,13 @@ input RejectDocumentVersionInput {
 
 type CreateDocumentPayload {
     documentEdge: DocumentEdge!
-    documentVersionEdge: DocumentVersionEdge!
+    documentVersionEdge: DocumentVersionEdge
 }
 
 type UpdateDocumentPayload {
     document: Document!
     documentVersion: DocumentVersion
     documentVersionEdge: DocumentVersionEdge
-}
-
-type DeleteDocumentDraftPayload {
-    document: Document!
 }
 
 type ArchiveDocumentPayload {
@@ -790,8 +939,4 @@ type ApproveDocumentVersionPayload {
 
 type RejectDocumentVersionPayload {
     approvalDecision: DocumentVersionApprovalDecision!
-}
-
-type GenerateDocumentChangelogPayload {
-    changelog: String!
 }

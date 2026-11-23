@@ -1,25 +1,25 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import {
-  formatDate,
-  formatError,
-  getDocumentClassificationLabel,
-  getDocumentTypeLabel,
-  sprintf,
-} from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
+import { formatError } from "@probo/helpers";
+import { dateFormat } from "@probo/i18n";
 import {
   ActionDropdown,
   Badge,
@@ -30,9 +30,10 @@ import {
   Td,
   Tr,
   useConfirm,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { useFragment, useMutation } from "react-relay";
 import { ConnectionHandler, type DataID, graphql } from "relay-runtime";
 
@@ -46,8 +47,13 @@ import { DeleteDocumentDialog, type DeleteDocumentDialogRef } from "./DeleteDocu
 const fragment = graphql`
   fragment DocumentListItemFragment on Document {
     id
+    title
     status
+    documentType
+    classification
     updatedAt
+    currentPublishedMajor
+    currentPublishedMinor
     canArchive: permission(action: "core:document:archive")
     canDelete: permission(action: "core:document:delete")
     canUnarchive: permission(action: "core:document:unarchive")
@@ -55,16 +61,12 @@ const fragment = graphql`
       id
       fullName
     }
-    recentVersions: versions(first: 2 orderBy: { field: CREATED_AT direction: DESC }) {
+    pendingApproval: versions(first: 1, filter: { statuses: [PENDING_APPROVAL] }) {
       edges {
         node {
           id
-          title
-          status
           major
           minor
-          documentType
-          classification
           approvalQuorums(first: 1, orderBy: { field: CREATED_AT, direction: DESC }) {
             edges {
               node {
@@ -78,10 +80,20 @@ const fragment = graphql`
               }
             }
           }
-          signatures(first: 0 filter: { activeContract: true, state: ACTIVE }) {
+        }
+      }
+    }
+    publishedVersion: versions(
+      first: 1
+      filter: { statuses: [PUBLISHED] }
+      orderBy: { field: CREATED_AT, direction: DESC }
+    ) {
+      edges {
+        node {
+          signatures(first: 0 filter: { activeContract: true, profileStates: [ACTIVE] }) {
             totalCount
           }
-          signedSignatures: signatures(first: 0 filter: { states: [SIGNED], activeContract: true, state: ACTIVE }) {
+          signedSignatures: signatures(first: 0 filter: { states: [SIGNED], activeContract: true, profileStates: [ACTIVE] }) {
             totalCount
           }
         }
@@ -140,8 +152,8 @@ export function DocumentListItem(props: {
   } = props;
 
   const organizationId = useOrganizationId();
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t, i18n } = useTranslation();
+  const toast = useToast();
   const [archiveDocument, isArchiving] = useMutation<DocumentListItem_archiveMutation>(archiveDocumentMutation);
   const [unarchiveDocument, isUnarchiving] = useMutation<DocumentListItem_unarchiveMutation>(unarchiveDocumentMutation);
   const confirm = useConfirm();
@@ -151,9 +163,15 @@ export function DocumentListItem(props: {
     fragmentRef,
   );
 
-  const lastVersionEdge = document.recentVersions.edges[0];
-  if (!lastVersionEdge) return null;
-  const lastVersion = lastVersionEdge.node;
+  const pending = document.pendingApproval.edges[0]?.node;
+  const published = document.publishedVersion.edges[0]?.node;
+  const listStatus = pending
+    ? "PENDING_APPROVAL"
+    : document.currentPublishedMajor != null
+      ? "PUBLISHED"
+      : "DRAFT";
+  const versionMajor = pending?.major ?? document.currentPublishedMajor;
+  const versionMinor = pending?.minor ?? document.currentPublishedMinor;
 
   const statusVariant = {
     DRAFT: "neutral",
@@ -162,9 +180,9 @@ export function DocumentListItem(props: {
   } as const;
 
   const statusLabel = {
-    DRAFT: __("Draft"),
-    PENDING_APPROVAL: __("Pending approval"),
-    PUBLISHED: __("Published"),
+    DRAFT: t("documentListItem.status.draft"),
+    PENDING_APPROVAL: t("documentListItem.status.pendingApproval"),
+    PUBLISHED: t("documentListItem.status.published"),
   } as const;
 
   const handleArchive = () => {
@@ -181,33 +199,32 @@ export function DocumentListItem(props: {
             },
             onCompleted(_, errors) {
               if (errors?.length) {
-                toast({
-                  title: __("Error"),
-                  description: formatError(__("Failed to archive document"), errors),
-                  variant: "error",
+                toast.add({
+                  title: t("documentListItem.errors.title"),
+                  description: formatError(t("documentListItem.errors.archive"), errors),
+                  type: "error",
                 });
               } else {
-                toast({
-                  title: __("Success"),
-                  description: __("Document archived successfully."),
-                  variant: "success",
+                toast.add({
+                  title: t("documentListItem.messages.successTitle"),
+                  description: t("documentListItem.messages.archived"),
+                  type: "success",
                 });
               }
               resolve();
             },
             onError(error) {
-              toast({ title: __("Error"), description: error.message, variant: "error" });
+              toast.add({ title: t("documentListItem.errors.title"), description: error.message, type: "error" });
               resolve();
             },
           });
         }),
       {
-        message: sprintf(
-          __("This will archive the document \"%s\". It will no longer be editable."),
-          lastVersion.title,
-        ),
+        message: t("documentListItem.confirmations.archive", {
+          title: document.title,
+        }),
         variant: "danger",
-        label: __("Archive"),
+        label: t("documentListItem.actions.archive"),
       },
     );
   };
@@ -227,21 +244,21 @@ export function DocumentListItem(props: {
       },
       onCompleted(_, errors) {
         if (errors?.length) {
-          toast({
-            title: __("Error"),
-            description: formatError(__("Failed to unarchive document"), errors),
-            variant: "error",
+          toast.add({
+            title: t("documentListItem.errors.title"),
+            description: formatError(t("documentListItem.errors.unarchive"), errors),
+            type: "error",
           });
           return;
         }
-        toast({
-          title: __("Success"),
-          description: __("Document unarchived successfully."),
-          variant: "success",
+        toast.add({
+          title: t("documentListItem.messages.successTitle"),
+          description: t("documentListItem.messages.unarchived"),
+          type: "success",
         });
       },
       onError(error) {
-        toast({ title: __("Error"), description: error.message, variant: "error" });
+        toast.add({ title: t("documentListItem.errors.title"), description: error.message, type: "error" });
       },
     });
   };
@@ -254,37 +271,38 @@ export function DocumentListItem(props: {
   return (
     <>
       <Tr
-        to={`/organizations/${organizationId}/documents/${document.id}`}
+        to={`/organizations/${organizationId}/governance/documents/${document.id}`}
       >
         <Td noLink className="w-18">
           <Checkbox checked={checked} onChange={onCheck} />
         </Td>
         <Td className="min-w-0">
-          <div className="flex gap-4 items-center">{lastVersion.title}</div>
+          <div className="flex gap-4 items-center">{document.title}</div>
         </Td>
         <Td className="w-24">
-          <Badge variant={statusVariant[lastVersion.status]}>
-            {statusLabel[lastVersion.status]}
+          <Badge variant={statusVariant[listStatus]}>
+            {statusLabel[listStatus]}
           </Badge>
         </Td>
         <Td className="w-20">
-          v
-          {lastVersion.major}
-          .
-          {lastVersion.minor}
+          {versionMajor == null || versionMinor == null
+            ? "—"
+            : `v${versionMajor}.${versionMinor}`}
         </Td>
         <Td className="w-28">
-          {getDocumentTypeLabel(__, lastVersion.documentType)}
+          {t(`documentListItem.documentTypes.${document.documentType.toLowerCase()}`)}
         </Td>
         <Td className="w-32">
-          {getDocumentClassificationLabel(__, lastVersion.classification)}
+          {t(`documentListItem.classifications.${document.classification.toLowerCase()}`)}
         </Td>
         <Td className="w-60">
           {(() => {
-            if (lastVersion.status === "PENDING_APPROVAL") {
-              const quorum = lastVersion.approvalQuorums?.edges?.[0]?.node;
+            if (pending) {
+              const quorum = pending.approvalQuorums?.edges?.[0]?.node;
               if (quorum) {
-                if (quorum.status === "REJECTED") return __("Rejected");
+                if (quorum.status === "REJECTED") {
+                  return t("documentListItem.status.rejected");
+                }
                 return `${quorum.approvedDecisions.totalCount}/${quorum.decisions.totalCount}`;
               }
               return "—";
@@ -293,11 +311,11 @@ export function DocumentListItem(props: {
             return document.defaultApprovers.map(a => a.fullName).join(", ");
           })()}
         </Td>
-        <Td className="w-40">{formatDate(document.updatedAt)}</Td>
+        <Td className="w-40">{dateFormat(i18n.language, document.updatedAt)}</Td>
         <Td className="w-20">
-          {lastVersion.signedSignatures.totalCount}
+          {published?.signedSignatures.totalCount ?? 0}
           /
-          {lastVersion.signatures.totalCount}
+          {published?.signatures.totalCount ?? 0}
         </Td>
         {hasAnyAction && (
           <Td noLink width={50} className="text-end w-18">
@@ -309,7 +327,7 @@ export function DocumentListItem(props: {
                     disabled={isArchiving}
                     onClick={handleArchive}
                   >
-                    {__("Archive")}
+                    {t("documentListItem.actions.archive")}
                   </DropdownItem>
                 )}
                 {document.canUnarchive && document.status === "ARCHIVED" && (
@@ -318,7 +336,7 @@ export function DocumentListItem(props: {
                     disabled={isUnarchiving}
                     onClick={handleUnarchive}
                   >
-                    {__("Unarchive")}
+                    {t("documentListItem.actions.unarchive")}
                   </DropdownItem>
                 )}
                 {document.canDelete && (
@@ -327,7 +345,7 @@ export function DocumentListItem(props: {
                     icon={IconTrashCan}
                     onClick={handleDelete}
                   >
-                    {__("Delete")}
+                    {t("documentListItem.actions.delete")}
                   </DropdownItem>
                 )}
               </ActionDropdown>
@@ -338,7 +356,7 @@ export function DocumentListItem(props: {
       <DeleteDocumentDialog
         ref={deleteDialogRef}
         documentId={document.id}
-        documentTitle={lastVersion.title}
+        documentTitle={document.title}
         connections={[connectionId]}
       />
     </>

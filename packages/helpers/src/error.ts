@@ -1,25 +1,144 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 export interface GraphQLError {
   message?: string;
   extensions?: {
     code?: string;
+    field?: string;
+    cause?: string;
   };
   source?: {
-    errors?: Array<{ message: string; extensions?: { code?: string } }>;
+    errors?: Array<{ message: string; extensions?: { code?: string; field?: string; cause?: string } }>;
   };
+}
+
+function graphqlErrorExtension(error: unknown, key: "field" | "cause" | "code"): string | undefined {
+  if (error == null || typeof error !== "object" || !("extensions" in error)) {
+    return undefined;
+  }
+  const extensions = error.extensions;
+  if (extensions == null || typeof extensions !== "object") {
+    return undefined;
+  }
+  const value: unknown = Object.entries(extensions).find(([name]) => name === key)?.[1];
+  return typeof value === "string" ? value : undefined;
+}
+
+export function graphqlErrorField(error: unknown): string | undefined {
+  return graphqlErrorExtension(error, "field");
+}
+
+export function graphqlErrorMessage(error: unknown): string | undefined {
+  if (error == null || typeof error !== "object" || !("message" in error)) {
+    return undefined;
+  }
+  return typeof error.message === "string" ? error.message : undefined;
+}
+
+export function graphqlErrorsMessage(error: unknown): string | undefined {
+  const items = Array.isArray(error) ? error : [error];
+  for (const item of items.flatMap(nestedGraphqlErrors)) {
+    const message = graphqlErrorMessage(item);
+    if (message != null) {
+      return message;
+    }
+  }
+  return undefined;
+}
+
+export function isForbiddenGraphqlError(error: unknown): boolean {
+  const items = Array.isArray(error) ? error : [error];
+  return items.flatMap(nestedGraphqlErrors).some((item) => {
+    if (graphqlErrorExtension(item, "code") === "FORBIDDEN") {
+      return true;
+    }
+    const message = graphqlErrorMessage(item);
+    return message != null && message.toUpperCase().includes("FORBIDDEN");
+  });
+}
+
+export type CatchResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly errors: unknown };
+
+export function catchResultValue<T>(
+  result: CatchResult<T> | null | undefined,
+  fallbackMessage: string,
+): T | null {
+  if (result == null) {
+    return null;
+  }
+  if (result.ok) {
+    return result.value ?? null;
+  }
+  if (isForbiddenGraphqlError(result.errors)) {
+    return null;
+  }
+  throw new Error(graphqlErrorsMessage(result.errors) ?? fallbackMessage);
+}
+
+function nestedGraphqlErrors(error: unknown): unknown[] {
+  if (error != null && typeof error === "object" && "source" in error) {
+    const source = error.source;
+    if (
+      source != null
+      && typeof source === "object"
+      && "errors" in source
+      && Array.isArray(source.errors)
+    ) {
+      return source.errors;
+    }
+  }
+  return [error];
+}
+
+export type FieldRejection = {
+  message: string;
+  cause?: string;
+};
+
+export function toFieldRejections(error: unknown): Record<string, FieldRejection> | undefined {
+  const items = Array.isArray(error) ? error : [error];
+  const rejections: Record<string, FieldRejection> = {};
+
+  for (const item of items.flatMap(nestedGraphqlErrors)) {
+    const field = graphqlErrorField(item);
+    const message = graphqlErrorMessage(item);
+    if (field != null && message != null) {
+      rejections[field] = { message, cause: graphqlErrorExtension(item, "cause") };
+    }
+  }
+
+  return Object.keys(rejections).length > 0 ? rejections : undefined;
+}
+
+export function toFieldErrors(error: unknown): Record<string, string> | undefined {
+  const rejections = toFieldRejections(error);
+  if (rejections == null) {
+    return undefined;
+  }
+
+  return Object.fromEntries(
+    Object.entries(rejections).map(([field, { message }]) => [field, message]),
+  );
 }
 
 export function formatError(title: string, error: GraphQLError | GraphQLError[]): string {

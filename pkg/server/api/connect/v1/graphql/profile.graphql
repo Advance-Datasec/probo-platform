@@ -7,11 +7,11 @@ type Profile implements Node {
   additionalEmailAddresses: [EmailAddr!]!
   kind: String
   position: String
-  contractStartDate: Datetime
-  contractEndDate: Datetime
+  contract: Period
   createdAt: Datetime!
   updatedAt: Datetime!
 
+  avatar: File @goField(forceResolver: true)
   identity: Identity @goField(forceResolver: true)
   organization: Organization @goField(forceResolver: true)
   membership: Membership @goField(forceResolver: true)
@@ -30,9 +30,10 @@ type Profile implements Node {
 
 enum ProfileState
   @goModel(model: "go.probo.inc/probo/pkg/coredata.ProfileState") {
+  PENDING @goEnum(value: "go.probo.inc/probo/pkg/coredata.ProfileStatePending")
   ACTIVE @goEnum(value: "go.probo.inc/probo/pkg/coredata.ProfileStateActive")
-  INACTIVE
-    @goEnum(value: "go.probo.inc/probo/pkg/coredata.ProfileStateInactive")
+  DEACTIVATED
+    @goEnum(value: "go.probo.inc/probo/pkg/coredata.ProfileStateDeactivated")
 }
 
 enum ProfileSource
@@ -70,7 +71,10 @@ enum ProfileOrderField
 
 input ProfileFilter {
   contractEnded: Boolean
-  state: ProfileState
+  states: [ProfileState!]
+  query: String
+  role: MembershipRole
+  kind: String
 }
 
 input ProfileOrder
@@ -99,9 +103,8 @@ extend type Mutation {
   createUser(input: CreateUserInput!): CreateUserPayload
     @authentication(required: PRESENT)
   deactivateUser(input: DeactivateUserInput!): DeactivateUserPayload
-  updateUser(input: UpdateUserInput!): UpdateUserPayload!
-  archiveUser(input: ArchiveUserInput!): ArchiveUserPayload
     @authentication(required: PRESENT)
+  updateUser(input: UpdateUserInput!): UpdateUserPayload!
   removeUser(input: RemoveUserInput!): RemoveUserPayload
     @authentication(required: PRESENT)
 }
@@ -114,8 +117,7 @@ input CreateUserInput {
   additionalEmailAddresses: [EmailAddr!]
   kind: String
   position: String
-  contractStartDate: Datetime @goField(omittable: true)
-  contractEndDate: Datetime @goField(omittable: true)
+  contract: PeriodInput
 }
 
 input ActivateUserInput {
@@ -134,16 +136,10 @@ input UpdateUserInput {
   additionalEmailAddresses: [EmailAddr!]
   kind: String
   position: String
-  contractStartDate: Datetime @goField(omittable: true)
-  contractEndDate: Datetime @goField(omittable: true)
+  contract: PeriodInput
 }
 
 input RemoveUserInput {
-  organizationId: ID!
-  profileId: ID!
-}
-
-input ArchiveUserInput {
   organizationId: ID!
   profileId: ID!
 }
@@ -162,8 +158,4 @@ type UpdateUserPayload {
 
 type RemoveUserPayload {
   deletedProfileId: ID!
-}
-
-type ArchiveUserPayload {
-  archivedProfileId: ID!
 }

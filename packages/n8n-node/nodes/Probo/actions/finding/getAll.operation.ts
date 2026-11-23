@@ -1,35 +1,32 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import type { INodeProperties, IExecuteFunctions, INodeExecutionData, IDataObject } from 'n8n-workflow';
-import { proboApiRequestAllItems } from '../../GenericFunctions';
+import { organizationLocator, auditLocator } from '../../locators';
+import { proboApiRequestAllItems, executionItems } from '../../GenericFunctions';
 
 export const description: INodeProperties[] = [
-	{
-		displayName: 'Organization ID',
-		name: 'organizationId',
-		type: 'string',
-		displayOptions: {
-			show: {
-				resource: ['finding'],
-				operation: ['getAll'],
-			},
-		},
-		default: '',
-		description: 'The ID of the organization',
-		required: true,
-	},
+	organizationLocator({
+		resource: ['finding'],
+		operation: ['getAll'],
+	}),
 	{
 		displayName: 'Return All',
 		name: 'returnAll',
@@ -60,24 +57,51 @@ export const description: INodeProperties[] = [
 		default: 50,
 		description: 'Max number of results to return',
 	},
+	{
+		displayName: 'Filters',
+		name: 'filters',
+		type: 'collection',
+		placeholder: 'Add Filter',
+		default: {},
+		displayOptions: {
+			show: {
+				resource: ['finding'],
+				operation: ['getAll'],
+			},
+		},
+		options: [
+			auditLocator({
+				required: false,
+				description: 'Only return findings linked to this audit',
+			}),
+			{
+				displayName: 'Query',
+				name: 'query',
+				type: 'string',
+				default: '',
+				description: 'Search findings by title or reference ID',
+			},
+		],
+	},
 ];
 
 export async function execute(
 	this: IExecuteFunctions,
 	itemIndex: number,
-): Promise<INodeExecutionData> {
-	const organizationId = this.getNodeParameter('organizationId', itemIndex) as string;
+): Promise<INodeExecutionData[]> {
+	const organizationId = this.getNodeParameter('organizationId', itemIndex, '', { extractValue: true }) as string;
 	const returnAll = this.getNodeParameter('returnAll', itemIndex) as boolean;
 	const limit = this.getNodeParameter('limit', itemIndex, 50) as number;
 
 	const query = `
-		query GetFindings($organizationId: ID!, $first: Int, $after: CursorKey) {
+		query GetFindings($organizationId: ID!, $first: Int, $after: CursorKey, $filter: FindingFilter) {
 			node(id: $organizationId) {
 				... on Organization {
-					findings(first: $first, after: $after) {
+					findings(first: $first, after: $after, filter: $filter) {
 						edges {
 							node {
 								id
+								title
 								kind
 								description
 								source
@@ -102,10 +126,25 @@ export async function execute(
 		}
 	`;
 
+	const variables: IDataObject = { organizationId };
+	const filter: IDataObject = {};
+
+	if (this.getNodeParameter('filters.auditId', itemIndex, '', { extractValue: true }) as string) {
+		filter.auditId = this.getNodeParameter('filters.auditId', itemIndex, '', { extractValue: true }) as string;
+	}
+
+	if (this.getNodeParameter('filters.query', itemIndex, '') as string) {
+		filter.query = this.getNodeParameter('filters.query', itemIndex, '') as string;
+	}
+
+	if (Object.keys(filter).length > 0) {
+		variables.filter = filter;
+	}
+
 	const findings = await proboApiRequestAllItems.call(
 		this,
 		query,
-		{ organizationId },
+		variables,
 		(response) => {
 			const data = response?.data as IDataObject | undefined;
 			const node = data?.node as IDataObject | undefined;
@@ -115,8 +154,5 @@ export async function execute(
 		limit,
 	);
 
-	return {
-		json: { findings },
-		pairedItem: { item: itemIndex },
-	};
+	return executionItems(findings, itemIndex);
 }

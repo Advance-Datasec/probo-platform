@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
-// Use of this source code is governed by the ISC license
+// Use of this source code is governed by the MIT license
 // that can be found in the LICENSE file.
 
 import { autoUpdate, offset, size, useFloating } from "@floating-ui/react";
@@ -9,7 +9,9 @@ import { type Editor } from "@tiptap/react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { DRAG_THRESHOLD } from "../_lib/constants";
+import { EditorFloatingPortal } from "../_lib/EditorFloatingPortal";
 import type { DropdownMenu } from "../_lib/useTableDropdownMenu";
+import { isSuggesting } from "../SuggestionExtension";
 
 import { getRowRect, type HoveredRow, moveRow } from "./TableRowMenu";
 import { tableRowMenuVariants } from "./variants";
@@ -300,7 +302,7 @@ export function TableRowMenuTrigger({
         try {
           const targetGap = computeTargetGap(ev.clientY, tableStart);
 
-          if (targetGap !== fromRow && targetGap !== fromRow + 1) {
+          if (!isSuggesting(editor) && targetGap !== fromRow && targetGap !== fromRow + 1) {
             const toRow
               = fromRow < targetGap ? targetGap - 1 : targetGap;
             moveRow(editor, tableStart, fromRow, toRow);
@@ -342,39 +344,48 @@ export function TableRowMenuTrigger({
   };
 
   return (
-    <>
-      <button
-        ref={(node) => {
-          handleRefs.setFloating(node);
-          setTriggerEl(node);
-          menuRefs.setReference(node);
-        }}
-        data-row-handle
-        onMouseDown={onHandleMouseDown}
-        type="button"
-        style={{
-          ...handleStyles,
-          visibility:
-            isPositioned && (hoveredRow || menuOpen) ? "visible" : "hidden",
-        }}
-        className={trigger()}
-      >
-        <DotsThreeVerticalIcon size={16} weight="bold" />
-      </button>
-      {dragIndicator && (
-        <div
-          style={{
-            position: "fixed",
-            left: dragIndicator.left,
-            top: dragIndicator.top - 1,
-            width: dragIndicator.width,
-            height: 2,
-            backgroundColor: "var(--color-border-info)",
-            zIndex: 40,
-            pointerEvents: "none",
+    <EditorFloatingPortal>
+      <>
+        <button
+          ref={(node) => {
+            handleRefs.setFloating(node);
+            setTriggerEl(node);
+            menuRefs.setReference(node);
           }}
-        />
-      )}
-    </>
+          data-row-handle
+          data-rich-editor-floating=""
+          aria-label="Row actions"
+          onMouseDown={onHandleMouseDown}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            setMenuOpen(prev => !prev);
+          }}
+          type="button"
+          style={{
+            ...handleStyles,
+            visibility:
+              isPositioned && (hoveredRow || menuOpen) ? "visible" : "hidden",
+          }}
+          className={trigger()}
+        >
+          <DotsThreeVerticalIcon size={16} weight="bold" />
+        </button>
+        {dragIndicator && (
+          <div
+            style={{
+              position: "fixed",
+              left: dragIndicator.left,
+              top: dragIndicator.top - 1,
+              width: dragIndicator.width,
+              height: 2,
+              backgroundColor: "var(--color-border-info)",
+              zIndex: 40,
+              pointerEvents: "none",
+            }}
+          />
+        )}
+      </>
+    </EditorFloatingPortal>
   );
 }

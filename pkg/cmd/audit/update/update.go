@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package update
 
@@ -24,14 +30,21 @@ import (
 )
 
 const updateMutation = `
-mutation($input: UpdateAuditInput!) {
+mutation AuditUpdate($input: UpdateAuditInput!) {
   updateAudit(input: $input) {
     audit {
       id
       name
+      firm
       state
-      validFrom
-      validUntil
+      validity {
+        start
+        end
+      }
+      auditDates {
+        start
+        end
+      }
     }
   }
 }
@@ -40,22 +53,31 @@ mutation($input: UpdateAuditInput!) {
 type updateResponse struct {
 	UpdateAudit struct {
 		Audit struct {
-			ID         string  `json:"id"`
-			Name       string  `json:"name"`
-			State      string  `json:"state"`
-			ValidFrom  *string `json:"validFrom"`
-			ValidUntil *string `json:"validUntil"`
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			Firm     string `json:"firm"`
+			State    string `json:"state"`
+			Validity *struct {
+				Start *string `json:"start"`
+				End   *string `json:"end"`
+			} `json:"validity"`
+			AuditDates *struct {
+				Start *string `json:"start"`
+				End   *string `json:"end"`
+			} `json:"auditDates"`
 		} `json:"audit"`
 	} `json:"updateAudit"`
 }
 
 func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 	var (
-		flagName                  string
-		flagState                 string
-		flagValidFrom             string
-		flagValidUntil            string
-		flagTrustCenterVisibility string
+		flagName           string
+		flagFirm           string
+		flagState          string
+		flagValidFrom      string
+		flagValidUntil     string
+		flagAuditStartDate string
+		flagAuditEndDate   string
 	)
 
 	cmd := &cobra.Command{
@@ -89,20 +111,38 @@ func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 				input["name"] = flagName
 			}
 
+			if cmd.Flags().Changed("firm") {
+				input["firm"] = flagFirm
+			}
+
 			if cmd.Flags().Changed("state") {
 				input["state"] = flagState
 			}
 
-			if cmd.Flags().Changed("valid-from") {
-				input["validFrom"] = flagValidFrom
+			if cmd.Flags().Changed("valid-from") || cmd.Flags().Changed("valid-until") {
+				period := map[string]any{}
+				if cmd.Flags().Changed("valid-from") {
+					period["start"] = flagValidFrom
+				}
+
+				if cmd.Flags().Changed("valid-until") {
+					period["end"] = flagValidUntil
+				}
+
+				input["validity"] = period
 			}
 
-			if cmd.Flags().Changed("valid-until") {
-				input["validUntil"] = flagValidUntil
-			}
+			if cmd.Flags().Changed("audit-start-date") || cmd.Flags().Changed("audit-end-date") {
+				period := map[string]any{}
+				if cmd.Flags().Changed("audit-start-date") {
+					period["start"] = flagAuditStartDate
+				}
 
-			if cmd.Flags().Changed("trust-center-visibility") {
-				input["trustCenterVisibility"] = flagTrustCenterVisibility
+				if cmd.Flags().Changed("audit-end-date") {
+					period["end"] = flagAuditEndDate
+				}
+
+				input["auditDates"] = period
 			}
 
 			if len(input) == 1 {
@@ -135,10 +175,12 @@ func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&flagName, "name", "", "Audit name")
-	cmd.Flags().StringVar(&flagState, "state", "", "Audit state: NOT_STARTED, IN_PROGRESS, COMPLETED, REJECTED, OUTDATED")
+	cmd.Flags().StringVar(&flagFirm, "firm", "", "Audit firm")
+	cmd.Flags().StringVar(&flagState, "state", "", "Audit state: TO_BOOK, AUDIT_BOOKED, NOT_STARTED, IN_PROGRESS, COMPLETED, REJECTED, OUTDATED")
 	cmd.Flags().StringVar(&flagValidFrom, "valid-from", "", "Valid from date (e.g. 2026-01-01)")
 	cmd.Flags().StringVar(&flagValidUntil, "valid-until", "", "Valid until date (e.g. 2026-12-31)")
-	cmd.Flags().StringVar(&flagTrustCenterVisibility, "trust-center-visibility", "", "Trust center visibility: NONE, PRIVATE, PUBLIC")
+	cmd.Flags().StringVar(&flagAuditStartDate, "audit-start-date", "", "Audit start date (e.g. 2026-03-01)")
+	cmd.Flags().StringVar(&flagAuditEndDate, "audit-end-date", "", "Audit end date (e.g. 2026-03-15)")
 
 	return cmd
 }

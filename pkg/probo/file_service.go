@@ -1,21 +1,28 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -26,7 +33,21 @@ import (
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/filevalidation"
 	"go.probo.inc/probo/pkg/gid"
+	"go.probo.inc/probo/pkg/prosemirror"
+	"go.probo.inc/probo/pkg/validator"
 )
+
+var attachmentValidator = filevalidation.NewAttachmentValidator()
+
+// ContentTypeForAttachment returns the MIME type accepted for filename.
+func ContentTypeForAttachment(filename string) (string, bool) {
+	return filevalidation.ContentTypeForAttachment(filename)
+}
+
+// AttachmentMaxFileSize is the largest file UploadFile accepts.
+func AttachmentMaxFileSize() int64 {
+	return attachmentValidator.MaxFileSize
+}
 
 type (
 	FileService struct {
@@ -85,7 +106,7 @@ func (s FileService) GetByIDs(
 				conn,
 				scope,
 				fileIDs,
-			); err != nil {
+			); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 				return fmt.Errorf("cannot load files by ids: %w", err)
 			}
 
@@ -99,6 +120,69 @@ func (s FileService) GetByIDs(
 	return files, nil
 }
 
+type AttachmentUpload struct {
+	OrganizationID gid.GID
+	File           *FileUpload
+}
+
+func (s FileService) UploadFile(
+	ctx context.Context,
+	scope coredata.Scoper,
+	req AttachmentUpload,
+) (*coredata.File, error) {
+	if err := attachmentValidator.Validate(req.File.Filename, req.File.ContentType, req.File.Size); err != nil {
+		return nil, validator.ValidationErrors{
+			{
+				Field:   "file",
+				Code:    validator.ErrorCodeInvalidFormat,
+				Message: err.Error(),
+			},
+		}
+	}
+
+	if len(req.File.Filename) > prosemirror.MaxFileNameBytes {
+		return nil, validator.ValidationErrors{
+			{
+				Field:   "file",
+				Code:    validator.ErrorCodeTooLong,
+				Message: fmt.Sprintf("file name must be at most %d bytes", prosemirror.MaxFileNameBytes),
+			},
+		}
+	}
+
+	organization := &coredata.Organization{}
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := organization.LoadByID(ctx, conn, scope, req.OrganizationID); err != nil {
+				return fmt.Errorf("cannot load organization: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot load organization: %w", err)
+	}
+
+	file, err := s.UploadAndSaveFile(
+		ctx,
+		scope,
+		attachmentValidator,
+		map[string]string{
+			"type":            "file",
+			"organization-id": organization.ID.String(),
+		},
+		req.File,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot upload file: %w", err)
+	}
+
+	return file, nil
+}
+
 func (s FileService) UploadAndSaveFile(
 	ctx context.Context, scope coredata.Scoper,
 	fileValidator *filevalidation.FileValidator,
@@ -110,10 +194,7 @@ func (s FileService) UploadAndSaveFile(
 		return nil, fmt.Errorf("cannot generate object key: %w", err)
 	}
 
-	mimeType := req.ContentType
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
+	mimeType := filevalidation.ResolveContentType(req.ContentType, req.Filename)
 
 	if err := fileValidator.Validate(req.Filename, mimeType, req.Size); err != nil {
 		return nil, fmt.Errorf("cannot validate file: %w", err)
@@ -148,7 +229,6 @@ func (s FileService) UploadAndSaveFile(
 
 	var file *coredata.File
 
-	// Extract organization ID from S3 metadata
 	organizationIDStr, hasOrgID := s3Metadata["organization-id"]
 
 	var organizationID gid.GID

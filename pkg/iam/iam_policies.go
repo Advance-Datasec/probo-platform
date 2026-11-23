@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package iam
 
@@ -36,18 +42,17 @@ var IAMSelfManageIdentityPolicy = policy.NewPolicy(
 		WithSID("manage-own-identity").
 		When(policy.Equals("principal.id", "resource.identity_id")),
 
-	// Users can list their own memberships, invitations, sessions, and API keys
+	// Users can list their own memberships, invitations, sessions, and OAuth2 access tokens
 	policy.Allow(
 		ActionMembershipList,
 		ActionInvitationList,
 		ActionSessionList,
-		ActionPersonalAPIKeyList,
 		ActionOAuth2AccessTokenList,
 	).
 		WithSID("list-own-associations").
 		When(policy.Equals("principal.id", "resource.identity_id")),
 ).
-	WithDescription("Allows users to manage their own identity, sessions, API keys, and view their memberships")
+	WithDescription("Allows users to manage their own identity and sessions and view their memberships")
 
 // IAMSelfManageSessionPolicy allows users to manage their own sessions.
 var IAMSelfManageSessionPolicy = policy.NewPolicy(
@@ -106,23 +111,6 @@ var IAMSelfManageMembershipPolicy = policy.NewPolicy(
 		When(policy.Equals("principal.id", "resource.identity_id")),
 ).
 	WithDescription("Allows users to view their organization memberships")
-
-// IAMSelfManagePersonalAPIKeyPolicy allows users to manage their own API keys.
-var IAMSelfManagePersonalAPIKeyPolicy = policy.NewPolicy(
-	"iam:self-manage-personal-api-key",
-	"Self-Manage Personal API Keys",
-
-	// Users can create, view, update, and delete their own API keys
-	policy.Allow(
-		ActionPersonalAPIKeyCreate,
-		ActionPersonalAPIKeyGet,
-		ActionPersonalAPIKeyUpdate,
-		ActionPersonalAPIKeyDelete,
-	).
-		WithSID("manage-own-api-keys").
-		When(policy.Equals("principal.id", "resource.identity_id")),
-).
-	WithDescription("Allows users to manage their own personal API keys")
 
 // IAMSelfManageOAuth2AccessTokenPolicy allows users to manage their own OAuth2 access tokens.
 var IAMSelfManageOAuth2AccessTokenPolicy = policy.NewPolicy(
@@ -183,11 +171,6 @@ var IAMOwnerPolicy = policy.NewPolicy(
 			policy.NotEquals("resource.source", "SCIM"),
 		),
 
-	// Can set other members OWNER
-	policy.Allow(ActionMembershipRoleSetOwner).
-		WithSID("membership-role-owner-access").
-		When(policy.Equals("principal.organization_id", "resource.organization_id")),
-
 	// Full access to membership profiles (scoped to own organization)
 	policy.Allow(
 		ActionMembershipProfileGet,
@@ -241,6 +224,7 @@ var IAMOwnerPolicy = policy.NewPolicy(
 	policy.Allow(
 		ActionAuditLogEntryGet,
 		ActionAuditLogEntryList,
+		ActionAuditLogExport,
 	).
 		WithSID("audit-log-entry-access").
 		When(policy.Equals("principal.organization_id", "resource.organization_id")),
@@ -270,6 +254,9 @@ var IAMAdminPolicy = policy.NewPolicy(
 		WithSID("membership-admin-access").
 		When(policy.Equals("principal.organization_id", "resource.organization_id")),
 
+	// Can update memberships, but neither of an existing owner (resource.role)
+	// nor to grant ownership (resource.target_role); only owner can grant
+	// ownership.
 	policy.Allow(
 		ActionMembershipUpdate,
 	).
@@ -277,13 +264,13 @@ var IAMAdminPolicy = policy.NewPolicy(
 		When(
 			policy.Equals("principal.organization_id", "resource.organization_id"),
 			policy.NotEquals("resource.role", "OWNER"),
+			policy.NotEquals("resource.target_role", "OWNER"),
 		),
 
-	// Can view membership profiles (scoped to own organization)
+	// Can view and manage membership profiles (scoped to own organization)
 	policy.Allow(
 		ActionMembershipProfileGet,
 		ActionMembershipProfileList,
-		ActionMembershipProfileCreate,
 		ActionMembershipProfileUpdate,
 		ActionMembershipProfileDelete,
 		ActionMembershipProfileActivate,
@@ -291,6 +278,15 @@ var IAMAdminPolicy = policy.NewPolicy(
 	).
 		WithSID("membership-profile-admin-access").
 		When(policy.Equals("principal.organization_id", "resource.organization_id")),
+
+	// Can create members, but not with the OWNER role (resource.target_role);
+	// only owner can grant ownership.
+	policy.Allow(ActionMembershipProfileCreate).
+		WithSID("membership-profile-admin-create").
+		When(
+			policy.Equals("principal.organization_id", "resource.organization_id"),
+			policy.NotEquals("resource.target_role", "OWNER"),
+		),
 
 	// Can view identities of members in the same organization
 	policy.Allow(ActionIdentityGet).
@@ -347,15 +343,21 @@ var IAMAdminPolicy = policy.NewPolicy(
 	).
 		WithSID("deny-scim-management"),
 
-	// Can view audit log entries (scoped to own organization)
+	// Can view and export audit log entries (scoped to own organization)
 	policy.Allow(
 		ActionAuditLogEntryGet,
 		ActionAuditLogEntryList,
+		ActionAuditLogExport,
 	).
 		WithSID("audit-log-entry-admin-access").
 		When(
 			policy.Equals("principal.organization_id", "resource.organization_id"),
 		),
+
+	// Can export SCIM events (scoped to own organization)
+	policy.Allow(ActionSCIMEventExport).
+		WithSID("scim-event-export-admin-access").
+		When(policy.Equals("principal.organization_id", "resource.organization_id")),
 ).
 	WithDescription("IAM admin access - can manage members but cannot delete organization or manage SAML/SCIM")
 
@@ -402,3 +404,25 @@ var IAMViewerPolicy = policy.NewPolicy(
 		),
 ).
 	WithDescription("Read-only IAM access for organization viewers")
+
+// IAMCompliancePortalAccessManagerPolicy defines the minimal IAM access needed
+// by compliance portal access managers. The role reviews visitor access
+// requests and has no business browsing members, invitations, or audit logs;
+// access to its own identity, memberships, and profile comes from the
+// identity-scoped self-manage policies. MembershipProfileGet is granted so
+// access-request profile fields can resolve (authorized against the access
+// entity's organization_id), without MembershipProfileList which would open
+// the People directory.
+var IAMCompliancePortalAccessManagerPolicy = policy.NewPolicy(
+	"iam:compliance-portal-access-manager",
+	"Compliance Portal Access Manager",
+
+	policy.Allow(ActionOrganizationGet).
+		WithSID("org-read-access").
+		When(policy.Equals("principal.organization_id", "resource.organization_id")),
+
+	policy.Allow(ActionMembershipProfileGet).
+		WithSID("membership-profile-get-access").
+		When(policy.Equals("principal.organization_id", "resource.organization_id")),
+).
+	WithDescription("Minimal IAM access for compliance portal access managers")

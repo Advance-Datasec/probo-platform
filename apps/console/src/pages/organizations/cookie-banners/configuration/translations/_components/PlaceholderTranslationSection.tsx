@@ -1,24 +1,35 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
-import { Card, Field, Input } from "@probo/ui";
+import { Card } from "@probo/ui/src/v2/Card/Card";
+import { Field } from "@probo/ui/src/v2/form/Field";
+import { TextField } from "@probo/ui/src/v2/form/TextField";
+import { Heading } from "@probo/ui/src/v2/typography/Heading";
+import { Text } from "@probo/ui/src/v2/typography/Text";
 import { Controller, useFormContext, useWatch } from "react-hook-form";
+import { useTranslation } from "react-i18next";
+
+import { cookieBannerTranslationsPage } from "../../../variants";
+import type { TranslationFormValues } from "../_lib/translationDefaults";
 
 import { PlaceholderPreview } from "./PlaceholderPreview";
-import { TRANSLATION_LABELS } from "./translationDefaults";
-import type { TranslationFormValues } from "./TranslationEditor";
 
 interface PlaceholderTranslationSectionProps {
   exampleCategoryName: string;
@@ -27,48 +38,56 @@ interface PlaceholderTranslationSectionProps {
 export function PlaceholderTranslationSection({
   exampleCategoryName,
 }: PlaceholderTranslationSectionProps) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation("organizations/cookie-banners");
   const { control } = useFormContext<TranslationFormValues>();
+  const { section, split, fields, preview } = cookieBannerTranslationsPage();
 
   const placeholderText = useWatch({ control, name: "placeholder_text" });
   const placeholderButton = useWatch({ control, name: "placeholder_button" });
 
   return (
-    <div className="space-y-4">
-      <h3 className="font-medium text-lg">{__("Placeholder")}</h3>
-      <p className="text-sm text-txt-secondary">
-        {__(
-          "Shown in place of blocked content until the visitor gives consent.",
-        )}
-      </p>
-      <div className="grid grid-cols-2 gap-6">
-        <Card className="border p-4">
-          <div className="space-y-4">
+    <section className={section()}>
+      <Heading level={2} size={4} weight="medium" highContrast>
+        {t("placeholderTranslationSection.title")}
+      </Heading>
+      <Text size={2} color="faint">
+        {t("placeholderTranslationSection.description")}
+      </Text>
+      <div className={split()}>
+        <Card size={2} variant="soft">
+          <div className={fields()}>
             <Controller
               control={control}
               name="placeholder_text"
               render={({ field }) => (
-                <Field
-                  label={__(TRANSLATION_LABELS.placeholder_text)}
-                >
-                  <p className="text-xs text-txt-secondary mb-2">{__("Use {{category}} to refer to the content category.")}</p>
-                  <Input {...field} />
+                <Field label={t("translationEditor.labels.placeholderText")}>
+                  <TextField
+                    name={field.name}
+                    value={field.value}
+                    onValueChange={field.onChange}
+                  />
                 </Field>
               )}
             />
+            <Text size={1} color="faint">
+              {t("placeholderTranslationSection.categoryHelp")}
+            </Text>
             <Controller
               control={control}
               name="placeholder_button"
               render={({ field }) => (
-                <Field label={__(TRANSLATION_LABELS.placeholder_button)}>
-                  <Input {...field} />
+                <Field label={t("translationEditor.labels.placeholderButton")}>
+                  <TextField
+                    name={field.name}
+                    value={field.value}
+                    onValueChange={field.onChange}
+                  />
                 </Field>
               )}
             />
           </div>
         </Card>
-
-        <div className="flex items-start justify-center rounded-lg border border-border-low bg-[repeating-conic-gradient(#e5e7eb_0%_25%,transparent_0%_50%)] bg-size-[20px_20px] p-6">
+        <div className={preview()}>
           <PlaceholderPreview
             placeholderText={placeholderText}
             placeholderButton={placeholderButton}
@@ -76,6 +95,6 @@ export function PlaceholderTranslationSection({
           />
         </div>
       </div>
-    </div>
+    </section>
   );
 }

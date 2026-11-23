@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -30,6 +36,7 @@ import (
 // GraphQL requests.
 type LinearDriver struct {
 	httpClient *http.Client
+	endpoint   string
 }
 
 var _ Driver = (*LinearDriver)(nil)
@@ -52,6 +59,7 @@ type linearUsersResponse struct {
 				Name      string `json:"name"`
 				Active    bool   `json:"active"`
 				Admin     bool   `json:"admin"`
+				Owner     bool   `json:"owner"`
 				Guest     bool   `json:"guest"`
 				LastSeen  string `json:"lastSeen"`
 				CreatedAt string `json:"createdAt"`
@@ -67,11 +75,13 @@ type linearUsersResponse struct {
 	} `json:"errors"`
 }
 
-const linearGraphQLEndpoint = "https://api.linear.app/graphql"
-
-func NewLinearDriver(httpClient *http.Client) *LinearDriver {
+// NewLinearDriver builds a driver against endpoint, Linear's GraphQL API
+// (e.g. https://api.linear.app/graphql). Linear exposes a single endpoint,
+// so there is no path to join onto it.
+func NewLinearDriver(httpClient *http.Client, endpoint string) *LinearDriver {
 	return &LinearDriver{
 		httpClient: httpClient,
+		endpoint:   endpoint,
 	}
 }
 
@@ -96,9 +106,9 @@ func (d *LinearDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error
 			record := AccountRecord{
 				Email:       u.Email,
 				FullName:    u.Name,
-				Roles:       linearRoles(u.Admin, u.Guest),
+				Roles:       linearRoles(u.Owner, u.Admin, u.Guest),
 				Active:      new(u.Active),
-				IsAdmin:     u.Admin,
+				IsAdmin:     new(u.Owner || u.Admin),
 				ExternalID:  u.ID,
 				MFAStatus:   coredata.MFAStatusUnknown,
 				AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
@@ -134,15 +144,19 @@ func (d *LinearDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error
 }
 
 func (d *LinearDriver) queryUsers(ctx context.Context, after *string) (*linearUsersResponse, error) {
+	// Linear defaults `users` to includeDisabled: false, so suspended
+	// accounts are omitted from the response entirely instead of arriving
+	// with active: false.
 	const query = `
 query AccessReviewLinearUsers($after: String) {
-  users(first: 100, after: $after) {
+  users(first: 100, after: $after, includeDisabled: true) {
     nodes {
       id
       email
       name
       active
       admin
+      owner
       guest
       lastSeen
       createdAt
@@ -167,7 +181,7 @@ query AccessReviewLinearUsers($after: String) {
 		return nil, fmt.Errorf("cannot marshal linear users query: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, linearGraphQLEndpoint, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("cannot create linear users request: %w", err)
 	}
@@ -194,14 +208,19 @@ query AccessReviewLinearUsers($after: String) {
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("linear graphql error: %s", resp.Errors[0].Message)
+		// Provider-supplied messages may carry tenant identifiers or
+		// query fragments — never embed them. Resolver scrubs the same
+		// field; keep both call sites aligned.
+		return nil, fmt.Errorf("cannot fetch linear users: graphql error")
 	}
 
 	return &resp, nil
 }
 
-func linearRoles(admin, guest bool) []string {
+func linearRoles(owner, admin, guest bool) []string {
 	switch {
+	case owner:
+		return []string{"Owner"}
 	case admin:
 		return []string{"Admin"}
 	case guest:
@@ -209,4 +228,71 @@ func linearRoles(admin, guest bool) []string {
 	default:
 		return []string{"Member"}
 	}
+}
+
+// linearNameResolver resolves the Linear organization name via GraphQL.
+type linearNameResolver struct {
+	httpClient *http.Client
+	endpoint   string
+}
+
+// NewLinearNameResolver resolves the org name against endpoint, Linear's
+// GraphQL API (e.g. https://api.linear.app/graphql).
+func NewLinearNameResolver(httpClient *http.Client, endpoint string) NameResolver {
+	return &linearNameResolver{httpClient: httpClient, endpoint: endpoint}
+}
+
+func (r *linearNameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
+	body := struct {
+		Query string `json:"query"`
+	}{
+		Query: `{ organization { name } }`,
+	}
+
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("cannot marshal linear organization query: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return "", fmt.Errorf("cannot create linear organization request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	httpResp, err := r.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("cannot execute linear organization request: %w", err)
+	}
+
+	defer func() { _ = httpResp.Body.Close() }()
+
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return "", nameStatusError("linear organization", httpResp.StatusCode)
+	}
+
+	var resp struct {
+		Data struct {
+			Organization struct {
+				Name string `json:"name"`
+			} `json:"organization"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		return "", fmt.Errorf("cannot decode linear organization response: %w", err)
+	}
+
+	if len(resp.Errors) > 0 {
+		// Provider-supplied messages may carry tenant identifiers or
+		// query fragments — never embed them. Driver scrubs the same
+		// field; keep both call sites aligned.
+		return "", fmt.Errorf("cannot fetch linear organization: graphql error")
+	}
+
+	return resp.Data.Organization.Name, nil
 }

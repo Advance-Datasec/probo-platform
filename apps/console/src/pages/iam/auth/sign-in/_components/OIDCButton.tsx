@@ -1,26 +1,34 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
-import { Button, Google, Microsoft } from "@probo/ui";
+import { Button } from "@probo/ui/src/v2/Button/Button";
+import { GoogleLogo } from "@probo/ui/src/v2/GoogleLogo/GoogleLogo";
+import { MicrosoftLogo } from "@probo/ui/src/v2/MicrosoftLogo/MicrosoftLogo";
 import type { ComponentProps } from "react";
+import { useTranslation } from "react-i18next";
 import { useFragment } from "react-relay";
 import { useSearchParams } from "react-router";
 import { graphql } from "relay-runtime";
 
 import type { OIDCButtonFragment$key } from "#/__generated__/iam/OIDCButtonFragment.graphql";
-import { useSafeContinueUrl } from "#/hooks/useSafeContinueUrl";
+import { useSafeContinueURL } from "#/hooks/useSafeContinueURL";
 
 const fragment = graphql`
   fragment OIDCButtonFragment on OIDCProviderInfo {
@@ -33,29 +41,38 @@ const providerIcons: Record<
   string,
   (props: ComponentProps<"svg">) => React.ReactNode
 > = {
-  google: Google,
-  microsoft: Microsoft,
+  google: GoogleLogo,
+  microsoft: MicrosoftLogo,
 };
 
 export function OIDCButton({
   providerRef,
+  continueURL,
 }: {
   providerRef: OIDCButtonFragment$key;
+  continueURL?: string;
 }) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [searchParams] = useSearchParams();
-  const safeContinueUrl = useSafeContinueUrl();
+  const safeContinueUrl = useSafeContinueURL();
   const provider = useFragment(fragment, providerRef);
   const Icon = providerIcons[provider.name];
   const organizationId = searchParams.get("organization-id");
+  const targetContinue = continueURL ?? safeContinueUrl.toString();
+  const providerLabel
+    = provider.name.charAt(0).toUpperCase() + provider.name.slice(1);
 
   return (
     <Button
-      variant="secondary"
-      className="w-full h-10"
+      variant="soft"
+      color="neutral"
+      size={3}
+      className="min-w-0 flex-1"
+      aria-label={t("oidcButton.signInWith", { provider: providerLabel })}
+      iconStart={Icon ? <Icon className="size-5" /> : undefined}
       onClick={() => {
         const loginURL = new URL(provider.loginURL, window.location.origin);
-        loginURL.searchParams.set("continue", safeContinueUrl.toString());
+        loginURL.searchParams.set("continue", targetContinue);
         if (organizationId) {
           loginURL.searchParams.set("organization_id", organizationId);
         }
@@ -63,10 +80,7 @@ export function OIDCButton({
         window.location.href = loginURL.toString();
       }}
     >
-      <span className="flex items-center gap-2">
-        {Icon && <Icon width={18} height={18} />}
-        {__(`Sign in with ${provider.name.charAt(0).toUpperCase() + provider.name.slice(1)}`)}
-      </span>
+      {providerLabel}
     </Button>
   );
 }

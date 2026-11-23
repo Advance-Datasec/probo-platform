@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package esign
 
@@ -19,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.gearno.de/crypto/uuid"
@@ -30,6 +37,7 @@ import (
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/html2pdf"
 	"go.probo.inc/probo/pkg/mail"
+	"go.probo.inc/probo/pkg/validator"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -44,6 +52,12 @@ type (
 		logger         *log.Logger
 	}
 
+	// EmailSubject configures the certificate-of-completion email.
+	// A nil subject means the signature is recorded without that email.
+	EmailSubject struct {
+		Text string
+	}
+
 	CreateSignatureRequest struct {
 		OrganizationID gid.GID
 		DocumentType   coredata.ElectronicSignatureDocumentType
@@ -51,7 +65,7 @@ type (
 		FileID         gid.GID
 		SignerEmail    mail.Addr
 		ConsentText    string // optional; required when DocumentType == OTHER
-		EmailSubject   string
+		EmailSubject   *EmailSubject
 	}
 
 	AcceptSignatureRequest struct {
@@ -72,18 +86,51 @@ type (
 		SignerIPAddr   string
 		SignerUA       string
 		ConsentText    string
-		EmailSubject   string
+		EmailSubject   *EmailSubject
 	}
 
 	RecordEventRequest struct {
-		SignatureID gid.GID
-		EventType   coredata.ElectronicSignatureEventType
-		EventSource coredata.ElectronicSignatureEventSource
-		ActorEmail  mail.Addr
-		ActorIPAddr string
-		ActorUA     string
+		SignatureID   gid.GID
+		EventType     coredata.ElectronicSignatureEventType
+		EventSource   coredata.ElectronicSignatureEventSource
+		ActorFullName string
+		ActorEmail    mail.Addr
+		ActorIPAddr   string
+		ActorUA       string
 	}
 )
+
+func (s EmailSubject) Validate() error {
+	v := validator.New()
+
+	v.Check(s.Text, "text", validator.NotEmpty())
+
+	return v.Error()
+}
+
+func (req AcceptSignatureRequest) Validate() error {
+	v := validator.New()
+
+	v.Check(req.SignerFullName, "signer_full_name", validator.NotEmpty())
+
+	return v.Error()
+}
+
+func (req CreateAndAcceptSignatureRequest) Validate() error {
+	v := validator.New()
+
+	v.Check(req.SignerFullName, "signer_full_name", validator.NotEmpty())
+
+	return v.Error()
+}
+
+func (req RecordEventRequest) Validate() error {
+	v := validator.New()
+
+	v.Check(req.ActorFullName, "actor_full_name", validator.NotEmpty())
+
+	return v.Error()
+}
 
 func NewService(
 	pgClient *pg.Client,
@@ -153,14 +200,14 @@ func (s *Service) CreateSignature(
 		return nil, fmt.Errorf("consent text is required")
 	}
 
-	emailSubject := req.EmailSubject
-	if emailSubject == "" {
-		docName := req.DocumentType.DisplayName()
-		if req.DocumentName != nil && *req.DocumentName != "" {
-			docName = *req.DocumentName
+	var emailSubject *string
+
+	if req.EmailSubject != nil {
+		if err := req.EmailSubject.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid email subject: %w", err)
 		}
 
-		emailSubject = fmt.Sprintf("Your signed %s - Certificate of Completion", docName)
+		emailSubject = new(req.EmailSubject.Text)
 	}
 
 	now := time.Now()
@@ -202,6 +249,10 @@ func (s *Service) CreateAndAcceptSignature(
 	conn pg.Tx,
 	req *CreateAndAcceptSignatureRequest,
 ) (*coredata.ElectronicSignature, error) {
+	if err := req.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
 	sig, err := s.CreateSignature(
 		ctx,
 		conn,
@@ -236,13 +287,15 @@ func (s *Service) CreateAndAcceptSignature(
 	if err := s.recordEvent(
 		ctx,
 		conn,
+		scope,
 		&RecordEventRequest{
-			SignatureID: sig.ID,
-			EventType:   coredata.ElectronicSignatureEventTypeSignatureAccepted,
-			EventSource: coredata.ElectronicSignatureEventSourceServer,
-			ActorEmail:  req.SignerEmail,
-			ActorIPAddr: req.SignerIPAddr,
-			ActorUA:     req.SignerUA,
+			SignatureID:   sig.ID,
+			EventType:     coredata.ElectronicSignatureEventTypeSignatureAccepted,
+			EventSource:   coredata.ElectronicSignatureEventSourceServer,
+			ActorFullName: req.SignerFullName,
+			ActorEmail:    req.SignerEmail,
+			ActorIPAddr:   req.SignerIPAddr,
+			ActorUA:       req.SignerUA,
 		},
 	); err != nil {
 		return nil, fmt.Errorf("cannot record signature event: %w", err)
@@ -269,7 +322,7 @@ func (s *Service) createStampedDocument(
 		return gid.GID{}, fmt.Errorf("cannot download original file: %w", err)
 	}
 
-	stampedData, err := StampSignatureID(pdfData, signatureID.String())
+	stampedData, err := StampSignatureID(ctx, pdfData, signatureID.String())
 	if err != nil {
 		return gid.GID{}, fmt.Errorf("cannot stamp signature ID: %w", err)
 	}
@@ -309,9 +362,12 @@ func (s *Service) createStampedDocument(
 	return stampedFile.ID, nil
 }
 
-func (s *Service) AcceptSignature(ctx context.Context, req *AcceptSignatureRequest) (*coredata.ElectronicSignature, error) {
+func (s *Service) AcceptSignature(ctx context.Context, scope coredata.Scoper, req *AcceptSignatureRequest) (*coredata.ElectronicSignature, error) {
+	if err := req.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
 	var (
-		scope     = coredata.NewScopeFromObjectID(req.SignatureID)
 		now       = time.Now()
 		signature = coredata.ElectronicSignature{}
 	)
@@ -320,7 +376,15 @@ func (s *Service) AcceptSignature(ctx context.Context, req *AcceptSignatureReque
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
 			if err := signature.LoadByID(ctx, tx, scope, req.SignatureID); err != nil {
+				if errors.Is(err, coredata.ErrResourceNotFound) {
+					return ErrElectronicSignatureNotFound
+				}
+
 				return fmt.Errorf("cannot load electronic signature: %w", err)
+			}
+
+			if !strings.EqualFold(signature.SignerEmail, req.SignerEmail.String()) {
+				return ErrSignatureAccessDenied
 			}
 
 			if signature.Status != coredata.ElectronicSignatureStatusPending &&
@@ -347,13 +411,15 @@ func (s *Service) AcceptSignature(ctx context.Context, req *AcceptSignatureReque
 			if err := s.recordEvent(
 				ctx,
 				tx,
+				scope,
 				&RecordEventRequest{
-					SignatureID: signature.ID,
-					EventType:   coredata.ElectronicSignatureEventTypeSignatureAccepted,
-					EventSource: coredata.ElectronicSignatureEventSourceServer,
-					ActorEmail:  req.SignerEmail,
-					ActorIPAddr: req.SignerIPAddr,
-					ActorUA:     req.SignerUA,
+					SignatureID:   signature.ID,
+					EventType:     coredata.ElectronicSignatureEventTypeSignatureAccepted,
+					EventSource:   coredata.ElectronicSignatureEventSourceServer,
+					ActorFullName: req.SignerFullName,
+					ActorEmail:    req.SignerEmail,
+					ActorIPAddr:   req.SignerIPAddr,
+					ActorUA:       req.SignerUA,
 				},
 			); err != nil {
 				return fmt.Errorf("cannot record event: %w", err)
@@ -369,20 +435,34 @@ func (s *Service) AcceptSignature(ctx context.Context, req *AcceptSignatureReque
 	return &signature, nil
 }
 
-func (s *Service) RecordEvent(ctx context.Context, req *RecordEventRequest) error {
+func (s *Service) RecordEvent(ctx context.Context, scope coredata.Scoper, req *RecordEventRequest) error {
+	if err := req.Validate(); err != nil {
+		return fmt.Errorf("invalid request: %w", err)
+	}
+
 	return s.pg.WithTx(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
-			return s.recordEvent(ctx, tx, req)
+			signature := coredata.ElectronicSignature{}
+			if err := signature.LoadByID(ctx, tx, scope, req.SignatureID); err != nil {
+				if errors.Is(err, coredata.ErrResourceNotFound) {
+					return ErrElectronicSignatureNotFound
+				}
+
+				return fmt.Errorf("cannot load electronic signature: %w", err)
+			}
+
+			if !strings.EqualFold(signature.SignerEmail, req.ActorEmail.String()) {
+				return ErrSignatureAccessDenied
+			}
+
+			return s.recordEvent(ctx, tx, scope, req)
 		},
 	)
 }
 
-func (s *Service) recordEvent(ctx context.Context, tx pg.Tx, req *RecordEventRequest) error {
-	var (
-		now   = time.Now()
-		scope = coredata.NewScopeFromObjectID(req.SignatureID)
-	)
+func (s *Service) recordEvent(ctx context.Context, tx pg.Tx, scope coredata.Scoper, req *RecordEventRequest) error {
+	now := time.Now()
 
 	event := coredata.ElectronicSignatureEvent{
 		ID:                    gid.New(scope.GetTenantID(), coredata.ElectronicSignatureEventEntityType),
@@ -403,11 +483,8 @@ func (s *Service) recordEvent(ctx context.Context, tx pg.Tx, req *RecordEventReq
 	return nil
 }
 
-func (s *Service) GetSignatureByID(ctx context.Context, id gid.GID) (*coredata.ElectronicSignature, error) {
-	var (
-		scope     = coredata.NewScopeFromObjectID(id)
-		signature = coredata.ElectronicSignature{}
-	)
+func (s *Service) GetSignatureByID(ctx context.Context, scope coredata.Scoper, id gid.GID) (*coredata.ElectronicSignature, error) {
+	signature := coredata.ElectronicSignature{}
 
 	err := s.pg.WithConn(
 		ctx,

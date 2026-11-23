@@ -1,22 +1,29 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package create
 
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
@@ -25,15 +32,22 @@ import (
 )
 
 const createMutation = `
-mutation($input: CreateAuditInput!) {
+mutation AuditCreate($input: CreateAuditInput!) {
   createAudit(input: $input) {
     auditEdge {
       node {
         id
         name
+        firm
         state
-        validFrom
-        validUntil
+        validity {
+          start
+          end
+        }
+        auditDates {
+          start
+          end
+        }
       }
     }
   }
@@ -44,11 +58,18 @@ type createResponse struct {
 	CreateAudit struct {
 		AuditEdge struct {
 			Node struct {
-				ID         string  `json:"id"`
-				Name       string  `json:"name"`
-				State      string  `json:"state"`
-				ValidFrom  *string `json:"validFrom"`
-				ValidUntil *string `json:"validUntil"`
+				ID       string `json:"id"`
+				Name     string `json:"name"`
+				Firm     string `json:"firm"`
+				State    string `json:"state"`
+				Validity *struct {
+					Start *string `json:"start"`
+					End   *string `json:"end"`
+				} `json:"validity"`
+				AuditDates *struct {
+					Start *string `json:"start"`
+					End   *string `json:"end"`
+				} `json:"auditDates"`
 			} `json:"node"`
 		} `json:"auditEdge"`
 	} `json:"createAudit"`
@@ -56,13 +77,15 @@ type createResponse struct {
 
 func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 	var (
-		flagOrg                   string
-		flagFramework             string
-		flagName                  string
-		flagState                 string
-		flagValidFrom             string
-		flagValidUntil            string
-		flagTrustCenterVisibility string
+		flagOrg            string
+		flagFrameworks     []string
+		flagName           string
+		flagFirm           string
+		flagState          string
+		flagValidFrom      string
+		flagValidUntil     string
+		flagAuditStartDate string
+		flagAuditEndDate   string
 	)
 
 	cmd := &cobra.Command{
@@ -92,12 +115,9 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 				cmdutil.TokenRefreshOption(cfg, host, hc),
 			)
 
-			if flagOrg == "" {
-				flagOrg = hc.Organization
-			}
-
-			if flagOrg == "" {
-				return fmt.Errorf("organization is required; pass --org or set a default with 'prb auth login'")
+			flagOrg, err = cmdutil.ResolveOrganization(flagOrg, hc.Organization)
+			if err != nil {
+				return err
 			}
 
 			if f.IOStreams.IsInteractive() {
@@ -115,6 +135,8 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 					err := huh.NewSelect[string]().
 						Title("Audit state").
 						Options(
+							huh.NewOption("To Book", "TO_BOOK"),
+							huh.NewOption("Audit Booked", "AUDIT_BOOKED"),
 							huh.NewOption("Not Started", "NOT_STARTED"),
 							huh.NewOption("In Progress", "IN_PROGRESS"),
 							huh.NewOption("Completed", "COMPLETED"),
@@ -133,29 +155,57 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("name is required; pass --name or run interactively")
 			}
 
+			if len(flagFrameworks) == 0 && f.IOStreams.IsInteractive() {
+				selected, err := promptFrameworkIDs(client, flagOrg)
+				if err != nil {
+					return err
+				}
+
+				flagFrameworks = selected
+			}
+
+			if len(flagFrameworks) == 0 {
+				return fmt.Errorf("at least one framework is required; pass --framework")
+			}
+
 			input := map[string]any{
 				"organizationId": flagOrg,
+				"frameworkIds":   flagFrameworks,
 				"name":           flagName,
 			}
 
-			if flagFramework != "" {
-				input["frameworkId"] = flagFramework
+			if flagFirm != "" {
+				input["firm"] = flagFirm
 			}
 
 			if flagState != "" {
 				input["state"] = flagState
 			}
 
-			if flagValidFrom != "" {
-				input["validFrom"] = flagValidFrom
+			if flagValidFrom != "" || flagValidUntil != "" {
+				period := map[string]any{}
+				if flagValidFrom != "" {
+					period["start"] = flagValidFrom
+				}
+
+				if flagValidUntil != "" {
+					period["end"] = flagValidUntil
+				}
+
+				input["validity"] = period
 			}
 
-			if flagValidUntil != "" {
-				input["validUntil"] = flagValidUntil
-			}
+			if flagAuditStartDate != "" || flagAuditEndDate != "" {
+				period := map[string]any{}
+				if flagAuditStartDate != "" {
+					period["start"] = flagAuditStartDate
+				}
 
-			if flagTrustCenterVisibility != "" {
-				input["trustCenterVisibility"] = flagTrustCenterVisibility
+				if flagAuditEndDate != "" {
+					period["end"] = flagAuditEndDate
+				}
+
+				input["auditDates"] = period
 			}
 
 			data, err := client.Do(
@@ -183,13 +233,111 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&flagOrg, "org", "", "Organization ID")
-	cmd.Flags().StringVar(&flagFramework, "framework", "", "Framework ID")
+	cmdutil.AddOrganizationFlag(cmd, &flagOrg, "Organization ID")
+	cmd.Flags().StringArrayVar(&flagFrameworks, "framework", nil, "Framework ID (repeat for each framework)")
 	cmd.Flags().StringVar(&flagName, "name", "", "Audit name (required)")
-	cmd.Flags().StringVar(&flagState, "state", "", "Audit state: NOT_STARTED, IN_PROGRESS, COMPLETED, REJECTED, OUTDATED")
+	cmd.Flags().StringVar(&flagFirm, "firm", "", "Audit firm")
+	cmd.Flags().StringVar(&flagState, "state", "", "Audit state: TO_BOOK, AUDIT_BOOKED, NOT_STARTED, IN_PROGRESS, COMPLETED, REJECTED, OUTDATED")
 	cmd.Flags().StringVar(&flagValidFrom, "valid-from", "", "Valid from date (e.g. 2026-01-01)")
 	cmd.Flags().StringVar(&flagValidUntil, "valid-until", "", "Valid until date (e.g. 2026-12-31)")
-	cmd.Flags().StringVar(&flagTrustCenterVisibility, "trust-center-visibility", "", "Trust center visibility: NONE, PRIVATE, PUBLIC")
+	cmd.Flags().StringVar(&flagAuditStartDate, "audit-start-date", "", "Audit start date (e.g. 2026-03-01)")
+	cmd.Flags().StringVar(&flagAuditEndDate, "audit-end-date", "", "Audit end date (e.g. 2026-03-15)")
 
 	return cmd
+}
+
+const frameworksQuery = `
+query AuditCreateFrameworks($id: ID!, $first: Int, $after: CursorKey) {
+  node(id: $id) {
+    __typename
+    ... on Organization {
+      frameworks(first: $first, after: $after) {
+        totalCount
+        edges {
+          node {
+            id
+            name
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}
+`
+
+type frameworkOption struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func promptFrameworkIDs(client *api.Client, organizationID string) ([]string, error) {
+	frameworks, _, _, err := api.Paginate(
+		client,
+		frameworksQuery,
+		map[string]any{"id": organizationID},
+		math.MaxInt32,
+		"",
+		func(data json.RawMessage) (*api.Connection[frameworkOption], error) {
+			var resp struct {
+				Node *struct {
+					Typename   string                          `json:"__typename"`
+					Frameworks api.Connection[frameworkOption] `json:"frameworks"`
+				} `json:"node"`
+			}
+
+			if err := json.Unmarshal(data, &resp); err != nil {
+				return nil, err
+			}
+
+			if resp.Node == nil || resp.Node.Typename != "Organization" {
+				return nil, fmt.Errorf("organization %s not found", organizationID)
+			}
+
+			return &resp.Node.Frameworks, nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(frameworks) == 0 {
+		return nil, fmt.Errorf("organization %s has no frameworks", organizationID)
+	}
+
+	options := make([]huh.Option[string], len(frameworks))
+
+	for i, framework := range frameworks {
+		label := framework.Name
+
+		if label == "" {
+			label = framework.ID
+		}
+
+		options[i] = huh.NewOption(label, framework.ID)
+	}
+
+	var selected []string
+
+	err = huh.NewMultiSelect[string]().
+		Title("Frameworks").
+		Description("Select at least one framework").
+		Options(options...).
+		Validate(func(value []string) error {
+			if len(value) == 0 {
+				return fmt.Errorf("select at least one framework")
+			}
+
+			return nil
+		}).
+		Value(&selected).
+		Run()
+	if err != nil {
+		return nil, err
+	}
+
+	return selected, nil
 }

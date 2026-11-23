@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -23,9 +29,14 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"go.gearno.de/kit/pg"
+	"go.gearno.de/x/ref"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/iam/policy"
 	"go.probo.inc/probo/pkg/page"
+)
+
+var (
+	_ Searchable = (*Obligation)(nil)
 )
 
 type (
@@ -62,6 +73,16 @@ func (o *Obligation) CursorKey(field ObligationOrderField) page.CursorKey {
 	}
 
 	panic(fmt.Sprintf("unsupported order by: %s", field))
+}
+
+func (o Obligation) SearchText() []string {
+	return []string{
+		ref.UnrefOrZero(o.Requirement),
+		ref.UnrefOrZero(o.Area),
+		ref.UnrefOrZero(o.Source),
+		ref.UnrefOrZero(o.Regulator),
+		ref.UnrefOrZero(o.ActionsToBeImplemented),
+	}
 }
 
 func (o *Obligation) AuthorizationAttributes(
@@ -149,6 +170,64 @@ LIMIT 1;
 	}
 
 	*o = obligation
+
+	return nil
+}
+
+func (os *Obligations) LoadByIDs(
+	ctx context.Context,
+	conn pg.Querier,
+	scope Scoper,
+	obligationIDs []gid.GID,
+) error {
+	if len(obligationIDs) == 0 {
+		*os = nil
+		return nil
+	}
+
+	q := `
+SELECT
+	id,
+	organization_id,
+	area,
+	source,
+	requirement,
+	actions_to_be_implemented,
+	regulator,
+	owner_profile_id,
+	last_review_date,
+	due_date,
+	status,
+	type,
+	created_at,
+	updated_at
+FROM
+	obligations
+WHERE
+	%s
+	AND id = ANY(@obligation_ids)
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"obligation_ids": obligationIDs}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query obligations: %w", err)
+	}
+
+	items, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[Obligation])
+	if err != nil {
+		return fmt.Errorf("cannot collect obligations: %w", err)
+	}
+
+	*os = items
+
+	if len(items) != len(gid.NewSet(obligationIDs...)) {
+		return ErrResourceNotFound
+	}
 
 	return nil
 }
@@ -715,6 +794,32 @@ WHERE
 	)
 	if err != nil {
 		return fmt.Errorf("cannot clear obligation list document references: %w", err)
+	}
+
+	return nil
+}
+
+func (c *Obligations) DeleteByOrganizationID(
+	ctx context.Context,
+	conn pg.Tx,
+	scope Scoper,
+	organizationID gid.GID,
+) error {
+	q := `
+DELETE FROM obligations
+WHERE
+	%s
+	AND organization_id = @organization_id
+`
+
+	q = fmt.Sprintf(q, scope.SQLFragment())
+
+	args := pgx.StrictNamedArgs{"organization_id": organizationID}
+	maps.Copy(args, scope.SQLArguments())
+
+	_, err := conn.Exec(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot delete obligations: %w", err)
 	}
 
 	return nil

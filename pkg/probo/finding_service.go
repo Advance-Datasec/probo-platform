@@ -1,21 +1,28 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -34,6 +41,7 @@ type (
 	CreateFindingRequest struct {
 		OrganizationID     gid.GID
 		Kind               coredata.FindingKind
+		Title              string
 		Description        *string
 		Source             *string
 		IdentifiedOn       *time.Time
@@ -49,6 +57,7 @@ type (
 
 	UpdateFindingRequest struct {
 		ID                 gid.GID
+		Title              **string
 		Description        **string
 		Source             **string
 		IdentifiedOn       **time.Time
@@ -68,6 +77,7 @@ func (r *CreateFindingRequest) Validate() error {
 
 	v.Check(r.OrganizationID, "organization_id", validator.Required(), validator.GID(coredata.OrganizationEntityType))
 	v.Check(r.Kind, "kind", validator.Required(), validator.OneOfSlice(coredata.FindingKinds()))
+	v.Check(r.Title, "title", validator.Required(), validator.SafeTextNoNewLine(TitleMaxLength))
 	v.Check(r.Description, "description", validator.SafeText(ContentMaxLength))
 	v.Check(r.Source, "source", validator.SafeText(ContentMaxLength))
 	v.Check(r.RootCause, "root_cause", validator.SafeText(ContentMaxLength))
@@ -89,6 +99,11 @@ func (r *UpdateFindingRequest) Validate() error {
 	v := validator.New()
 
 	v.Check(r.ID, "id", validator.Required(), validator.GID(coredata.FindingEntityType))
+
+	if r.Title != nil {
+		v.Check(*r.Title, "title", validator.Required(), validator.SafeTextNoNewLine(TitleMaxLength))
+	}
+
 	v.Check(r.Description, "description", validator.SafeText(ContentMaxLength))
 	v.Check(r.Source, "source", validator.SafeText(ContentMaxLength))
 	v.Check(r.RootCause, "root_cause", validator.SafeText(ContentMaxLength))
@@ -121,6 +136,31 @@ func (s FindingService) Get(
 	return finding, nil
 }
 
+func (s FindingService) GetByIDs(
+	ctx context.Context,
+	scope coredata.Scoper,
+	findingIDs ...gid.GID,
+) (coredata.Findings, error) {
+	var findings coredata.Findings
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := findings.LoadByIDs(ctx, conn, scope, findingIDs); err != nil &&
+				!errors.Is(err, coredata.ErrResourceNotFound) {
+				return fmt.Errorf("cannot load findings by ids: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return findings, nil
+}
+
 func (s *FindingService) Create(
 	ctx context.Context, scope coredata.Scoper,
 	req *CreateFindingRequest,
@@ -135,6 +175,7 @@ func (s *FindingService) Create(
 		ID:                 gid.New(scope.GetTenantID(), coredata.FindingEntityType),
 		OrganizationID:     req.OrganizationID,
 		Kind:               req.Kind,
+		Title:              req.Title,
 		Description:        req.Description,
 		Source:             req.Source,
 		IdentifiedOn:       req.IdentifiedOn,
@@ -173,8 +214,26 @@ func (s *FindingService) Create(
 				}
 			}
 
+			if req.RiskID != nil {
+				risk := &coredata.Risk{}
+				if err := risk.LoadByID(ctx, conn, scope, *req.RiskID); err != nil {
+					return fmt.Errorf("cannot load risk: %w", err)
+				}
+			}
+
 			if err := finding.Insert(ctx, conn, scope); err != nil {
 				return fmt.Errorf("cannot insert finding: %w", err)
+			}
+
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				finding.ID,
+				finding.OrganizationID,
+				finding.ReferenceID,
+				finding.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
 			}
 
 			return nil
@@ -202,6 +261,10 @@ func (s *FindingService) Update(
 		func(ctx context.Context, conn pg.Tx) error {
 			if err := finding.LoadByID(ctx, conn, scope, req.ID); err != nil {
 				return fmt.Errorf("cannot load finding: %w", err)
+			}
+
+			if req.Title != nil {
+				finding.Title = **req.Title
 			}
 
 			if req.Description != nil {
@@ -246,6 +309,13 @@ func (s *FindingService) Update(
 			}
 
 			if req.RiskID != nil {
+				if *req.RiskID != nil {
+					risk := &coredata.Risk{}
+					if err := risk.LoadByID(ctx, conn, scope, **req.RiskID); err != nil {
+						return fmt.Errorf("cannot load risk: %w", err)
+					}
+				}
+
 				finding.RiskID = *req.RiskID
 			}
 
@@ -261,6 +331,17 @@ func (s *FindingService) Update(
 
 			if err := finding.Update(ctx, conn, scope); err != nil {
 				return fmt.Errorf("cannot update finding: %w", err)
+			}
+
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				finding.ID,
+				finding.OrganizationID,
+				finding.ReferenceID,
+				finding.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
 			}
 
 			return nil
@@ -282,6 +363,10 @@ func (s FindingService) Delete(
 	return s.svc.pg.WithTx(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
+			if err := coredata.DeleteSearchResource(ctx, tx, finding.ID); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
 			err := finding.Delete(ctx, tx, scope)
 			if err != nil {
 				return fmt.Errorf("cannot delete finding: %w", err)
@@ -345,40 +430,39 @@ func (s FindingService) CountForOrganizationID(
 	return count, nil
 }
 
-func (s FindingService) CreateAuditMapping(
-	ctx context.Context, scope coredata.Scoper,
+func (s FindingService) CreateTaskMapping(
+	ctx context.Context,
+	scope coredata.Scoper,
 	findingID gid.GID,
-	auditID gid.GID,
-	referenceID string,
-) (*coredata.Finding, *coredata.Audit, error) {
+	taskID gid.GID,
+) (*coredata.Finding, *coredata.Task, error) {
 	finding := &coredata.Finding{}
-	audit := &coredata.Audit{}
+	linkedTask := &coredata.Task{}
+	findingTask := &coredata.FindingTask{
+		FindingID: findingID,
+		TaskID:    taskID,
+		CreatedAt: time.Now(),
+	}
 
-	err := s.svc.pg.WithConn(
+	err := s.svc.pg.WithTx(
 		ctx,
-		func(ctx context.Context, conn pg.Querier) error {
-			if err := finding.LoadByID(ctx, conn, scope, findingID); err != nil {
+		func(ctx context.Context, tx pg.Tx) error {
+			if err := finding.LoadByID(ctx, tx, scope, findingID); err != nil {
 				return fmt.Errorf("cannot load finding: %w", err)
 			}
 
-			if err := audit.LoadByID(ctx, conn, scope, auditID); err != nil {
-				return fmt.Errorf("cannot load audit: %w", err)
+			if err := linkedTask.LoadByID(ctx, tx, scope, taskID); err != nil {
+				return fmt.Errorf("cannot load task: %w", err)
 			}
 
-			if finding.OrganizationID != audit.OrganizationID {
-				return fmt.Errorf("cannot create finding audit mapping: finding and audit belong to different organizations")
+			if finding.OrganizationID != linkedTask.OrganizationID {
+				return fmt.Errorf("cannot create finding task mapping: finding and task belong to different organizations: %w", coredata.ErrResourceNotFound)
 			}
 
-			findingAudit := &coredata.FindingAudit{
-				FindingID:      findingID,
-				AuditID:        auditID,
-				ReferenceID:    referenceID,
-				OrganizationID: finding.OrganizationID,
-				CreatedAt:      time.Now(),
-			}
+			findingTask.OrganizationID = finding.OrganizationID
 
-			if err := findingAudit.Upsert(ctx, conn, scope); err != nil {
-				return fmt.Errorf("cannot create finding audit mapping: %w", err)
+			if err := findingTask.Insert(ctx, tx, scope); err != nil {
+				return fmt.Errorf("cannot create finding task mapping: %w", err)
 			}
 
 			return nil
@@ -388,7 +472,92 @@ func (s FindingService) CreateAuditMapping(
 		return nil, nil, err
 	}
 
-	return finding, audit, nil
+	return finding, linkedTask, nil
+}
+
+func (s FindingService) DeleteTaskMapping(
+	ctx context.Context,
+	scope coredata.Scoper,
+	findingID gid.GID,
+	taskID gid.GID,
+) (*coredata.Finding, *coredata.Task, error) {
+	finding := &coredata.Finding{}
+	linkedTask := &coredata.Task{}
+
+	err := s.svc.pg.WithTx(
+		ctx,
+		func(ctx context.Context, tx pg.Tx) error {
+			if err := finding.LoadByID(ctx, tx, scope, findingID); err != nil {
+				return fmt.Errorf("cannot load finding: %w", err)
+			}
+
+			if err := linkedTask.LoadByID(ctx, tx, scope, taskID); err != nil {
+				return fmt.Errorf("cannot load task: %w", err)
+			}
+
+			if finding.OrganizationID != linkedTask.OrganizationID {
+				return fmt.Errorf("cannot delete finding task mapping: finding and task belong to different organizations: %w", coredata.ErrResourceNotFound)
+			}
+
+			findingTask := coredata.FindingTask{}
+			if err := findingTask.Delete(ctx, tx, scope, finding.ID, linkedTask.ID); err != nil {
+				return fmt.Errorf("cannot delete finding task mapping: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cannot delete finding task mapping: %w", err)
+	}
+
+	return finding, linkedTask, nil
+}
+
+func (s FindingService) CreateAuditMapping(
+	ctx context.Context, scope coredata.Scoper,
+	findingID gid.GID,
+	auditID gid.GID,
+	referenceID string,
+) (*coredata.Finding, *coredata.Audit, *coredata.FindingAudit, error) {
+	finding := &coredata.Finding{}
+	audit := &coredata.Audit{}
+	findingAudit := &coredata.FindingAudit{
+		FindingID:   findingID,
+		AuditID:     auditID,
+		ReferenceID: referenceID,
+		CreatedAt:   time.Now(),
+	}
+
+	err := s.svc.pg.WithTx(
+		ctx,
+		func(ctx context.Context, tx pg.Tx) error {
+			if err := finding.LoadByID(ctx, tx, scope, findingID); err != nil {
+				return fmt.Errorf("cannot load finding: %w", err)
+			}
+
+			if err := audit.LoadByID(ctx, tx, scope, auditID); err != nil {
+				return fmt.Errorf("cannot load audit: %w", err)
+			}
+
+			if finding.OrganizationID != audit.OrganizationID {
+				return fmt.Errorf("cannot create finding audit mapping: finding and audit belong to different organizations")
+			}
+
+			findingAudit.OrganizationID = finding.OrganizationID
+
+			if err := findingAudit.Upsert(ctx, tx, scope); err != nil {
+				return fmt.Errorf("cannot create finding audit mapping: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return finding, audit, findingAudit, nil
 }
 
 func (s FindingService) DeleteAuditMapping(
@@ -423,6 +592,37 @@ func (s FindingService) DeleteAuditMapping(
 	}
 
 	return finding, audit, nil
+}
+
+func (s FindingService) ListAuditMappings(
+	ctx context.Context,
+	scope coredata.Scoper,
+	findingID gid.GID,
+	auditIDs []gid.GID,
+) (coredata.FindingAudits, error) {
+	var findingAudits coredata.FindingAudits
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := findingAudits.LoadByFindingIDAndAuditIDs(
+				ctx,
+				conn,
+				scope,
+				findingID,
+				auditIDs,
+			); err != nil {
+				return fmt.Errorf("cannot load finding audit mappings: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot list finding audit mappings: %w", err)
+	}
+
+	return findingAudits, nil
 }
 
 func (s FindingService) ListForAuditID(
@@ -469,6 +669,64 @@ func (s FindingService) CountForAuditID(
 			findings := coredata.Findings{}
 
 			count, err = findings.CountByAuditID(ctx, conn, scope, auditID, filter)
+			if err != nil {
+				return fmt.Errorf("cannot count findings: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+func (s FindingService) ListForTaskID(
+	ctx context.Context, scope coredata.Scoper,
+	taskID gid.GID,
+	cursor *page.Cursor[coredata.FindingOrderField],
+	filter *coredata.FindingFilter,
+) (*page.Page[*coredata.Finding, coredata.FindingOrderField], error) {
+	var findings coredata.Findings
+
+	linkedTask := &coredata.Task{}
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) error {
+			if err := linkedTask.LoadByID(ctx, conn, scope, taskID); err != nil {
+				return fmt.Errorf("cannot load task: %w", err)
+			}
+
+			if err := findings.LoadByTaskID(ctx, conn, scope, linkedTask.ID, cursor, filter); err != nil {
+				return fmt.Errorf("cannot load findings: %w", err)
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return page.NewPage([]*coredata.Finding(findings), cursor), nil
+}
+
+func (s FindingService) CountForTaskID(
+	ctx context.Context, scope coredata.Scoper,
+	taskID gid.GID,
+	filter *coredata.FindingFilter,
+) (int, error) {
+	var count int
+
+	err := s.svc.pg.WithConn(
+		ctx,
+		func(ctx context.Context, conn pg.Querier) (err error) {
+			findings := coredata.Findings{}
+
+			count, err = findings.CountByTaskID(ctx, conn, scope, taskID, filter)
 			if err != nil {
 				return fmt.Errorf("cannot count findings: %w", err)
 			}

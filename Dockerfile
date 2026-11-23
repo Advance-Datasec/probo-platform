@@ -4,7 +4,7 @@ FROM ${BASE_IMAGE}
 
 LABEL org.opencontainers.image.source="https://github.com/getprobo/probo"
 LABEL org.opencontainers.image.licenses="MIT"
-LABEL org.opencontainers.image.vendor="Govrly Inc"
+LABEL org.opencontainers.image.vendor="Probo Inc"
 
 RUN useradd -m probo && \
     apt-get update && \

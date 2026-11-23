@@ -1,35 +1,38 @@
 // Copyright (c) 2025 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import type { INodeProperties, IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
 import { proboApiRequest } from '../../GenericFunctions';
+import { thirdPartyLocator, organizationLocator } from '../../locators';
 
 export const description: INodeProperties[] = [
-	{
-		displayName: 'ThirdParty ID',
-		name: 'thirdPartyId',
-		type: 'string',
-		displayOptions: {
-			show: {
-				resource: ['thirdParty'],
-				operation: ['update'],
-			},
-		},
-		default: '',
-		description: 'The ID of the thirdParty to update',
-		required: true,
-	},
+	organizationLocator({
+		resource: ['thirdParty'],
+		operation: ['update'],
+		required: false,
+		description: 'Organization to search in. Leave this empty when entering an ID.',
+	}),
+	thirdPartyLocator({
+		resource: ['thirdParty'],
+		operation: ['update'],
+	}),
 	{
 		displayName: 'Name',
 		name: 'name',
@@ -112,8 +115,8 @@ export const description: INodeProperties[] = [
 		description: 'The headquarter address of the thirdParty',
 	},
 	{
-		displayName: 'Business Owner ID',
-		name: 'businessOwnerId',
+		displayName: 'Administrator IDs',
+		name: 'administratorIds',
 		type: 'string',
 		displayOptions: {
 			show: {
@@ -122,33 +125,7 @@ export const description: INodeProperties[] = [
 			},
 		},
 		default: '',
-		description: 'The ID of the business owner (People ID)',
-	},
-	{
-		displayName: 'Security Owner ID',
-		name: 'securityOwnerId',
-		type: 'string',
-		displayOptions: {
-			show: {
-				resource: ['thirdParty'],
-				operation: ['update'],
-			},
-		},
-		default: '',
-		description: 'The ID of the security owner (People ID)',
-	},
-	{
-		displayName: 'Show on Trust Center',
-		name: 'showOnTrustCenter',
-		type: 'boolean',
-		displayOptions: {
-			show: {
-				resource: ['thirdParty'],
-				operation: ['update'],
-			},
-		},
-		default: false,
-		description: 'Whether to show the thirdParty on the trust center',
+		description: 'Comma-separated administrator profile IDs (omit to leave unchanged)',
 	},
 	{
 		displayName: 'Additional Fields',
@@ -240,16 +217,14 @@ export async function execute(
 	this: IExecuteFunctions,
 	itemIndex: number,
 ): Promise<INodeExecutionData> {
-	const thirdPartyId = this.getNodeParameter('thirdPartyId', itemIndex) as string;
+	const thirdPartyId = this.getNodeParameter('thirdPartyId', itemIndex, '', { extractValue: true }) as string;
 	const name = this.getNodeParameter('name', itemIndex, '') as string;
 	const description = this.getNodeParameter('description', itemIndex, '') as string;
 	const category = this.getNodeParameter('category', itemIndex, '') as string;
 	const websiteUrl = this.getNodeParameter('websiteUrl', itemIndex, '') as string;
 	const legalName = this.getNodeParameter('legalName', itemIndex, '') as string;
 	const headquarterAddress = this.getNodeParameter('headquarterAddress', itemIndex, '') as string;
-	const businessOwnerId = this.getNodeParameter('businessOwnerId', itemIndex, '') as string;
-	const securityOwnerId = this.getNodeParameter('securityOwnerId', itemIndex, '') as string;
-	const showOnTrustCenter = this.getNodeParameter('showOnTrustCenter', itemIndex) as boolean | undefined;
+	const administratorIds = this.getNodeParameter('administratorIds', itemIndex, '') as string;
 	const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {}) as {
 		statusPageUrl?: string;
 		termsOfServiceUrl?: string;
@@ -286,7 +261,6 @@ export async function execute(
 					trustPageUrl
 					certifications
 					countries
-					showOnTrustCenter
 					createdAt
 					updatedAt
 				}
@@ -301,9 +275,9 @@ export async function execute(
 	if (websiteUrl !== undefined) input.websiteUrl = websiteUrl === '' ? null : websiteUrl;
 	if (legalName !== undefined) input.legalName = legalName === '' ? null : legalName;
 	if (headquarterAddress !== undefined) input.headquarterAddress = headquarterAddress === '' ? null : headquarterAddress;
-	if (businessOwnerId !== undefined) input.businessOwnerId = businessOwnerId === '' ? null : businessOwnerId;
-	if (securityOwnerId !== undefined) input.securityOwnerId = securityOwnerId === '' ? null : securityOwnerId;
-	if (showOnTrustCenter !== undefined) input.showOnTrustCenter = showOnTrustCenter;
+	if (administratorIds) {
+		input.administratorIds = administratorIds.split(',').map(id => id.trim()).filter(Boolean);
+	}
 	if (additionalFields.statusPageUrl !== undefined) input.statusPageUrl = additionalFields.statusPageUrl === '' ? null : additionalFields.statusPageUrl;
 	if (additionalFields.termsOfServiceUrl !== undefined) input.termsOfServiceUrl = additionalFields.termsOfServiceUrl === '' ? null : additionalFields.termsOfServiceUrl;
 	if (additionalFields.privacyPolicyUrl !== undefined) input.privacyPolicyUrl = additionalFields.privacyPolicyUrl === '' ? null : additionalFields.privacyPolicyUrl;

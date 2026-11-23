@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package html2pdf
 
@@ -23,8 +29,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+	"github.com/chromedp/chromedp/remote"
 	"go.gearno.de/kit/log"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
@@ -32,9 +40,9 @@ import (
 )
 
 var (
-	waitUntilDocumentReady = func(ctx context.Context) error {
-		var ready bool
-		return chromedp.Evaluate(`document.readyState === 'complete'`, &ready).Do(ctx)
+	waitUntilDocumentReady = func(ctx context.Context, t *chromedp.Target) error {
+		_, err := chromedp.Evaluate[bool](`document.readyState === 'complete'`)(ctx, t)
+		return err
 	}
 
 	tracerName = "go.probo.inc/probo/pkg/html2pdf"
@@ -52,6 +60,17 @@ type (
 		Scale                    float64       // Print scale (0.1 to 2.0)
 		WaitForExpression        string        // Optional JS expression polled until true before printing
 		WaitForExpressionTimeout time.Duration // Max time to wait (default 15s)
+		// GenerateTaggedPDF enables accessible PDF tagging (structure tree, reading
+		// order). Nil defaults to true.
+		GenerateTaggedPDF *bool
+		// GenerateDocumentOutline embeds a document outline (bookmarks). Nil defaults
+		// to true.
+		GenerateDocumentOutline *bool
+		// HeaderTemplate and FooterTemplate are Chrome print HTML. Either value
+		// enables the print header and footer. Chrome fills elements with class
+		// pageNumber and totalPages.
+		HeaderTemplate string
+		FooterTemplate string
 	}
 
 	Option func(*Converter)
@@ -77,8 +96,8 @@ func WithTracerProvider(tp trace.TracerProvider) Option {
 }
 
 func NewConverter(addr string, opts ...Option) *Converter {
-	// Only add ws:// prefix if no websocket scheme is present
-	if !strings.HasPrefix(addr, "ws://") && !strings.HasPrefix(addr, "wss://") {
+	// Only add ws:// prefix if it's not already present
+	if !strings.HasPrefix(addr, "ws://") {
 		addr = "ws://" + addr
 	}
 
@@ -116,6 +135,22 @@ func getPageDimensions(format PageFormat, orientation Orientation) (width, heigh
 	return w, h
 }
 
+func generateTaggedPDFEnabled(cfg RenderConfig) bool {
+	if cfg.GenerateTaggedPDF != nil {
+		return *cfg.GenerateTaggedPDF
+	}
+
+	return true
+}
+
+func generateDocumentOutlineEnabled(cfg RenderConfig) bool {
+	if cfg.GenerateDocumentOutline != nil {
+		return *cfg.GenerateDocumentOutline
+	}
+
+	return true
+}
+
 func (c *Converter) GeneratePDF(ctx context.Context, htmlDocument []byte, cfg RenderConfig) (io.Reader, error) {
 	var (
 		rootSpan = trace.SpanFromContext(ctx)
@@ -131,7 +166,7 @@ func (c *Converter) GeneratePDF(ctx context.Context, htmlDocument []byte, cfg Re
 		defer span.End()
 	}
 
-	allocCtx, cancel := chromedp.NewRemoteAllocator(ctx, c.addr)
+	allocCtx, cancel := remote.NewAllocator(ctx, c.addr)
 	defer cancel()
 
 	ctx, cancel = chromedp.NewContext(allocCtx)
@@ -149,7 +184,8 @@ func (c *Converter) GeneratePDF(ctx context.Context, htmlDocument []byte, cfg Re
 		scale = 1.0
 	}
 
-	var pdfBytes []byte
+	generateTaggedPDF := generateTaggedPDFEnabled(cfg)
+	generateDocumentOutline := generateDocumentOutlineEnabled(cfg)
 
 	c.l.InfoCtx(
 		ctx,
@@ -162,7 +198,12 @@ func (c *Converter) GeneratePDF(ctx context.Context, htmlDocument []byte, cfg Re
 		log.Float64("marginRight", marginRight),
 		log.Float64("scale", scale),
 		log.Bool("printBackground", cfg.PrintBackground),
+		log.Bool("generateTaggedPDF", generateTaggedPDF),
+		log.Bool("generateDocumentOutline", generateDocumentOutline),
+		log.Bool("displayHeaderFooter", cfg.HeaderTemplate != "" || cfg.FooterTemplate != ""),
 	)
+
+	var pdfBytes []byte
 
 	htmlContent := string(htmlDocument)
 
@@ -171,15 +212,15 @@ func (c *Converter) GeneratePDF(ctx context.Context, htmlDocument []byte, cfg Re
 		waitTimeout = 15 * time.Second
 	}
 
-	waitForExpr := chromedp.ActionFunc(func(ctx context.Context) error {
+	waitForExpr := chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
 		if cfg.WaitForExpression == "" {
 			return nil
 		}
 
 		deadline := time.Now().Add(waitTimeout)
 		for time.Now().Before(deadline) {
-			var ready bool
-			if err := chromedp.Evaluate(cfg.WaitForExpression, &ready).Do(ctx); err != nil {
+			ready, err := chromedp.Evaluate[bool](cfg.WaitForExpression)(ctx, t)
+			if err != nil {
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
@@ -194,40 +235,75 @@ func (c *Converter) GeneratePDF(ctx context.Context, htmlDocument []byte, cfg Re
 		return nil // proceed even on timeout
 	})
 
-	err := chromedp.Run(
+	err := chromedp.Do(
 		ctx,
 		chromedp.Navigate("about:blank"),
-		chromedp.ActionFunc(
-			func(ctx context.Context) error {
-				frameTree, err := page.GetFrameTree().Do(ctx)
+		chromedp.Func(
+			func(ctx context.Context, t *chromedp.Target) error {
+				frameTree, err := cdp.Call(ctx, t, page.GetFrameTree, cdp.Empty{})
 				if err != nil {
 					return fmt.Errorf("cannot get frame tree: %w", err)
 				}
 
-				if err := page.SetDocumentContent(frameTree.Frame.ID, htmlContent).Do(ctx); err != nil {
+				if _, err := cdp.Call(
+					ctx,
+					t,
+					page.SetDocumentContent,
+					page.SetDocumentContentParams{
+						FrameID: frameTree.FrameTree.Frame.ID,
+						HTML:    htmlContent,
+					},
+				); err != nil {
 					return fmt.Errorf("cannot set document content: %w", err)
 				}
 
 				return nil
 			}),
 		chromedp.WaitReady("body"),
-		chromedp.ActionFunc(waitUntilDocumentReady),
+		chromedp.Func(waitUntilDocumentReady),
 		waitForExpr,
-		chromedp.ActionFunc(
-			func(ctx context.Context) (err error) {
-				pdfBytes, _, err = page.PrintToPDF().
-					WithPrintBackground(cfg.PrintBackground).
-					WithPaperWidth(width).
-					WithPaperHeight(height).
-					WithMarginTop(marginTop).
-					WithMarginBottom(marginBottom).
-					WithMarginLeft(marginLeft).
-					WithMarginRight(marginRight).
-					WithScale(scale).
-					WithPreferCSSPageSize(false).
-					Do(ctx)
+		chromedp.Func(
+			func(ctx context.Context, t *chromedp.Target) error {
+				printParams := page.PrintToPDFParams{
+					PrintBackground:         new(cfg.PrintBackground),
+					PaperWidth:              width,
+					PaperHeight:             height,
+					MarginTop:               new(marginTop),
+					MarginBottom:            new(marginBottom),
+					MarginLeft:              new(marginLeft),
+					MarginRight:             new(marginRight),
+					Scale:                   scale,
+					PreferCSSPageSize:       new(false),
+					GenerateTaggedPDF:       new(generateTaggedPDF),
+					GenerateDocumentOutline: new(generateDocumentOutline),
+				}
 
-				return err
+				if cfg.HeaderTemplate != "" || cfg.FooterTemplate != "" {
+					// Chrome draws a default date and title header when the
+					// template string is empty.
+					headerTemplate := cfg.HeaderTemplate
+					if headerTemplate == "" {
+						headerTemplate = "<span></span>"
+					}
+
+					footerTemplate := cfg.FooterTemplate
+					if footerTemplate == "" {
+						footerTemplate = "<span></span>"
+					}
+
+					printParams.DisplayHeaderFooter = new(true)
+					printParams.HeaderTemplate = headerTemplate
+					printParams.FooterTemplate = footerTemplate
+				}
+
+				res, err := cdp.Call(ctx, t, page.PrintToPDF, printParams)
+				if err != nil {
+					return err
+				}
+
+				pdfBytes = res.Data
+
+				return nil
 			},
 		),
 	)

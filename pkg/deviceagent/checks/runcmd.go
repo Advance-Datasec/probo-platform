@@ -1,22 +1,29 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package checks
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -27,15 +34,17 @@ import (
 	"time"
 )
 
-const defaultCommandTimeout = 5 * time.Second
+const defaultCommandTimeout = 60 * time.Second
 
 var commandExistsCache sync.Map
 
 // CmdResult captures the basic outcome of an OS subcommand.
 type CmdResult struct {
-	Stdout string
-	Stderr string
-	Err    error
+	Stdout   string
+	Stderr   string
+	Err      error
+	TimedOut bool
+	Canceled bool
 }
 
 // RunCommand executes a command and returns trimmed stdout/stderr.
@@ -58,11 +67,35 @@ func RunCommand(ctx context.Context, name string, args ...string) CmdResult {
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 
-	return CmdResult{
+	result := CmdResult{
 		Stdout: strings.TrimSpace(stdout.String()),
 		Stderr: strings.TrimSpace(stderr.String()),
 		Err:    err,
 	}
+	if err == nil {
+		return result
+	}
+
+	// A killed process only reports a non-zero exit status, so the context is
+	// the sole witness to whether we stopped it and why.
+	switch {
+	case errors.Is(ctx.Err(), context.Canceled):
+		result.Canceled = true
+		result.Err = fmt.Errorf("command %q canceled: %w", name, err)
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		result.TimedOut = true
+		result.Err = fmt.Errorf("command %q stopped by the check deadline: %w", name, err)
+	case errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
+		result.TimedOut = true
+		result.Err = fmt.Errorf(
+			"command %q timed out after %s: %w",
+			name,
+			defaultCommandTimeout,
+			err,
+		)
+	}
+
+	return result
 }
 
 // CommandExists reports whether `cmd` exists at expected absolute path(s).
@@ -75,6 +108,11 @@ func CommandExists(cmd string) bool {
 	commandExistsCache.Store(cmd, exists)
 
 	return exists
+}
+
+// CommandCandidates returns absolute paths for known commands on the current platform.
+func CommandCandidates(cmd string) []string {
+	return commandCandidates(cmd)
 }
 
 func resolveCommandPath(cmd string) (string, bool) {

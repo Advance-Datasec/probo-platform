@@ -1,19 +1,23 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { getControlMaturityLevelLabel } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   ActionDropdown,
   Badge,
@@ -30,6 +34,7 @@ import {
   Tr,
 } from "@probo/ui";
 import { Suspense, useCallback, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { graphql, useFragment, useRelayEnvironment } from "react-relay";
 import { fetchQuery } from "relay-runtime";
 
@@ -123,7 +128,7 @@ export default function StatementOfApplicabilityControlsTab({
     id: string;
   };
 }) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const data = useFragment(controlsFragment, statementOfApplicability);
   const environment = useRelayEnvironment();
   const organizationId = useOrganizationId();
@@ -160,8 +165,8 @@ export default function StatementOfApplicabilityControlsTab({
   const [deleteApplicabilityStatement, isDeleting] = useMutationWithToasts(
     deleteApplicabilityStatementMutation,
     {
-      successMessage: __("Statement removed successfully."),
-      errorMessage: __("Failed to remove statement"),
+      successMessage: t("statementOfApplicabilityControlsTab.messages.removed"),
+      errorMessage: t("statementOfApplicabilityControlsTab.errors.remove"),
     },
   );
 
@@ -213,7 +218,7 @@ export default function StatementOfApplicabilityControlsTab({
               icon={IconPlusLarge}
               onClick={handleOpenAddStatementDialog}
             >
-              {__("Create Statement")}
+              {t("statementOfApplicabilityControlsTab.actions.createStatement")}
             </Button>
           </div>
         )}
@@ -221,14 +226,14 @@ export default function StatementOfApplicabilityControlsTab({
         <Table className="table-fixed w-full">
           <Thead>
             <Tr>
-              <Th className="w-[9%]">{__("Framework")}</Th>
-              <Th className="w-[17%]">{__("Control")}</Th>
-              <Th className="w-[12%]">{__("Applicability")}</Th>
-              <Th className="w-[14%]">{__("Maturity")}</Th>
-              <Th className="w-[7%]">{__("Regulatory")}</Th>
-              <Th className="w-[7%]">{__("Contractual")}</Th>
-              <Th className="w-[7%]">{__("Best Practice")}</Th>
-              <Th className="w-[7%]">{__("Risk Assessment")}</Th>
+              <Th className="w-[9%]">{t("statementOfApplicabilityControlsTab.columns.framework")}</Th>
+              <Th className="w-[17%]">{t("statementOfApplicabilityControlsTab.columns.control")}</Th>
+              <Th className="w-[12%]">{t("statementOfApplicabilityControlsTab.columns.applicability")}</Th>
+              <Th className="w-[14%]">{t("statementOfApplicabilityControlsTab.columns.maturity")}</Th>
+              <Th className="w-[7%]">{t("statementOfApplicabilityControlsTab.columns.regulatory")}</Th>
+              <Th className="w-[7%]">{t("statementOfApplicabilityControlsTab.columns.contractual")}</Th>
+              <Th className="w-[7%]">{t("statementOfApplicabilityControlsTab.columns.bestPractice")}</Th>
+              <Th className="w-[7%]">{t("statementOfApplicabilityControlsTab.columns.riskAssessment")}</Th>
               {(canUpdate || canDelete) && (
                 <Th className="w-[4%]"></Th>
               )}
@@ -241,14 +246,14 @@ export default function StatementOfApplicabilityControlsTab({
                   colSpan={canUpdate || canDelete ? 9 : 8}
                   className="text-center text-txt-secondary py-12"
                 >
-                  {__("No controls linked")}
+                  {t("statementOfApplicabilityControlsTab.empty")}
                 </Td>
               </Tr>
             )}
             {linkedControls.map(control => (
               <Tr
                 key={control.controlId}
-                to={`/organizations/${organizationId}/frameworks/${control.frameworkId}/controls/${control.controlId}`}
+                to={`/organizations/${organizationId}/governance/frameworks/${control.frameworkId}/controls/${control.controlId}`}
               >
                 <Td className="font-medium text-txt-secondary">
                   {control.frameworkName}
@@ -271,7 +276,7 @@ export default function StatementOfApplicabilityControlsTab({
                             variant={control.applicability ? "success" : "danger"}
                             size="sm"
                           >
-                            {control.applicability ? __("Yes") : __("No")}
+                            {control.applicability ? t("statementOfApplicabilityControlsTab.options.yes") : t("statementOfApplicabilityControlsTab.options.no")}
                           </Badge>
                         )
                       : (
@@ -293,10 +298,10 @@ export default function StatementOfApplicabilityControlsTab({
                             variant={control.maturityLevel !== "NONE" ? "success" : "neutral"}
                             size="sm"
                           >
-                            {getControlMaturityLevelLabel(__, control.maturityLevel)}
+                            {t(`statementOfApplicabilityControlsTab.maturity.${(control.maturityLevel ?? "NONE").toLowerCase()}`)}
                           </Badge>
                           {control.maturityLevel === "NONE" && control.notImplementedJustification && (
-                            <p className="text-xs text-txt-secondary break-words">
+                            <p className="text-xs text-txt-secondary wrap-break-word">
                               {control.notImplementedJustification}
                             </p>
                           )}
@@ -307,29 +312,29 @@ export default function StatementOfApplicabilityControlsTab({
                   {control.applicability === false
                     ? <span className="text-txt-tertiary">-</span>
                     : control.regulatory
-                      ? <Badge variant="success" size="sm">{__("Yes")}</Badge>
-                      : <Badge variant="danger" size="sm">{__("No")}</Badge>}
+                      ? <Badge variant="success" size="sm">{t("statementOfApplicabilityControlsTab.options.yes")}</Badge>
+                      : <Badge variant="danger" size="sm">{t("statementOfApplicabilityControlsTab.options.no")}</Badge>}
                 </Td>
                 <Td>
                   {control.applicability === false
                     ? <span className="text-txt-tertiary">-</span>
                     : control.contractual
-                      ? <Badge variant="success" size="sm">{__("Yes")}</Badge>
-                      : <Badge variant="danger" size="sm">{__("No")}</Badge>}
+                      ? <Badge variant="success" size="sm">{t("statementOfApplicabilityControlsTab.options.yes")}</Badge>
+                      : <Badge variant="danger" size="sm">{t("statementOfApplicabilityControlsTab.options.no")}</Badge>}
                 </Td>
                 <Td>
                   {control.applicability === false
                     ? <span className="text-txt-tertiary">-</span>
                     : control.bestPractice
-                      ? <Badge variant="success" size="sm">{__("Yes")}</Badge>
-                      : <Badge variant="danger" size="sm">{__("No")}</Badge>}
+                      ? <Badge variant="success" size="sm">{t("statementOfApplicabilityControlsTab.options.yes")}</Badge>
+                      : <Badge variant="danger" size="sm">{t("statementOfApplicabilityControlsTab.options.no")}</Badge>}
                 </Td>
                 <Td>
                   {control.applicability === false
                     ? <span className="text-txt-tertiary">-</span>
                     : control.riskAssessment
-                      ? <Badge variant="success" size="sm">{__("Yes")}</Badge>
-                      : <Badge variant="danger" size="sm">{__("No")}</Badge>}
+                      ? <Badge variant="success" size="sm">{t("statementOfApplicabilityControlsTab.options.yes")}</Badge>
+                      : <Badge variant="danger" size="sm">{t("statementOfApplicabilityControlsTab.options.no")}</Badge>}
                 </Td>
                 {(canUpdate || canDelete) && (
                   <Td noLink className="text-end">
@@ -364,7 +369,7 @@ export default function StatementOfApplicabilityControlsTab({
                             }
                           }}
                         >
-                          {__("Edit")}
+                          {t("statementOfApplicabilityControlsTab.actions.edit")}
                         </DropdownItem>
                       )}
                       {canDelete && control.applicabilityStatementId && (
@@ -382,7 +387,7 @@ export default function StatementOfApplicabilityControlsTab({
                           }}
                           disabled={isDeleting}
                         >
-                          {__("Remove")}
+                          {t("statementOfApplicabilityControlsTab.actions.remove")}
                         </DropdownItem>
                       )}
                     </ActionDropdown>

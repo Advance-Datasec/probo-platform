@@ -1,19 +1,24 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
 import {
   ActionDropdown,
   Button,
@@ -25,6 +30,7 @@ import {
   IconTrashCan,
   PageHeader,
 } from "@probo/ui";
+import { useTranslation } from "react-i18next";
 import {
   type PreloadedQuery,
   useFragment,
@@ -95,7 +101,7 @@ type Props = {
 export default function FrameworkDetailPage(props: Props) {
   const { queryRef } = props;
 
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const { controlId } = useParams<{ controlId?: string }>();
   const organizationId = useOrganizationId();
   const data = usePreloadedQuery<FrameworkGraphNodeQuery>(
@@ -120,9 +126,8 @@ export default function FrameworkDetailPage(props: Props) {
     = useMutationWithToasts<FrameworkDetailPageExportFrameworkMutation>(
       exportFrameworkMutation,
       {
-        errorMessage: "Failed to export framework",
-        successMessage:
-                    "Framework export started successfully. You will receive an email when the export is ready.",
+        errorMessage: t("frameworkDetailPage.errors.export"),
+        successMessage: t("frameworkDetailPage.messages.exportStarted"),
       },
     );
 
@@ -130,7 +135,7 @@ export default function FrameworkDetailPage(props: Props) {
   const onDelete = () => {
     deleteFramework({
       onSuccess: () => {
-        void navigate(`/organizations/${organizationId}/frameworks`);
+        void navigate(`/organizations/${organizationId}/governance/frameworks`);
       },
     });
   };
@@ -138,7 +143,7 @@ export default function FrameworkDetailPage(props: Props) {
   if (!controlId && controls.length > 0) {
     return (
       <Navigate
-        to={`/organizations/${organizationId}/frameworks/${framework.id}/controls/${controls[0].id}`}
+        to={`/organizations/${organizationId}/governance/frameworks/${framework.id}/controls/${controls[0].id}`}
       />
     );
   }
@@ -165,7 +170,7 @@ export default function FrameworkDetailPage(props: Props) {
             framework={framework}
           >
             <Button icon={IconPencil} variant="secondary">
-              {__("Edit")}
+              {t("frameworkDetailPage.actions.edit")}
             </Button>
           </FrameworkFormDialog>
         )}
@@ -181,7 +186,7 @@ export default function FrameworkDetailPage(props: Props) {
                     });
                   }}
                 >
-                  {__("Export Framework")}
+                  {t("frameworkDetailPage.actions.export")}
                 </DropdownItem>
               )}
             {framework.canDelete && (
@@ -190,14 +195,14 @@ export default function FrameworkDetailPage(props: Props) {
                 variant="danger"
                 onClick={onDelete}
               >
-                {__("Delete")}
+                {t("frameworkDetailPage.actions.delete")}
               </DropdownItem>
             )}
           </ActionDropdown>
         )}
       </PageHeader>
       <div className="text-lg font-semibold">
-        {__("Requirement categories")}
+        {t("frameworkDetailPage.requirementCategories")}
       </div>
       <div className="divide-x divide-border-low grid grid-cols-[264px_1fr]">
         <div
@@ -209,7 +214,7 @@ export default function FrameworkDetailPage(props: Props) {
               key={control.id}
               id={control.sectionTitle}
               description={control.name}
-              to={`/organizations/${organizationId}/frameworks/${framework.id}/controls/${control.id}`}
+              to={`/organizations/${organizationId}/governance/frameworks/${framework.id}/controls/${control.id}`}
               active={selectedControl?.id === control.id}
             />
           ))}
@@ -223,7 +228,7 @@ export default function FrameworkDetailPage(props: Props) {
                   size={20}
                   className="text-txt-primary"
                 />
-                {__("Add new control")}
+                {t("frameworkDetailPage.actions.addControl")}
               </button>
             </FrameworkControlDialog>
           )}

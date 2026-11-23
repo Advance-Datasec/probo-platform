@@ -1,0 +1,270 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import { formatDatetime, toPeriod } from "@probo/helpers";
+import {
+  Breadcrumb,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  Field,
+  IconPlusLarge,
+  Input,
+  Option,
+  useDialogRef,
+} from "@probo/ui";
+import { useEffect, useState } from "react";
+import { Controller, useForm, useWatch } from "react-hook-form";
+import { useTranslation } from "react-i18next";
+import { graphql } from "react-relay";
+
+import type { CreateRiskAnalysisDialogCreateMutation } from "#/__generated__/core/CreateRiskAnalysisDialogCreateMutation.graphql";
+import { ControlledField } from "#/components/form/ControlledField";
+import { useOrganizationId } from "#/hooks/useOrganizationId";
+import { useMutation } from "#/lib/relay/useMutation";
+import { RichEditor } from "#/pages/organizations/_components/RichEditor";
+import { isRichEditorContentEmpty } from "#/pages/organizations/_lib/richEditorContent";
+
+import { riskAnalysisDescriptionField } from "../variants";
+
+import {
+  matrixSizeFromOption,
+  type RiskAnalysisMatrixSizeOption,
+  riskAnalysisMatrixSizeOptions,
+} from "./matrixSize";
+import {
+  draftScoreLevels,
+  type ScoreLevelDraft,
+  scoreLevelDraftError,
+  type ScoreLevelError,
+  scoreLevelsFromDraft,
+} from "./scoreLevels";
+import { ScoreLevelsField } from "./ScoreLevelsField";
+
+const createMutation = graphql`
+  mutation CreateRiskAnalysisDialogCreateMutation(
+    $input: CreateRiskAnalysisInput!
+    $connections: [ID!]!
+  ) {
+    createRiskAnalysis(input: $input) {
+      riskAnalysisEdge @prependEdge(connections: $connections) {
+        node {
+          id
+          ...RiskAnalysisListItem_riskAnalysis
+        }
+      }
+    }
+  }
+`;
+
+type FormData = {
+  name: string;
+  description: string;
+  periodStart: string;
+  periodEnd: string;
+  matrixSize: RiskAnalysisMatrixSizeOption;
+  scoreLevels: ScoreLevelDraft[];
+};
+
+function scoreLevelErrorMessage(
+  error: ScoreLevelError,
+  t: (key: string) => string,
+) {
+  return t(`scoreLevels.validation.${error}`);
+}
+
+export function CreateRiskAnalysisDialog(props: {
+  connectionId: string;
+}) {
+  const { t } = useTranslation();
+  const organizationId = useOrganizationId();
+  const dialogRef = useDialogRef();
+  const [createRiskAnalysis, isCreating] = useMutation<CreateRiskAnalysisDialogCreateMutation>(createMutation);
+  const [editorKey, setEditorKey] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const [scoreLevelsCustomized, setScoreLevelsCustomized] = useState(false);
+  const { register, handleSubmit, reset, control, formState, setValue } = useForm<FormData>({
+    defaultValues: {
+      name: "",
+      description: "",
+      periodStart: "",
+      periodEnd: "",
+      matrixSize: "5x5",
+      scoreLevels: draftScoreLevels(5, 5),
+    },
+  });
+  const matrixSize = useWatch({ control, name: "matrixSize" });
+
+  useEffect(() => {
+    if (scoreLevelsCustomized) {
+      return;
+    }
+
+    const size = matrixSizeFromOption(matrixSize);
+    setValue("scoreLevels", draftScoreLevels(size.rows, size.cols));
+  }, [matrixSize, scoreLevelsCustomized, setValue]);
+
+  const onSubmit = async (data: FormData) => {
+    if (uploading) {
+      return;
+    }
+
+    const period = toPeriod(
+      formatDatetime(data.periodStart),
+      formatDatetime(data.periodEnd),
+    );
+
+    try {
+      await createRiskAnalysis({
+        variables: {
+          input: {
+            organizationId,
+            name: data.name,
+            description: isRichEditorContentEmpty(data.description) ? null : data.description,
+            period,
+            matrixSize: matrixSizeFromOption(data.matrixSize),
+            scoreLevels: scoreLevelsFromDraft(data.scoreLevels),
+          },
+          connections: [props.connectionId],
+        },
+      });
+      reset();
+      setScoreLevelsCustomized(false);
+      setEditorKey(key => key + 1);
+      dialogRef.current?.close();
+    } catch {
+      // Error toast is handled by useMutation.
+    }
+  };
+
+  return (
+    <Dialog
+      className="max-w-2xl"
+      ref={dialogRef}
+      trigger={(
+        <Button icon={IconPlusLarge} variant="primary">
+          {t("createRiskAnalysisDialog.title")}
+        </Button>
+      )}
+      title={(
+        <Breadcrumb
+          items={[t("createRiskAnalysisDialog.breadcrumb.riskAnalyses"), t("createRiskAnalysisDialog.title")]}
+        />
+      )}
+    >
+      <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
+        <DialogContent padded className="space-y-4">
+          <Field
+            label={t("createRiskAnalysisDialog.fields.name")}
+            {...register("name", { required: t("createRiskAnalysisDialog.validation.nameRequired") })}
+            type="text"
+            error={formState.errors.name?.message}
+            placeholder={t("createRiskAnalysisDialog.placeholders.name")}
+          />
+          <Field label={t("createRiskAnalysisDialog.fields.description")}>
+            <Controller
+              control={control}
+              name="description"
+              render={({ field }) => (
+                <RichEditor
+                  key={editorKey}
+                  className={riskAnalysisDescriptionField().editor()}
+                  content={field.value}
+                  disabled={isCreating}
+                  placeholder={t("createRiskAnalysisDialog.placeholders.description")}
+                  aria-label={t("createRiskAnalysisDialog.fields.description")}
+                  onChangeContent={field.onChange}
+                  onUploadingChange={setUploading}
+                />
+              )}
+            />
+          </Field>
+          <ControlledField
+            control={control}
+            name="matrixSize"
+            type="select"
+            label={t("createRiskAnalysisDialog.fields.matrixSize")}
+            rules={{ required: t("createRiskAnalysisDialog.validation.matrixSizeRequired") }}
+          >
+            {riskAnalysisMatrixSizeOptions.map(size => (
+              <Option key={size.key} value={size.key}>
+                {t(`createRiskAnalysisDialog.matrixSizes.${size.key}`)}
+              </Option>
+            ))}
+          </ControlledField>
+          <Controller
+            control={control}
+            name="scoreLevels"
+            rules={{
+              validate: (value) => {
+                const size = matrixSizeFromOption(matrixSize);
+                const error = scoreLevelDraftError(value, size.rows * size.cols);
+                return error == null || scoreLevelErrorMessage(error, t);
+              },
+            }}
+            render={({ field }) => {
+              const size = matrixSizeFromOption(matrixSize);
+              return (
+                <ScoreLevelsField
+                  id="create-score-levels"
+                  label={t("scoreLevels.field")}
+                  value={field.value}
+                  maxScore={size.rows * size.cols}
+                  error={formState.errors.scoreLevels?.message}
+                  onChange={(value) => {
+                    setScoreLevelsCustomized(true);
+                    field.onChange(value);
+                  }}
+                />
+              );
+            }}
+          />
+          <Field
+            label={t("createRiskAnalysisDialog.fields.periodStart")}
+            error={formState.errors.periodStart?.message}
+          >
+            <Input {...register("periodStart")} type="date" />
+          </Field>
+          <Field
+            label={t("createRiskAnalysisDialog.fields.periodEnd")}
+            error={formState.errors.periodEnd?.message}
+          >
+            <Input
+              {...register("periodEnd", {
+                validate: (value, formValues) =>
+                  !value
+                  || !formValues.periodStart
+                  || value >= formValues.periodStart
+                  || t("createRiskAnalysisDialog.validation.periodEndBeforeStart"),
+              })}
+              type="date"
+            />
+          </Field>
+        </DialogContent>
+        <DialogFooter>
+          <Button type="submit" disabled={isCreating || uploading}>
+            {t("createRiskAnalysisDialog.actions.create")}
+          </Button>
+        </DialogFooter>
+      </form>
+    </Dialog>
+  );
+}

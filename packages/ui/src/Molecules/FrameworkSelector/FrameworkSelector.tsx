@@ -1,24 +1,31 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "../../Atoms/Button/Button";
 import { Dropdown, DropdownItem } from "../../Atoms/Dropdown/Dropdown";
 import { TwentyOneCFRPart11 } from "../../Atoms/Frameworks/21CFRPart11";
 import { CCPA } from "../../Atoms/Frameworks/CCPA";
 import { DORA } from "../../Atoms/Frameworks/DORA";
+import { FERPA } from "../../Atoms/Frameworks/FERPA";
 import { GDPR } from "../../Atoms/Frameworks/GDPR";
 import { HDS } from "../../Atoms/Frameworks/HDS";
 import { HIPAA } from "../../Atoms/Frameworks/HIPAA";
@@ -26,8 +33,9 @@ import { ISO27001 } from "../../Atoms/Frameworks/ISO27001";
 import { ISO27701 } from "../../Atoms/Frameworks/ISO27701";
 import { ISO42001 } from "../../Atoms/Frameworks/ISO42001";
 import { NIS2 } from "../../Atoms/Frameworks/NIS2";
+import { PCIDSS } from "../../Atoms/Frameworks/PCIDSS";
 import { SOC2 } from "../../Atoms/Frameworks/SOC2";
-import { IconChevronDown, IconLock, IconPlusLarge } from "../../Atoms/Icons";
+import { IconChevronDown, IconPlusLarge } from "../../Atoms/Icons";
 
 const availableFrameworks = [
   {
@@ -98,6 +106,18 @@ const availableFrameworks = [
     logo: <HDS className="size-8" />,
     description: "Hébergement de Données de Santé",
   },
+  {
+    id: "FERPA",
+    name: "FERPA",
+    logo: <FERPA className="size-8" />,
+    description: "Family Educational Rights and Privacy Act",
+  },
+  {
+    id: "PCI-DSS",
+    name: "PCI DSS",
+    logo: <PCIDSS className="size-8" />,
+    description: "Payment Card Industry Data Security Standard",
+  },
 ];
 
 type Framework = (typeof availableFrameworks)[number];
@@ -107,16 +127,8 @@ type Props = {
   onSelect: (frameworkId: string) => void;
 };
 
-function handleContactSales(frameworkName: string) {
-  const subject = encodeURIComponent(`Interest in ${frameworkName} framework`);
-  const body = encodeURIComponent(
-    `Hi,\n\nI'm interested in enabling the ${frameworkName} framework on my account.\n\nPlease let me know how to proceed.\n\nThank you.`,
-  );
-  window.location.href = `mailto:sales@govrly.com?subject=${subject}&body=${body}`;
-}
-
-export function FrameworkSelector({ disabled }: Props) {
-  const { __ } = useTranslate();
+export function FrameworkSelector({ disabled, onSelect }: Props) {
+  const { t } = useTranslation();
   return (
     <Dropdown
       toggle={(
@@ -125,16 +137,16 @@ export function FrameworkSelector({ disabled }: Props) {
           iconAfter={IconChevronDown}
           disabled={disabled}
         >
-          {__("New framework")}
+          {t("ui.frameworkSelector.new")}
         </Button>
       )}
     >
-      <FrameworkItem onClick={() => handleContactSales("Custom")} />
+      <FrameworkItem onClick={() => onSelect("custom")} />
       {availableFrameworks.map(framework => (
         <FrameworkItem
           key={framework.id}
           framework={framework}
-          onClick={() => handleContactSales(framework.name)}
+          onClick={() => onSelect(framework.id)}
         />
       ))}
     </Dropdown>
@@ -142,29 +154,28 @@ export function FrameworkSelector({ disabled }: Props) {
 }
 
 function FrameworkItem(props: { framework?: Framework; onClick: () => void }) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   if (!props.framework) {
     return (
-      <DropdownItem onClick={props.onClick} className="opacity-60">
+      <DropdownItem onClick={props.onClick} className="">
         <div className="rounded-full size-8 bg-highlight text-txt-primary flex items-center justify-center">
           <IconPlusLarge size={16} />
         </div>
-        <div className="flex-1 space-y-[2px]">
+        <div className="space-y-[2px]">
           <div className="text-sm font-medium">
-            {__("Custom framework")}
+            {t("ui.frameworkSelector.custom.title")}
           </div>
           <div className="text-xs text-txt-secondary">
-            {__("Start from scratch")}
+            {t("ui.frameworkSelector.custom.description")}
           </div>
         </div>
-        <IconLock size={16} className="flex-none text-txt-secondary" />
       </DropdownItem>
     );
   }
   return (
-    <DropdownItem onClick={props.onClick} className="opacity-60">
+    <DropdownItem onClick={props.onClick} className="">
       {props.framework.logo}
-      <div className="flex-1 space-y-[2px]">
+      <div className="space-y-[2px]">
         <div className="text-sm font-medium">
           {props.framework.name}
         </div>
@@ -172,7 +183,6 @@ function FrameworkItem(props: { framework?: Framework; onClick: () => void }) {
           {props.framework.description}
         </div>
       </div>
-      <IconLock size={16} className="flex-none text-txt-secondary" />
     </DropdownItem>
   );
 }

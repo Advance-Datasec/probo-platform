@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
-// Use of this source code is governed by the ISC license
+// Use of this source code is governed by the MIT license
 // that can be found in the LICENSE file.
 
 import { autoUpdate, offset, useFloating } from "@floating-ui/react";
@@ -10,6 +10,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { cellDomElement } from "../_lib/cellDomElement";
 import { DRAG_THRESHOLD } from "../_lib/constants";
+import { EditorFloatingPortal } from "../_lib/EditorFloatingPortal";
 import type { DropdownMenu } from "../_lib/useTableDropdownMenu";
 
 import { tableCellMenuVariants } from "./variants";
@@ -223,29 +224,32 @@ export function TableCellMenuTrigger({
   };
 
   return (
-    <button
-      ref={(node) => {
-        handleRefs.setFloating(node);
-        setTriggerEl(node);
-        menuRefs.setReference(node);
-      }}
-      onMouseDown={onHandleMouseDown}
-      onMouseEnter={() => setHandleHovered(true)}
-      onMouseLeave={() => setHandleHovered(false)}
-      type="button"
-      style={{
-        ...handleStyles,
-        visibility: isPositioned ? "visible" : "hidden",
-      }}
-      className={trigger()}
-    >
-      {handleHovered || menuOpen
-        ? (
-            <div className="rounded-full bg-level-0 w-4.5 h-3.5 my-0.5 flex items-center">
-              <DotsThreeCircleVerticalIcon size={18} weight="fill" />
-            </div>
-          )
-        : <CircleIcon size={10} weight="fill" />}
-    </button>
+    <EditorFloatingPortal>
+      <button
+        ref={(node) => {
+          handleRefs.setFloating(node);
+          setTriggerEl(node);
+          menuRefs.setReference(node);
+        }}
+        onMouseDown={onHandleMouseDown}
+        onMouseEnter={() => setHandleHovered(true)}
+        onMouseLeave={() => setHandleHovered(false)}
+        type="button"
+        data-rich-editor-floating=""
+        style={{
+          ...handleStyles,
+          visibility: isPositioned ? "visible" : "hidden",
+        }}
+        className={trigger()}
+      >
+        {handleHovered || menuOpen
+          ? (
+              <div className="rounded-full bg-level-0 w-4.5 h-3.5 my-0.5 flex items-center">
+                <DotsThreeCircleVerticalIcon size={18} weight="fill" />
+              </div>
+            )
+          : <CircleIcon size={10} weight="fill" />}
+      </button>
+    </EditorFloatingPortal>
   );
 }

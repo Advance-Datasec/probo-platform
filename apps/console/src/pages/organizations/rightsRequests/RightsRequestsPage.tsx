@@ -1,27 +1,29 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import {
-  formatDate,
-  getRightsRequestStateLabel,
   getRightsRequestStateVariant,
-  getRightsRequestTypeLabel,
   promisifyMutation,
-  sprintf,
 } from "@probo/helpers";
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
+import { dateFormat } from "@probo/i18n";
 import {
   ActionDropdown,
   Badge,
@@ -39,6 +41,7 @@ import {
   Tr,
   useConfirm,
 } from "@probo/ui";
+import { useTranslation } from "react-i18next";
 import {
   ConnectionHandler,
   graphql,
@@ -103,10 +106,10 @@ const rightsRequestsPageFragment = graphql`
 export default function RightsRequestsPage({
   queryRef,
 }: RightsRequestsPageProps) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const organizationId = useOrganizationId();
 
-  usePageTitle(__("Rights Requests"));
+  usePageTitle(t("rightsRequestsPage.title"));
 
   const organization = usePreloadedQuery<RightsRequestGraphListQuery>(
     rightsRequestsQuery,
@@ -132,8 +135,8 @@ export default function RightsRequestsPage({
   return (
     <div className="space-y-6">
       <PageHeader
-        title={__("Rights Requests")}
-        description={__("Manage data subject rights requests.")}
+        title={t("rightsRequestsPage.title")}
+        description={t("rightsRequestsPage.description")}
       >
         {organization.node.canCreateRightsRequest && (
           <CreateRightsRequestDialog
@@ -141,7 +144,7 @@ export default function RightsRequestsPage({
             connectionId={connectionId}
           >
             <Button icon={IconPlusLarge}>
-              {__("Add rights request")}
+              {t("rightsRequestsPage.actions.add")}
             </Button>
           </CreateRightsRequestDialog>
         )}
@@ -153,12 +156,12 @@ export default function RightsRequestsPage({
               <Table>
                 <Thead>
                   <Tr>
-                    <Th>{__("Type")}</Th>
-                    <Th>{__("State")}</Th>
-                    <Th>{__("Data Subject")}</Th>
-                    <Th>{__("Contact")}</Th>
-                    <Th>{__("Deadline")}</Th>
-                    {hasAnyAction && <Th>{__("Actions")}</Th>}
+                    <Th>{t("rightsRequestsPage.columns.type")}</Th>
+                    <Th>{t("rightsRequestsPage.columns.state")}</Th>
+                    <Th>{t("rightsRequestsPage.columns.dataSubject")}</Th>
+                    <Th>{t("rightsRequestsPage.columns.contact")}</Th>
+                    <Th>{t("rightsRequestsPage.columns.deadline")}</Th>
+                    {hasAnyAction && <Th>{t("rightsRequestsPage.columns.actions")}</Th>}
                   </Tr>
                 </Thead>
                 <Tbody>
@@ -181,8 +184,8 @@ export default function RightsRequestsPage({
                     disabled={isLoadingNext}
                   >
                     {isLoadingNext
-                      ? __("Loading...")
-                      : __("Load more")}
+                      ? t("rightsRequestsPage.actions.loading")
+                      : t("rightsRequestsPage.actions.loadMore")}
                   </Button>
                 </div>
               )}
@@ -192,12 +195,10 @@ export default function RightsRequestsPage({
             <Card padded>
               <div className="text-center py-12">
                 <h3 className="text-lg font-semibold mb-2">
-                  {__("No rights requests yet")}
+                  {t("rightsRequestsPage.empty.title")}
                 </h3>
                 <p className="text-txt-tertiary mb-4">
-                  {__(
-                    "Create your first rights request to get started.",
-                  )}
+                  {t("rightsRequestsPage.empty.description")}
                 </p>
               </div>
             </Card>
@@ -218,7 +219,7 @@ function RequestRow({
   hasAnyAction: boolean;
 }) {
   const organizationId = useOrganizationId();
-  const { __ } = useTranslate();
+  const { i18n, t } = useTranslation();
   const [deleteRequest] = useMutation<RightsRequestGraphDeleteMutation>(deleteRightsRequestMutation);
   const confirm = useConfirm();
 
@@ -234,29 +235,25 @@ function RequestRow({
           },
         }),
       {
-        message: sprintf(
-          __(
-            "This will permanently delete the rights request. This action cannot be undone.",
-          ),
-        ),
+        message: t("rightsRequestsPage.deleteConfirmation"),
       },
     );
   };
 
-  const detailsUrl = `/organizations/${organizationId}/rights-requests/${request.id}`;
+  const detailsUrl = `/organizations/${organizationId}/privacy/rights-requests/${request.id}`;
 
   return (
     <Tr to={detailsUrl}>
       <Td>
         <Badge variant="neutral">
-          {getRightsRequestTypeLabel(__, request.requestType)}
+          {t(`rightsRequestsPage.types.${request.requestType.toLowerCase()}`)}
         </Badge>
       </Td>
       <Td>
         <Badge
           variant={getRightsRequestStateVariant(request.requestState)}
         >
-          {getRightsRequestStateLabel(__, request.requestState)}
+          {t(`rightsRequestsPage.states.${request.requestState.toLowerCase()}`)}
         </Badge>
       </Td>
       <Td>{request.dataSubject || "-"}</Td>
@@ -265,12 +262,12 @@ function RequestRow({
         {request.deadline
           ? (
               <time dateTime={request.deadline}>
-                {formatDate(request.deadline)}
+                {dateFormat(i18n.language, request.deadline)}
               </time>
             )
           : (
               <span className="text-txt-tertiary">
-                {__("No deadline")}
+                {t("rightsRequestsPage.noDeadline")}
               </span>
             )}
       </Td>
@@ -283,7 +280,7 @@ function RequestRow({
                 variant="danger"
                 onSelect={handleDelete}
               >
-                {__("Delete")}
+                {t("rightsRequestsPage.actions.delete")}
               </DropdownItem>
             )}
           </ActionDropdown>

@@ -1,22 +1,30 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package cookiebanner
 
+import "maps"
+
 import "go.probo.inc/probo/pkg/coredata"
 
-var SupportedLanguages = []string{"en", "de", "es", "fr", "id", "it", "ja", "ko", "pl", "pt", "tr", "uk", "zh"}
+var SupportedLanguages = []string{"en", "de", "es", "fr", "id", "it", "ja", "ko", "nl", "pl", "pt", "tr", "uk", "zh"}
 
 var defaultCategories = []struct {
 	Name            string
@@ -25,6 +33,7 @@ var defaultCategories = []struct {
 	Kind            coredata.CookieCategoryKind
 	Rank            int
 	GCMConsentTypes []string
+	TCFPurposeIDs   []int
 	PostHogConsent  bool
 }{
 	{
@@ -34,6 +43,7 @@ var defaultCategories = []struct {
 		Kind:            coredata.CookieCategoryKindNecessary,
 		Rank:            0,
 		GCMConsentTypes: []string{"security_storage"},
+		TCFPurposeIDs:   []int{},
 		PostHogConsent:  false,
 	},
 	{
@@ -43,6 +53,7 @@ var defaultCategories = []struct {
 		Kind:            coredata.CookieCategoryKindNormal,
 		Rank:            1,
 		GCMConsentTypes: []string{"analytics_storage"},
+		TCFPurposeIDs:   []int{1, 7, 8, 9, 10},
 		PostHogConsent:  true,
 	},
 	{
@@ -52,6 +63,7 @@ var defaultCategories = []struct {
 		Kind:            coredata.CookieCategoryKindNormal,
 		Rank:            2,
 		GCMConsentTypes: []string{"ad_storage", "ad_user_data", "ad_personalization"},
+		TCFPurposeIDs:   []int{1, 3, 4},
 		PostHogConsent:  false,
 	},
 	{
@@ -61,6 +73,7 @@ var defaultCategories = []struct {
 		Kind:            coredata.CookieCategoryKindNormal,
 		Rank:            3,
 		GCMConsentTypes: []string{"functionality_storage", "personalization_storage"},
+		TCFPurposeIDs:   []int{},
 		PostHogConsent:  false,
 	},
 	{
@@ -70,6 +83,7 @@ var defaultCategories = []struct {
 		Kind:            coredata.CookieCategoryKindUncategorised,
 		Rank:            4,
 		GCMConsentTypes: nil,
+		TCFPurposeIDs:   []int{},
 		PostHogConsent:  false,
 	},
 }
@@ -127,6 +141,13 @@ var defaultCategoryTranslationsByLanguage = map[string]map[string]struct {
 		"functional":    {"기능", "향상된 기능과 개인화를 가능하게 하는 쿠키입니다."},
 		"uncategorised": {"미분류", "아직 카테고리에 할당되지 않은 쿠키입니다."},
 	},
+	"nl": {
+		"necessary":     {"Noodzakelijk", "Essentiële cookies die nodig zijn voor het correct functioneren van de website."},
+		"analytics":     {"Analytisch", "Cookies die helpen te begrijpen hoe bezoekers met de website omgaan."},
+		"advertising":   {"Advertenties", "Cookies die worden gebruikt om relevante advertenties te tonen en campagnes te volgen."},
+		"functional":    {"Functioneel", "Cookies die uitgebreide functionaliteit en personalisatie mogelijk maken."},
+		"uncategorised": {"Niet gecategoriseerd", "Cookies die nog niet aan een categorie zijn toegewezen."},
+	},
 	"pl": {
 		"necessary":     {"Niezbędne", "Niezbędne pliki cookie wymagane do prawidłowego funkcjonowania strony internetowej."},
 		"analytics":     {"Analityczne", "Pliki cookie, które pomagają zrozumieć, jak odwiedzający wchodzą w interakcję ze stroną."},
@@ -183,10 +204,20 @@ var defaultUIStringsByLanguage = map[string]map[string]string{
 		"placeholder_text":         "Konten ini memerlukan cookie {{category}}.",
 		"placeholder_button":       "Kelola preferensi cookie",
 
-		"banner_title_opt_out":       "Pemberitahuan Cookie",
-		"banner_description_opt_out": "Kami menggunakan cookie dan teknologi serupa. Anda dapat menolak cookie yang tidak penting. {{cookie_policy_link}}",
-		"button_acknowledge":         "OK",
-		"button_opt_out":             "Jangan Jual atau Bagikan Informasi Pribadi Saya",
+		"banner_title_opt_out":          "Pemberitahuan Cookie",
+		"banner_description_opt_out":    "Kami menggunakan cookie dan teknologi serupa. Anda dapat menolak cookie yang tidak penting. {{cookie_policy_link}}",
+		"banner_description_us_opt_out": "Kami menggunakan cookie dan teknologi serupa untuk analitik dan periklanan. Berdasarkan undang-undang privasi negara bagian AS yang berlaku, Anda dapat menolak penjualan atau pembagian informasi pribadi Anda serta iklan yang ditargetkan. {{cookie_policy_link}}",
+		"banner_description_ca_opt_out": "Kami menggunakan cookie dan teknologi serupa. Berdasarkan undang-undang privasi Kanada yang berlaku, Anda dapat menolak cookie yang tidak penting kapan saja. {{cookie_policy_link}}",
+		"button_acknowledge":            "OK",
+		"button_opt_out":                "Tolak cookie yang tidak penting",
+		"button_opt_out_ccpa":           "Jangan Jual atau Bagikan Informasi Pribadi Saya",
+
+		"privacy_choices_title_ccpa":            "Pilihan Privasi Anda",
+		"privacy_choices_intro_ccpa":            "Hukum California memberi Anda hak untuk mengontrol bagaimana kami menggunakan dan membagikan informasi pribadi Anda. Gunakan opsi di bawah untuk menggunakan hak tersebut. {{privacy_policy_link}}",
+		"privacy_choices_sale_title_ccpa":       "Tolak penjualan atau pembagian informasi pribadi",
+		"privacy_choices_sale_description_ccpa": "Anda berhak menolak penjualan atau pembagian informasi pribadi Anda. Memilih Jangan Jual atau Bagikan Informasi Pribadi Saya akan menghentikan penjualan atau pembagian informasi pribadi Anda untuk browser ini.",
+		"privacy_choices_spi_title_ccpa":        "Batasi penggunaan informasi pribadi sensitif",
+		"privacy_choices_spi_description_ccpa":  "Anda berhak membatasi penggunaan dan pengungkapan informasi pribadi sensitif Anda. Kami tidak menggunakan atau mengungkapkan informasi pribadi sensitif untuk tujuan selain yang diizinkan oleh hukum California.",
 
 		"banner_title_notice":       "Pemberitahuan Cookie",
 		"banner_description_notice": "Situs ini menggunakan cookie untuk meningkatkan pengalaman Anda. {{cookie_policy_link}}",
@@ -210,10 +241,20 @@ var defaultUIStringsByLanguage = map[string]map[string]string{
 		"placeholder_text":         "Questo contenuto richiede i cookie {{category}}.",
 		"placeholder_button":       "Gestisci le preferenze dei cookie",
 
-		"banner_title_opt_out":       "Avviso sui Cookie",
-		"banner_description_opt_out": "Utilizziamo cookie e tecnologie simili. Puoi rinunciare ai cookie non essenziali. {{cookie_policy_link}}",
-		"button_acknowledge":         "OK",
-		"button_opt_out":             "Non vendere né condividere le mie informazioni personali",
+		"banner_title_opt_out":          "Avviso sui Cookie",
+		"banner_description_opt_out":    "Utilizziamo cookie e tecnologie simili. Puoi rinunciare ai cookie non essenziali. {{cookie_policy_link}}",
+		"banner_description_us_opt_out": "Utilizziamo cookie e tecnologie simili per analisi e pubblicità. Ai sensi delle leggi statali statunitensi sulla privacy applicabili, puoi rinunciare alla vendita o alla condivisione delle tue informazioni personali e alla pubblicità mirata. {{cookie_policy_link}}",
+		"banner_description_ca_opt_out": "Utilizziamo cookie e tecnologie simili. Ai sensi delle leggi canadesi sulla privacy applicabili, puoi rinunciare ai cookie non essenziali in qualsiasi momento. {{cookie_policy_link}}",
+		"button_acknowledge":            "OK",
+		"button_opt_out":                "Rifiuta i cookie non essenziali",
+		"button_opt_out_ccpa":           "Non vendere né condividere le mie informazioni personali",
+
+		"privacy_choices_title_ccpa":            "Le tue scelte sulla privacy",
+		"privacy_choices_intro_ccpa":            "La legge della California ti dà il diritto di controllare come utilizziamo e condividiamo le tue informazioni personali. Usa le opzioni qui sotto per esercitare tali diritti. {{privacy_policy_link}}",
+		"privacy_choices_sale_title_ccpa":       "Rinuncia alla vendita o condivisione delle informazioni personali",
+		"privacy_choices_sale_description_ccpa": "Hai il diritto di rinunciare alla vendita o alla condivisione delle tue informazioni personali. Scegliendo Non vendere né condividere le mie informazioni personali interromperemo la vendita o la condivisione delle tue informazioni personali per questo browser.",
+		"privacy_choices_spi_title_ccpa":        "Limita l'uso delle informazioni personali sensibili",
+		"privacy_choices_spi_description_ccpa":  "Hai il diritto di limitare l'uso e la divulgazione delle tue informazioni personali sensibili. Non utilizziamo né divulghiamo informazioni personali sensibili per scopi diversi da quelli consentiti dalla legge della California.",
 
 		"banner_title_notice":       "Avviso sui Cookie",
 		"banner_description_notice": "Questo sito utilizza i cookie per migliorare la tua esperienza. {{cookie_policy_link}}",
@@ -237,10 +278,20 @@ var defaultUIStringsByLanguage = map[string]map[string]string{
 		"placeholder_text":         "このコンテンツには{{category}}クッキーが必要です。",
 		"placeholder_button":       "クッキー設定を管理",
 
-		"banner_title_opt_out":       "クッキーに関するお知らせ",
-		"banner_description_opt_out": "私たちはクッキーおよび類似技術を使用しています。不要なクッキーを拒否することができます。{{cookie_policy_link}}",
-		"button_acknowledge":         "OK",
-		"button_opt_out":             "個人情報の販売・共有を拒否する",
+		"banner_title_opt_out":          "クッキーに関するお知らせ",
+		"banner_description_opt_out":    "私たちはクッキーおよび類似技術を使用しています。不要なクッキーを拒否することができます。{{cookie_policy_link}}",
+		"banner_description_us_opt_out": "当社は分析および広告のためにクッキーおよび類似技術を使用しています。適用される米国州プライバシー法に基づき、個人情報の販売または共有およびターゲット広告をオプトアウトできます。{{cookie_policy_link}}",
+		"banner_description_ca_opt_out": "当社はクッキーおよび類似技術を使用しています。適用されるカナダのプライバシー法に基づき、不要なクッキーをいつでもオプトアウトできます。{{cookie_policy_link}}",
+		"button_acknowledge":            "OK",
+		"button_opt_out":                "不要なクッキーを拒否する",
+		"button_opt_out_ccpa":           "個人情報の販売・共有を拒否する",
+
+		"privacy_choices_title_ccpa":            "プライバシーに関する選択",
+		"privacy_choices_intro_ccpa":            "カリフォルニア州法により、お客様は個人情報の利用および共有方法を管理する権利があります。以下のオプションを使用してこれらの権利を行使してください。{{privacy_policy_link}}",
+		"privacy_choices_sale_title_ccpa":       "個人情報の販売または共有のオプトアウト",
+		"privacy_choices_sale_description_ccpa": "お客様には、個人情報の販売または共有を拒否する権利があります。「個人情報の販売・共有を拒否する」を選択すると、このブラウザでの個人情報の販売または共有を停止します。",
+		"privacy_choices_spi_title_ccpa":        "機微な個人情報の利用の制限",
+		"privacy_choices_spi_description_ccpa":  "お客様には、機微な個人情報の利用および開示を制限する権利があります。当社は、カリフォルニア州法で認められる目的以外で機微な個人情報を利用または開示しません。",
 
 		"banner_title_notice":       "クッキーに関するお知らせ",
 		"banner_description_notice": "このサイトはユーザー体験を向上させるためにクッキーを使用しています。{{cookie_policy_link}}",
@@ -264,14 +315,61 @@ var defaultUIStringsByLanguage = map[string]map[string]string{
 		"placeholder_text":         "이 콘텐츠에는 {{category}} 쿠키가 필요합니다.",
 		"placeholder_button":       "쿠키 설정 관리",
 
-		"banner_title_opt_out":       "쿠키 알림",
-		"banner_description_opt_out": "저희는 쿠키 및 유사 기술을 사용합니다. 비필수 쿠키를 거부할 수 있습니다. {{cookie_policy_link}}",
-		"button_acknowledge":         "확인",
-		"button_opt_out":             "내 개인정보 판매 또는 공유 금지",
+		"banner_title_opt_out":          "쿠키 알림",
+		"banner_description_opt_out":    "저희는 쿠키 및 유사 기술을 사용합니다. 비필수 쿠키를 거부할 수 있습니다. {{cookie_policy_link}}",
+		"banner_description_us_opt_out": "저희는 분석 및 광고를 위해 쿠키 및 유사 기술을 사용합니다. 적용되는 미국 주 개인정보 보호법에 따라 개인정보의 판매 또는 공유 및 맞춤형 광고를 거부할 수 있습니다. {{cookie_policy_link}}",
+		"banner_description_ca_opt_out": "저희는 쿠키 및 유사 기술을 사용합니다. 적용되는 캐나다 개인정보 보호법에 따라 언제든지 필수적이지 않은 쿠키를 거부할 수 있습니다. {{cookie_policy_link}}",
+		"button_acknowledge":            "확인",
+		"button_opt_out":                "비필수 쿠키 거부",
+		"button_opt_out_ccpa":           "내 개인정보 판매 또는 공유 금지",
+
+		"privacy_choices_title_ccpa":            "개인정보 선택 사항",
+		"privacy_choices_intro_ccpa":            "캘리포니아 법은 저희가 개인정보를 사용하고 공유하는 방식을 통제할 권리를 부여합니다. 아래 옵션을 사용하여 해당 권리를 행사하세요. {{privacy_policy_link}}",
+		"privacy_choices_sale_title_ccpa":       "개인정보 판매 또는 공유 거부",
+		"privacy_choices_sale_description_ccpa": "귀하는 개인정보의 판매 또는 공유를 거부할 권리가 있습니다. 내 개인정보 판매 또는 공유 금지를 선택하면 이 브라우저에서 개인정보 판매 또는 공유를 중단합니다.",
+		"privacy_choices_spi_title_ccpa":        "민감한 개인정보 사용 제한",
+		"privacy_choices_spi_description_ccpa":  "귀하는 민감한 개인정보의 사용 및 공개를 제한할 권리가 있습니다. 저희는 캘리포니아 법이 허용하는 목적 외로는 민감한 개인정보를 사용하거나 공개하지 않습니다.",
 
 		"banner_title_notice":       "쿠키 알림",
 		"banner_description_notice": "이 사이트는 귀하의 경험을 향상시키기 위해 쿠키를 사용합니다. {{cookie_policy_link}}",
 		"button_dismiss":            "확인했습니다",
+	},
+	"nl": {
+		"banner_title":             "Cookievoorkeuren",
+		"banner_description":       "Wij gebruiken cookies om uw ervaring te verbeteren en het websiteverkeer te analyseren. {{cookie_policy_link}}",
+		"button_accept_all":        "Alles accepteren",
+		"button_reject_all":        "Alles weigeren",
+		"button_customize":         "Aanpassen",
+		"button_save":              "Voorkeuren opslaan",
+		"panel_title":              "Voorkeuren aanpassen",
+		"panel_description":        "Kies welke cookiecategorieën u wilt toestaan. {{necessary_category}} cookies zijn altijd actief omdat ze nodig zijn om de website te laten werken.",
+		"aria_close":               "Sluiten",
+		"aria_show_details":        "Cookiedetails weergeven",
+		"aria_hide_details":        "Cookiedetails verbergen",
+		"aria_cookie_settings":     "Cookie-instellingen",
+		"privacy_policy_link_text": "Privacybeleid",
+		"cookie_policy_link_text":  "Cookiebeleid",
+		"placeholder_text":         "Deze inhoud vereist {{category}} cookies.",
+		"placeholder_button":       "Cookievoorkeuren beheren",
+
+		"banner_title_opt_out":          "Cookiemelding",
+		"banner_description_opt_out":    "Wij gebruiken cookies en vergelijkbare technologieën. U kunt niet-essentiële cookies weigeren. {{cookie_policy_link}}",
+		"banner_description_us_opt_out": "Wij gebruiken cookies en vergelijkbare technologieën voor analyse en advertenties. Op grond van toepasselijke Amerikaanse staatsprivacywetten kunt u zich afmelden voor de verkoop of het delen van uw persoonlijke gegevens en gerichte advertenties. {{cookie_policy_link}}",
+		"banner_description_ca_opt_out": "Wij gebruiken cookies en vergelijkbare technologieën. Op grond van toepasselijke Canadese privacywetgeving kunt u zich op elk moment afmelden voor niet-essentiële cookies. {{cookie_policy_link}}",
+		"button_acknowledge":            "OK",
+		"button_opt_out":                "Niet-essentiële cookies weigeren",
+		"button_opt_out_ccpa":           "Verkoop of deel mijn persoonlijke gegevens niet",
+
+		"privacy_choices_title_ccpa":            "Uw privacykeuzes",
+		"privacy_choices_intro_ccpa":            "De Californische wet geeft je het recht om te bepalen hoe wij je persoonlijke gegevens gebruiken en delen. Gebruik de onderstaande opties om die rechten uit te oefenen. {{privacy_policy_link}}",
+		"privacy_choices_sale_title_ccpa":       "Verkoop of delen van persoonlijke gegevens weigeren",
+		"privacy_choices_sale_description_ccpa": "Je hebt het recht om je af te melden voor de verkoop of het delen van je persoonlijke gegevens. Als je Verkoop of deel mijn persoonlijke gegevens niet kiest, stoppen wij met het verkopen of delen van je persoonlijke gegevens voor deze browser.",
+		"privacy_choices_spi_title_ccpa":        "Gebruik van gevoelige persoonlijke gegevens beperken",
+		"privacy_choices_spi_description_ccpa":  "Je hebt het recht om het gebruik en de openbaarmaking van je gevoelige persoonlijke gegevens te beperken. Wij gebruiken of openbaren geen gevoelige persoonlijke gegevens voor andere doeleinden dan die zijn toegestaan door de Californische wet.",
+
+		"banner_title_notice":       "Cookiemelding",
+		"banner_description_notice": "Deze website gebruikt cookies om uw ervaring te verbeteren. {{cookie_policy_link}}",
+		"button_dismiss":            "Begrepen",
 	},
 	"pl": {
 		"banner_title":             "Preferencje plików cookie",
@@ -291,10 +389,20 @@ var defaultUIStringsByLanguage = map[string]map[string]string{
 		"placeholder_text":         "Ta treść wymaga plików cookie {{category}}.",
 		"placeholder_button":       "Zarządzaj preferencjami plików cookie",
 
-		"banner_title_opt_out":       "Powiadomienie o plikach cookie",
-		"banner_description_opt_out": "Używamy plików cookie i podobnych technologii. Możesz zrezygnować z nieistotnych plików cookie. {{cookie_policy_link}}",
-		"button_acknowledge":         "OK",
-		"button_opt_out":             "Nie sprzedawaj ani nie udostępniaj moich danych osobowych",
+		"banner_title_opt_out":          "Powiadomienie o plikach cookie",
+		"banner_description_opt_out":    "Używamy plików cookie i podobnych technologii. Możesz zrezygnować z nieistotnych plików cookie. {{cookie_policy_link}}",
+		"banner_description_us_opt_out": "Używamy plików cookie i podobnych technologii do analityki i reklam. Zgodnie z obowiązującymi amerykańskimi przepisami o prywatności stanowej możesz zrezygnować ze sprzedaży lub udostępniania swoich danych osobowych oraz reklam ukierunkowanych. {{cookie_policy_link}}",
+		"banner_description_ca_opt_out": "Używamy plików cookie i podobnych technologii. Zgodnie z obowiązującymi kanadyjskimi przepisami o prywatności możesz w każdej chwili zrezygnować z nieistotnych plików cookie. {{cookie_policy_link}}",
+		"button_acknowledge":            "OK",
+		"button_opt_out":                "Odrzuć nieistotne pliki cookie",
+		"button_opt_out_ccpa":           "Nie sprzedawaj ani nie udostępniaj moich danych osobowych",
+
+		"privacy_choices_title_ccpa":            "Twoje wybory dotyczące prywatności",
+		"privacy_choices_intro_ccpa":            "Prawo Kalifornii daje Ci prawo do kontrolowania, w jaki sposób wykorzystujemy i udostępniamy Twoje dane osobowe. Skorzystaj z poniższych opcji, aby skorzystać z tych praw. {{privacy_policy_link}}",
+		"privacy_choices_sale_title_ccpa":       "Rezygnacja ze sprzedaży lub udostępniania danych osobowych",
+		"privacy_choices_sale_description_ccpa": "Masz prawo zrezygnować ze sprzedaży lub udostępniania swoich danych osobowych. Wybór Nie sprzedawaj ani nie udostępniaj moich danych osobowych zatrzyma sprzedaż lub udostępnianie Twoich danych osobowych w tej przeglądarce.",
+		"privacy_choices_spi_title_ccpa":        "Ograniczenie wykorzystywania wrażliwych danych osobowych",
+		"privacy_choices_spi_description_ccpa":  "Masz prawo ograniczyć wykorzystywanie i ujawnianie swoich wrażliwych danych osobowych. Nie wykorzystujemy ani nie ujawniamy wrażliwych danych osobowych w celach innych niż dozwolone przez prawo Kalifornii.",
 
 		"banner_title_notice":       "Powiadomienie o plikach cookie",
 		"banner_description_notice": "Ta strona używa plików cookie, aby poprawić Twoje doświadczenia. {{cookie_policy_link}}",
@@ -318,10 +426,20 @@ var defaultUIStringsByLanguage = map[string]map[string]string{
 		"placeholder_text":         "Este conteúdo requer cookies de {{category}}.",
 		"placeholder_button":       "Gerenciar preferências de cookies",
 
-		"banner_title_opt_out":       "Aviso de Cookies",
-		"banner_description_opt_out": "Utilizamos cookies e tecnologias similares. Você pode recusar cookies não essenciais. {{cookie_policy_link}}",
-		"button_acknowledge":         "OK",
-		"button_opt_out":             "Não vender nem compartilhar minhas informações pessoais",
+		"banner_title_opt_out":          "Aviso de Cookies",
+		"banner_description_opt_out":    "Utilizamos cookies e tecnologias similares. Você pode recusar cookies não essenciais. {{cookie_policy_link}}",
+		"banner_description_us_opt_out": "Utilizamos cookies e tecnologias similares para análise e publicidade. De acordo com as leis estaduais de privacidade dos EUA aplicáveis, você pode recusar a venda ou o compartilhamento de suas informações pessoais e a publicidade direcionada. {{cookie_policy_link}}",
+		"banner_description_ca_opt_out": "Utilizamos cookies e tecnologias similares. De acordo com as leis canadenses de privacidade aplicáveis, você pode recusar cookies não essenciais a qualquer momento. {{cookie_policy_link}}",
+		"button_acknowledge":            "OK",
+		"button_opt_out":                "Recusar cookies não essenciais",
+		"button_opt_out_ccpa":           "Não vender nem compartilhar minhas informações pessoais",
+
+		"privacy_choices_title_ccpa":            "Suas escolhas de privacidade",
+		"privacy_choices_intro_ccpa":            "A lei da Califórnia dá a você o direito de controlar como usamos e compartilhamos suas informações pessoais. Use as opções abaixo para exercer esses direitos. {{privacy_policy_link}}",
+		"privacy_choices_sale_title_ccpa":       "Recusar a venda ou o compartilhamento de informações pessoais",
+		"privacy_choices_sale_description_ccpa": "Você tem o direito de recusar a venda ou o compartilhamento de suas informações pessoais. Escolher Não vender nem compartilhar minhas informações pessoais interromperá a venda ou o compartilhamento de suas informações pessoais neste navegador.",
+		"privacy_choices_spi_title_ccpa":        "Limitar o uso de informações pessoais sensíveis",
+		"privacy_choices_spi_description_ccpa":  "Você tem o direito de limitar o uso e a divulgação de suas informações pessoais sensíveis. Não usamos nem divulgamos informações pessoais sensíveis para fins além dos permitidos pela lei da Califórnia.",
 
 		"banner_title_notice":       "Aviso de Cookies",
 		"banner_description_notice": "Este site usa cookies para melhorar sua experiência. {{cookie_policy_link}}",
@@ -345,10 +463,20 @@ var defaultUIStringsByLanguage = map[string]map[string]string{
 		"placeholder_text":         "Bu içerik {{category}} çerezleri gerektirir.",
 		"placeholder_button":       "Çerez tercihlerini yönet",
 
-		"banner_title_opt_out":       "Çerez Bildirimi",
-		"banner_description_opt_out": "Çerezler ve benzer teknolojiler kullanıyoruz. Zorunlu olmayan çerezleri reddedebilirsiniz. {{cookie_policy_link}}",
-		"button_acknowledge":         "Tamam",
-		"button_opt_out":             "Kişisel Bilgilerimi Satma veya Paylaşma",
+		"banner_title_opt_out":          "Çerez Bildirimi",
+		"banner_description_opt_out":    "Çerezler ve benzer teknolojiler kullanıyoruz. Zorunlu olmayan çerezleri reddedebilirsiniz. {{cookie_policy_link}}",
+		"banner_description_us_opt_out": "Analitik ve reklamcılık için çerezler ve benzer teknolojiler kullanıyoruz. Geçerli ABD eyalet gizlilik yasaları kapsamında kişisel bilgilerinizin satışından veya paylaşımından ve hedefli reklamcılıktan vazgeçebilirsiniz. {{cookie_policy_link}}",
+		"banner_description_ca_opt_out": "Çerezler ve benzer teknolojiler kullanıyoruz. Geçerli Kanada gizlilik yasaları kapsamında gerekli olmayan çerezlerden istediğiniz zaman vazgeçebilirsiniz. {{cookie_policy_link}}",
+		"button_acknowledge":            "Tamam",
+		"button_opt_out":                "Zorunlu olmayan çerezleri reddet",
+		"button_opt_out_ccpa":           "Kişisel Bilgilerimi Satma veya Paylaşma",
+
+		"privacy_choices_title_ccpa":            "Gizlilik tercihleriniz",
+		"privacy_choices_intro_ccpa":            "Kaliforniya yasası, kişisel bilgilerinizi nasıl kullandığımızı ve paylaştığımızı kontrol etme hakkı tanır. Bu hakları kullanmak için aşağıdaki seçenekleri kullanın. {{privacy_policy_link}}",
+		"privacy_choices_sale_title_ccpa":       "Kişisel bilgilerin satışından veya paylaşımından vazgeçme",
+		"privacy_choices_sale_description_ccpa": "Kişisel bilgilerinizin satışından veya paylaşımından vazgeçme hakkına sahipsiniz. Kişisel Bilgilerimi Satma veya Paylaşma'yı seçmek, bu tarayıcı için kişisel bilgilerinizin satışını veya paylaşımını durdurur.",
+		"privacy_choices_spi_title_ccpa":        "Hassas kişisel bilgilerin kullanımını sınırlama",
+		"privacy_choices_spi_description_ccpa":  "Hassas kişisel bilgilerinizin kullanımını ve ifşasını sınırlama hakkına sahipsiniz. Hassas kişisel bilgileri Kaliforniya yasasının izin verdiği amaçlar dışında kullanmayız veya ifşa etmeyiz.",
 
 		"banner_title_notice":       "Çerez Bildirimi",
 		"banner_description_notice": "Bu site deneyiminizi geliştirmek için çerezler kullanır. {{cookie_policy_link}}",
@@ -372,10 +500,20 @@ var defaultUIStringsByLanguage = map[string]map[string]string{
 		"placeholder_text":         "Цей контент потребує файлів cookie {{category}}.",
 		"placeholder_button":       "Керувати налаштуваннями файлів cookie",
 
-		"banner_title_opt_out":       "Повідомлення про файли cookie",
-		"banner_description_opt_out": "Ми використовуємо файли cookie та подібні технології. Ви можете відмовитися від неістотних файлів cookie. {{cookie_policy_link}}",
-		"button_acknowledge":         "OK",
-		"button_opt_out":             "Не продавати та не ділитися моїми персональними даними",
+		"banner_title_opt_out":          "Повідомлення про файли cookie",
+		"banner_description_opt_out":    "Ми використовуємо файли cookie та подібні технології. Ви можете відмовитися від неістотних файлів cookie. {{cookie_policy_link}}",
+		"banner_description_us_opt_out": "Ми використовуємо файли cookie та подібні технології для аналітики та реклами. Відповідно до чинних законів штатів США про конфіденційність ви можете відмовитися від продажу або поширення ваших персональних даних і таргетованої реклами. {{cookie_policy_link}}",
+		"banner_description_ca_opt_out": "Ми використовуємо файли cookie та подібні технології. Відповідно до чинного канадського законодавства про конфіденційність ви можете відмовитися від неосновних файлів cookie у будь-який час. {{cookie_policy_link}}",
+		"button_acknowledge":            "OK",
+		"button_opt_out":                "Відхилити неістотні файли cookie",
+		"button_opt_out_ccpa":           "Не продавати та не ділитися моїми персональними даними",
+
+		"privacy_choices_title_ccpa":            "Ваш вибір щодо конфіденційності",
+		"privacy_choices_intro_ccpa":            "Закон Каліфорнії дає вам право контролювати, як ми використовуємо та поширюємо ваші персональні дані. Скористайтеся наведеними нижче параметрами, щоб реалізувати ці права. {{privacy_policy_link}}",
+		"privacy_choices_sale_title_ccpa":       "Відмова від продажу або поширення персональних даних",
+		"privacy_choices_sale_description_ccpa": "Ви маєте право відмовитися від продажу або поширення ваших персональних даних. Вибір «Не продавати та не ділитися моїми персональними даними» зупинить продаж або поширення ваших персональних даних для цього браузера.",
+		"privacy_choices_spi_title_ccpa":        "Обмеження використання конфіденційних персональних даних",
+		"privacy_choices_spi_description_ccpa":  "Ви маєте право обмежити використання та розкриття ваших конфіденційних персональних даних. Ми не використовуємо та не розкриваємо конфіденційні персональні дані для цілей, не дозволених законом Каліфорнії.",
 
 		"banner_title_notice":       "Повідомлення про файли cookie",
 		"banner_description_notice": "Цей сайт використовує файли cookie для покращення вашого досвіду. {{cookie_policy_link}}",
@@ -399,10 +537,20 @@ var defaultUIStringsByLanguage = map[string]map[string]string{
 		"placeholder_text":         "此内容需要 {{category}} Cookie。",
 		"placeholder_button":       "管理 Cookie 偏好设置",
 
-		"banner_title_opt_out":       "Cookie 通知",
-		"banner_description_opt_out": "我们使用 Cookie 和类似技术。您可以选择拒绝非必要 Cookie。{{cookie_policy_link}}",
-		"button_acknowledge":         "确定",
-		"button_opt_out":             "不要出售或共享我的个人信息",
+		"banner_title_opt_out":          "Cookie 通知",
+		"banner_description_opt_out":    "我们使用 Cookie 和类似技术。您可以选择拒绝非必要 Cookie。{{cookie_policy_link}}",
+		"banner_description_us_opt_out": "我们使用 Cookie 和类似技术进行分析和广告。根据适用的美国州隐私法，您可以选择退出出售或共享您的个人信息以及定向广告。{{cookie_policy_link}}",
+		"banner_description_ca_opt_out": "我们使用 Cookie 和类似技术。根据适用的加拿大隐私法，您可以随时选择退出非必要 Cookie。{{cookie_policy_link}}",
+		"button_acknowledge":            "确定",
+		"button_opt_out":                "拒绝非必要 Cookie",
+		"button_opt_out_ccpa":           "不要出售或共享我的个人信息",
+
+		"privacy_choices_title_ccpa":            "您的隐私选择",
+		"privacy_choices_intro_ccpa":            "加州法律赋予您控制我们如何使用和共享您的个人信息的权利。请使用以下选项行使这些权利。{{privacy_policy_link}}",
+		"privacy_choices_sale_title_ccpa":       "选择退出出售或共享个人信息",
+		"privacy_choices_sale_description_ccpa": "您有权选择退出出售或共享您的个人信息。选择“不要出售或共享我的个人信息”将停止我们在此浏览器中出售或共享您的个人信息。",
+		"privacy_choices_spi_title_ccpa":        "限制敏感个人信息的使用",
+		"privacy_choices_spi_description_ccpa":  "您有权限制敏感个人信息的使用和披露。我们不会将敏感个人信息用于加州法律允许范围以外的目的。",
 
 		"banner_title_notice":       "Cookie 通知",
 		"banner_description_notice": "本网站使用 Cookie 来提升您的体验。{{cookie_policy_link}}",
@@ -426,10 +574,20 @@ var defaultUIStringsByLanguage = map[string]map[string]string{
 		"placeholder_text":         "This content requires {{category}} cookies.",
 		"placeholder_button":       "Manage cookie preferences",
 
-		"banner_title_opt_out":       "Cookie Notice",
-		"banner_description_opt_out": "We use cookies and similar technologies. You can opt out of non-essential cookies. {{cookie_policy_link}}",
-		"button_acknowledge":         "OK",
-		"button_opt_out":             "Do Not Sell or Share My Personal Information",
+		"banner_title_opt_out":          "Cookie Notice",
+		"banner_description_opt_out":    "We use cookies and similar technologies. You can opt out of non-essential cookies. {{cookie_policy_link}}",
+		"banner_description_us_opt_out": "We use cookies and similar technologies for analytics and advertising. Under applicable US state privacy laws, you may opt out of the sale or sharing of your personal information and targeted advertising. {{cookie_policy_link}}",
+		"banner_description_ca_opt_out": "We use cookies and similar technologies. Under applicable Canadian privacy law, you may opt out of non-essential cookies at any time. {{cookie_policy_link}}",
+		"button_acknowledge":            "OK",
+		"button_opt_out":                "Reject non-essential cookies",
+		"button_opt_out_ccpa":           "Do Not Sell or Share My Personal Information",
+
+		"privacy_choices_title_ccpa":            "Your Privacy Choices",
+		"privacy_choices_intro_ccpa":            "California law gives you the right to control how we use and share your personal information. Use the options below to exercise those rights. {{privacy_policy_link}}",
+		"privacy_choices_sale_title_ccpa":       "Opt out of the sale or sharing of personal information",
+		"privacy_choices_sale_description_ccpa": "You have the right to opt out of the sale or sharing of your personal information. Choosing Do Not Sell or Share My Personal Information will stop us from selling or sharing your personal information for this browser.",
+		"privacy_choices_spi_title_ccpa":        "Limit the use of sensitive personal information",
+		"privacy_choices_spi_description_ccpa":  "You have the right to limit the use and disclosure of your sensitive personal information. We do not use or disclose sensitive personal information for purposes other than those permitted by California law.",
 
 		"banner_title_notice":       "Cookie Notice",
 		"banner_description_notice": "This site uses cookies to enhance your experience. {{cookie_policy_link}}",
@@ -453,10 +611,20 @@ var defaultUIStringsByLanguage = map[string]map[string]string{
 		"placeholder_text":         "Ce contenu nécessite les cookies {{category}}.",
 		"placeholder_button":       "Gérer les préférences de cookies",
 
-		"banner_title_opt_out":       "Avis sur les cookies",
-		"banner_description_opt_out": "Nous utilisons des cookies et technologies similaires. Vous pouvez refuser les cookies non essentiels. {{cookie_policy_link}}",
-		"button_acknowledge":         "OK",
-		"button_opt_out":             "Ne pas vendre ni partager mes informations personnelles",
+		"banner_title_opt_out":          "Avis sur les cookies",
+		"banner_description_opt_out":    "Nous utilisons des cookies et technologies similaires. Vous pouvez refuser les cookies non essentiels. {{cookie_policy_link}}",
+		"banner_description_us_opt_out": "Nous utilisons des cookies et technologies similaires pour l'analyse et la publicité. En vertu des lois étatiques américaines sur la confidentialité applicables, vous pouvez refuser la vente ou le partage de vos informations personnelles et la publicité ciblée. {{cookie_policy_link}}",
+		"banner_description_ca_opt_out": "Nous utilisons des cookies et technologies similaires. En vertu des lois canadiennes sur la confidentialité applicables, vous pouvez refuser les cookies non essentiels à tout moment. {{cookie_policy_link}}",
+		"button_acknowledge":            "OK",
+		"button_opt_out":                "Refuser les cookies non essentiels",
+		"button_opt_out_ccpa":           "Ne pas vendre ni partager mes informations personnelles",
+
+		"privacy_choices_title_ccpa":            "Vos choix en matière de confidentialité",
+		"privacy_choices_intro_ccpa":            "La loi californienne vous donne le droit de contrôler la façon dont nous utilisons et partageons vos informations personnelles. Utilisez les options ci-dessous pour exercer ces droits. {{privacy_policy_link}}",
+		"privacy_choices_sale_title_ccpa":       "Refuser la vente ou le partage des informations personnelles",
+		"privacy_choices_sale_description_ccpa": "Vous avez le droit de refuser la vente ou le partage de vos informations personnelles. Choisir Ne pas vendre ni partager mes informations personnelles arrêtera la vente ou le partage de vos informations personnelles pour ce navigateur.",
+		"privacy_choices_spi_title_ccpa":        "Limiter l'utilisation des informations personnelles sensibles",
+		"privacy_choices_spi_description_ccpa":  "Vous avez le droit de limiter l'utilisation et la divulgation de vos informations personnelles sensibles. Nous n'utilisons ni ne divulguons d'informations personnelles sensibles à des fins autres que celles autorisées par la loi californienne.",
 
 		"banner_title_notice":       "Avis sur les cookies",
 		"banner_description_notice": "Ce site utilise des cookies pour améliorer votre expérience. {{cookie_policy_link}}",
@@ -480,10 +648,20 @@ var defaultUIStringsByLanguage = map[string]map[string]string{
 		"placeholder_text":         "Dieser Inhalt erfordert {{category}}-Cookies.",
 		"placeholder_button":       "Cookie-Einstellungen verwalten",
 
-		"banner_title_opt_out":       "Cookie-Hinweis",
-		"banner_description_opt_out": "Wir verwenden Cookies und ähnliche Technologien. Sie können nicht wesentliche Cookies ablehnen. {{cookie_policy_link}}",
-		"button_acknowledge":         "OK",
-		"button_opt_out":             "Meine persönlichen Daten nicht verkaufen oder weitergeben",
+		"banner_title_opt_out":          "Cookie-Hinweis",
+		"banner_description_opt_out":    "Wir verwenden Cookies und ähnliche Technologien. Sie können nicht wesentliche Cookies ablehnen. {{cookie_policy_link}}",
+		"banner_description_us_opt_out": "Wir verwenden Cookies und ähnliche Technologien für Analysen und Werbung. Nach den geltenden US-Bundesstaats-Datenschutzgesetzen können Sie dem Verkauf oder der Weitergabe Ihrer personenbezogenen Daten und gezielter Werbung widersprechen. {{cookie_policy_link}}",
+		"banner_description_ca_opt_out": "Wir verwenden Cookies und ähnliche Technologien. Nach den geltenden kanadischen Datenschutzgesetzen können Sie nicht wesentliche Cookies jederzeit ablehnen. {{cookie_policy_link}}",
+		"button_acknowledge":            "OK",
+		"button_opt_out":                "Nicht wesentliche Cookies ablehnen",
+		"button_opt_out_ccpa":           "Meine persönlichen Daten nicht verkaufen oder weitergeben",
+
+		"privacy_choices_title_ccpa":            "Ihre Datenschutzoptionen",
+		"privacy_choices_intro_ccpa":            "Das kalifornische Recht gibt Ihnen das Recht zu kontrollieren, wie wir Ihre personenbezogenen Daten verwenden und weitergeben. Nutzen Sie die folgenden Optionen, um diese Rechte auszuüben. {{privacy_policy_link}}",
+		"privacy_choices_sale_title_ccpa":       "Verkauf oder Weitergabe personenbezogener Daten ablehnen",
+		"privacy_choices_sale_description_ccpa": "Sie haben das Recht, dem Verkauf oder der Weitergabe Ihrer personenbezogenen Daten zu widersprechen. Wenn Sie „Meine persönlichen Daten nicht verkaufen oder weitergeben“ wählen, stellen wir den Verkauf oder die Weitergabe Ihrer personenbezogenen Daten für diesen Browser ein.",
+		"privacy_choices_spi_title_ccpa":        "Verwendung sensibler personenbezogener Daten einschränken",
+		"privacy_choices_spi_description_ccpa":  "Sie haben das Recht, die Verwendung und Offenlegung Ihrer sensiblen personenbezogenen Daten einzuschränken. Wir verwenden oder offenbaren sensible personenbezogene Daten nicht für Zwecke, die über die nach kalifornischem Recht zulässigen hinausgehen.",
 
 		"banner_title_notice":       "Cookie-Hinweis",
 		"banner_description_notice": "Diese Website verwendet Cookies, um Ihre Erfahrung zu verbessern. {{cookie_policy_link}}",
@@ -507,13 +685,240 @@ var defaultUIStringsByLanguage = map[string]map[string]string{
 		"placeholder_text":         "Este contenido requiere cookies de {{category}}.",
 		"placeholder_button":       "Gestionar preferencias de cookies",
 
-		"banner_title_opt_out":       "Aviso de cookies",
-		"banner_description_opt_out": "Utilizamos cookies y tecnologías similares. Puede optar por no recibir cookies no esenciales. {{cookie_policy_link}}",
-		"button_acknowledge":         "OK",
-		"button_opt_out":             "No vender ni compartir mi información personal",
+		"banner_title_opt_out":          "Aviso de cookies",
+		"banner_description_opt_out":    "Utilizamos cookies y tecnologías similares. Puede optar por no recibir cookies no esenciales. {{cookie_policy_link}}",
+		"banner_description_us_opt_out": "Utilizamos cookies y tecnologías similares para análisis y publicidad. Según las leyes estatales de privacidad de EE. UU. aplicables, puede optar por no participar en la venta o el intercambio de su información personal y en la publicidad dirigida. {{cookie_policy_link}}",
+		"banner_description_ca_opt_out": "Utilizamos cookies y tecnologías similares. Según las leyes canadenses de privacidad aplicables, puede optar por no usar cookies no esenciales en cualquier momento. {{cookie_policy_link}}",
+		"button_acknowledge":            "OK",
+		"button_opt_out":                "Rechazar cookies no esenciales",
+		"button_opt_out_ccpa":           "No vender ni compartir mi información personal",
+
+		"privacy_choices_title_ccpa":            "Sus opciones de privacidad",
+		"privacy_choices_intro_ccpa":            "La ley de California le otorga el derecho a controlar cómo usamos y compartimos su información personal. Use las opciones a continuación para ejercer esos derechos. {{privacy_policy_link}}",
+		"privacy_choices_sale_title_ccpa":       "Exclusión de la venta o el intercambio de información personal",
+		"privacy_choices_sale_description_ccpa": "Tiene derecho a optar por no participar en la venta o el intercambio de su información personal. Elegir No vender ni compartir mi información personal detendrá la venta o el intercambio de su información personal en este navegador.",
+		"privacy_choices_spi_title_ccpa":        "Limitar el uso de información personal sensible",
+		"privacy_choices_spi_description_ccpa":  "Tiene derecho a limitar el uso y la divulgación de su información personal sensible. No usamos ni divulgamos información personal sensible para fines distintos de los permitidos por la ley de California.",
 
 		"banner_title_notice":       "Aviso de cookies",
 		"banner_description_notice": "Este sitio utiliza cookies para mejorar su experiencia. {{cookie_policy_link}}",
 		"button_dismiss":            "Entendido",
 	},
+}
+
+var tcfUIStringsByLanguage = map[string]map[string]string{
+	"en": {
+		"tcf_disclosure_store":         "This site stores and/or accesses information on a device and processes personal data.",
+		"tcf_disclosure_data":          "Personal data processed includes unique identifiers and browsing data.",
+		"tcf_disclosure_scope":         "These choices apply to this site only (service-specific).",
+		"tcf_disclosure_withdraw":      "You can withdraw or change your consent at any time via Cookie settings.",
+		"tcf_disclosure_object":        "Some partners process personal data on the basis of legitimate interest. You can object to that processing.",
+		"tcf_panel_description":        "Choose which purposes and partners to allow. Consent and legitimate interest can be set separately when both apply.",
+		"tcf_label_purposes":           "Purposes",
+		"tcf_label_special_features":   "Special features",
+		"tcf_disclosure_partners":      "We work with {{partners}}.",
+		"tcf_partner_one":              "{{count}} partner",
+		"tcf_partners":                 "{{count}} partners",
+		"tcf_view_partners":            "View partners",
+		"tcf_purpose_consent_one":      "{{count}} partner seeking consent",
+		"tcf_purpose_consent":          "{{count}} partners seeking consent",
+		"tcf_purpose_li_one":           "{{count}} partner relying on legitimate interest",
+		"tcf_purpose_li":               "{{count}} partners relying on legitimate interest",
+		"tcf_section_purposes":         "Purposes",
+		"tcf_section_other_purposes":   "Other purposes",
+		"tcf_section_special_purposes": "Special purposes",
+		"tcf_section_features":         "Features",
+		"tcf_section_special_features": "Special features",
+		"tcf_section_data_categories":  "Data categories",
+		"tcf_section_partners":         "Partners",
+		"tcf_section_storage":          "Storage",
+		"tcf_section_more":             "More information",
+		"tcf_label_consent":            "Consent",
+		"tcf_label_li":                 "Legitimate interest",
+		"tcf_label_optin":              "Opt-in",
+		"tcf_label_always_on":          "Always on",
+		"tcf_label_cookie_refresh":     "may be refreshed",
+		"tcf_label_cookie_no_refresh":  "not refreshed",
+		"tcf_label_non_cookie":         "Non-cookie storage",
+		"tcf_label_std_retention":      "Standard retention",
+		"tcf_label_purpose_storage":    "Purpose-specific storage",
+		"tcf_label_device_storage":     "Device storage details",
+		"tcf_storage":                  "Your choices are stored in the probo_consent cookie for {{days}} days.",
+	},
+	"fr": {
+		"tcf_disclosure_store":         "Ce site stocke et/ou accède à des informations sur un appareil et traite des données personnelles.",
+		"tcf_disclosure_data":          "Les données personnelles traitées incluent des identifiants uniques et des données de navigation.",
+		"tcf_disclosure_scope":         "Ces choix s'appliquent uniquement à ce site (spécifiques au service).",
+		"tcf_disclosure_withdraw":      "Vous pouvez retirer ou modifier votre consentement à tout moment via les paramètres des cookies.",
+		"tcf_disclosure_object":        "Certains partenaires traitent des données personnelles sur la base de l'intérêt légitime. Vous pouvez vous opposer à ce traitement.",
+		"tcf_panel_description":        "Choisissez les finalités et les partenaires à autoriser. Le consentement et l'intérêt légitime peuvent être réglés séparément lorsque les deux s'appliquent.",
+		"tcf_label_purposes":           "Finalités",
+		"tcf_label_special_features":   "Fonctionnalités spéciales",
+		"tcf_disclosure_partners":      "Nous travaillons avec {{partners}}.",
+		"tcf_partner_one":              "{{count}} partenaire",
+		"tcf_partners":                 "{{count}} partenaires",
+		"tcf_view_partners":            "Voir les partenaires",
+		"tcf_purpose_consent_one":      "{{count}} partenaire demandant le consentement",
+		"tcf_purpose_consent":          "{{count}} partenaires demandant le consentement",
+		"tcf_purpose_li_one":           "{{count}} partenaire se fondant sur l'intérêt légitime",
+		"tcf_purpose_li":               "{{count}} partenaires se fondant sur l'intérêt légitime",
+		"tcf_section_purposes":         "Finalités",
+		"tcf_section_other_purposes":   "Autres finalités",
+		"tcf_section_special_purposes": "Finalités spéciales",
+		"tcf_section_features":         "Fonctionnalités",
+		"tcf_section_special_features": "Fonctionnalités spéciales",
+		"tcf_section_data_categories":  "Catégories de données",
+		"tcf_section_partners":         "Partenaires",
+		"tcf_section_storage":          "Stockage",
+		"tcf_section_more":             "Plus d'informations",
+		"tcf_label_consent":            "Consentement",
+		"tcf_label_li":                 "Intérêt légitime",
+		"tcf_label_optin":              "Opt-in",
+		"tcf_label_always_on":          "Toujours actif",
+		"tcf_label_cookie_refresh":     "peut être renouvelée",
+		"tcf_label_cookie_no_refresh":  "non renouvelée",
+		"tcf_label_non_cookie":         "Stockage hors cookie",
+		"tcf_label_std_retention":      "Conservation standard",
+		"tcf_label_purpose_storage":    "Stockage spécifique à la finalité",
+		"tcf_label_device_storage":     "Détails du stockage sur l'appareil",
+		"tcf_storage":                  "Vos choix sont stockés dans le cookie probo_consent pendant {{days}} jours.",
+	},
+	"de": {
+		"tcf_disclosure_store":         "Diese Website speichert und/oder greift auf Informationen auf einem Gerät zu und verarbeitet personenbezogene Daten.",
+		"tcf_disclosure_data":          "Zu den verarbeiteten personenbezogenen Daten gehören eindeutige Kennungen und Browserdaten.",
+		"tcf_disclosure_scope":         "Diese Auswahl gilt nur für diese Website (dienstspezifisch).",
+		"tcf_disclosure_withdraw":      "Sie können Ihre Einwilligung jederzeit über die Cookie-Einstellungen widerrufen oder ändern.",
+		"tcf_disclosure_object":        "Einige Partner verarbeiten personenbezogene Daten auf Grundlage eines berechtigten Interesses. Sie können dieser Verarbeitung widersprechen.",
+		"tcf_panel_description":        "Wählen Sie, welche Zwecke und Partner zugelassen werden sollen. Einwilligung und berechtigtes Interesse können getrennt festgelegt werden, wenn beides zutrifft.",
+		"tcf_label_purposes":           "Zwecke",
+		"tcf_label_special_features":   "Besondere Funktionen",
+		"tcf_disclosure_partners":      "Wir arbeiten mit {{partners}}.",
+		"tcf_partner_one":              "{{count}} Partner",
+		"tcf_partners":                 "{{count}} Partner",
+		"tcf_view_partners":            "Partner anzeigen",
+		"tcf_purpose_consent_one":      "{{count}} Partner, der eine Einwilligung einholt",
+		"tcf_purpose_consent":          "{{count}} Partner, die eine Einwilligung einholen",
+		"tcf_purpose_li_one":           "{{count}} Partner, der sich auf berechtigtes Interesse stützt",
+		"tcf_purpose_li":               "{{count}} Partner, die sich auf berechtigtes Interesse stützen",
+		"tcf_section_purposes":         "Zwecke",
+		"tcf_section_other_purposes":   "Weitere Zwecke",
+		"tcf_section_special_purposes": "Besondere Zwecke",
+		"tcf_section_features":         "Funktionen",
+		"tcf_section_special_features": "Besondere Funktionen",
+		"tcf_section_data_categories":  "Datenkategorien",
+		"tcf_section_partners":         "Partner",
+		"tcf_section_storage":          "Speicherung",
+		"tcf_section_more":             "Weitere Informationen",
+		"tcf_label_consent":            "Einwilligung",
+		"tcf_label_li":                 "Berechtigtes Interesse",
+		"tcf_label_optin":              "Opt-in",
+		"tcf_label_always_on":          "Immer aktiv",
+		"tcf_label_cookie_refresh":     "kann erneuert werden",
+		"tcf_label_cookie_no_refresh":  "wird nicht erneuert",
+		"tcf_label_non_cookie":         "Speicherung ohne Cookies",
+		"tcf_label_std_retention":      "Standardaufbewahrung",
+		"tcf_label_purpose_storage":    "Zweckbezogene Speicherung",
+		"tcf_label_device_storage":     "Angaben zur Gerätespeicherung",
+		"tcf_storage":                  "Ihre Auswahl wird {{days}} Tage im Cookie probo_consent gespeichert.",
+	},
+	"es": {
+		"tcf_disclosure_store":         "Este sitio almacena y/o accede a información en un dispositivo y trata datos personales.",
+		"tcf_disclosure_data":          "Los datos personales tratados incluyen identificadores únicos y datos de navegación.",
+		"tcf_disclosure_scope":         "Estas elecciones se aplican solo a este sitio (específicas del servicio).",
+		"tcf_disclosure_withdraw":      "Puede retirar o cambiar su consentimiento en cualquier momento a través de Configuración de cookies.",
+		"tcf_disclosure_object":        "Algunos socios tratan datos personales sobre la base del interés legítimo. Puede oponerse a ese tratamiento.",
+		"tcf_panel_description":        "Elija qué finalidades y socios permitir. El consentimiento y el interés legítimo se pueden configurar por separado cuando ambos aplican.",
+		"tcf_label_purposes":           "Finalidades",
+		"tcf_label_special_features":   "Características especiales",
+		"tcf_disclosure_partners":      "Trabajamos con {{partners}}.",
+		"tcf_partner_one":              "{{count}} socio",
+		"tcf_partners":                 "{{count}} socios",
+		"tcf_view_partners":            "Ver socios",
+		"tcf_purpose_consent_one":      "{{count}} socio que solicita consentimiento",
+		"tcf_purpose_consent":          "{{count}} socios que solicitan consentimiento",
+		"tcf_purpose_li_one":           "{{count}} socio que se basa en el interés legítimo",
+		"tcf_purpose_li":               "{{count}} socios que se basan en el interés legítimo",
+		"tcf_section_purposes":         "Finalidades",
+		"tcf_section_other_purposes":   "Otras finalidades",
+		"tcf_section_special_purposes": "Finalidades especiales",
+		"tcf_section_features":         "Características",
+		"tcf_section_special_features": "Características especiales",
+		"tcf_section_data_categories":  "Categorías de datos",
+		"tcf_section_partners":         "Socios",
+		"tcf_section_storage":          "Almacenamiento",
+		"tcf_section_more":             "Más información",
+		"tcf_label_consent":            "Consentimiento",
+		"tcf_label_li":                 "Interés legítimo",
+		"tcf_label_optin":              "Opt-in",
+		"tcf_label_always_on":          "Siempre activo",
+		"tcf_label_cookie_refresh":     "puede renovarse",
+		"tcf_label_cookie_no_refresh":  "no se renueva",
+		"tcf_label_non_cookie":         "Almacenamiento sin cookies",
+		"tcf_label_std_retention":      "Conservación estándar",
+		"tcf_label_purpose_storage":    "Almacenamiento específico de la finalidad",
+		"tcf_label_device_storage":     "Detalles del almacenamiento en el dispositivo",
+		"tcf_storage":                  "Sus elecciones se almacenan en la cookie probo_consent durante {{days}} días.",
+	},
+	"nl": {
+		"tcf_disclosure_store":         "Deze site slaat informatie op een apparaat op en/of opent die, en verwerkt persoonsgegevens.",
+		"tcf_disclosure_data":          "Verwerkte persoonsgegevens omvatten unieke identificatoren en browsegegevens.",
+		"tcf_disclosure_scope":         "Deze keuzes gelden alleen voor deze site (dienstspecifiek).",
+		"tcf_disclosure_withdraw":      "U kunt uw toestemming op elk moment intrekken of wijzigen via Cookie-instellingen.",
+		"tcf_disclosure_object":        "Sommige partners verwerken persoonsgegevens op basis van gerechtvaardigd belang. U kunt tegen die verwerking bezwaar maken.",
+		"tcf_panel_description":        "Kies welke doeleinden en partners u wilt toestaan. Toestemming en gerechtvaardigd belang kunnen afzonderlijk worden ingesteld wanneer beide van toepassing zijn.",
+		"tcf_label_purposes":           "Doeleinden",
+		"tcf_label_special_features":   "Speciale functies",
+		"tcf_disclosure_partners":      "Wij werken samen met {{partners}}.",
+		"tcf_partner_one":              "{{count}} partner",
+		"tcf_partners":                 "{{count}} partners",
+		"tcf_view_partners":            "Partners bekijken",
+		"tcf_purpose_consent_one":      "{{count}} partner die toestemming vraagt",
+		"tcf_purpose_consent":          "{{count}} partners die toestemming vragen",
+		"tcf_purpose_li_one":           "{{count}} partner die zich beroept op gerechtvaardigd belang",
+		"tcf_purpose_li":               "{{count}} partners die zich beroepen op gerechtvaardigd belang",
+		"tcf_section_purposes":         "Doeleinden",
+		"tcf_section_other_purposes":   "Overige doeleinden",
+		"tcf_section_special_purposes": "Speciale doeleinden",
+		"tcf_section_features":         "Functies",
+		"tcf_section_special_features": "Speciale functies",
+		"tcf_section_data_categories":  "Gegevenscategorieën",
+		"tcf_section_partners":         "Partners",
+		"tcf_section_storage":          "Opslag",
+		"tcf_section_more":             "Meer informatie",
+		"tcf_label_consent":            "Toestemming",
+		"tcf_label_li":                 "Gerechtvaardigd belang",
+		"tcf_label_optin":              "Opt-in",
+		"tcf_label_always_on":          "Altijd aan",
+		"tcf_label_cookie_refresh":     "kan worden vernieuwd",
+		"tcf_label_cookie_no_refresh":  "wordt niet vernieuwd",
+		"tcf_label_non_cookie":         "Opslag zonder cookies",
+		"tcf_label_std_retention":      "Standaardbewaartermijn",
+		"tcf_label_purpose_storage":    "Doeleinde-specifieke opslag",
+		"tcf_label_device_storage":     "Details apparaatopslag",
+		"tcf_storage":                  "Uw keuzes worden {{days}} dagen bewaard in de cookie probo_consent.",
+	},
+}
+
+func mergeTCFTexts(lang string, texts map[string]string) {
+	extras := tcfUIStringsByLanguage[lang]
+	if extras == nil {
+		extras = tcfUIStringsByLanguage["en"]
+	}
+
+	for key, value := range extras {
+		if texts[key] == "" {
+			texts[key] = value
+		}
+	}
+}
+
+func init() {
+	for lang, ui := range defaultUIStringsByLanguage {
+		extras := tcfUIStringsByLanguage[lang]
+		if extras == nil {
+			extras = tcfUIStringsByLanguage["en"]
+		}
+
+		maps.Copy(ui, extras)
+	}
 }

@@ -2,7 +2,7 @@
   "name": "@probo/eslint-config",
   "version": "1.0.0",
   "private": true,
-  "description": "Shared ESLint configuration for Govrly monorepo",
+  "description": "Shared ESLint configuration for Probo monorepo",
   "main": "./src/index.ts",
   "type": "module",
   "exports": {
@@ -22,7 +22,7 @@
   "scripts": {},
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@probo/eslint-plugin-relay-types": "^1.0.0",
@@ -31,11 +31,11 @@
     "eslint-plugin-import-x": "^4.16.2",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react": "^7.37.5",
-    "eslint-plugin-relay": "^2.0.0",
-    "eslint": "^10.5.0",
-    "globals": "^17.6.0",
+    "eslint-plugin-relay": "^2.1.0",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
     "jiti": "^2.2.0",
-    "typescript-eslint": "^8.61.1",
-    "typescript": "~6.0.3"
+    "typescript-eslint": "^8.71.2",
+    "typescript": "6.0.3"
   }
 }

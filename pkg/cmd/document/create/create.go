@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package create
 
@@ -25,18 +31,12 @@ import (
 )
 
 const createMutation = `
-mutation($input: CreateDocumentInput!) {
+mutation DocumentCreate($input: CreateDocumentInput!) {
   createDocument(input: $input) {
     documentEdge {
       node {
         id
-      }
-    }
-    documentVersionEdge {
-      node {
         title
-        documentType
-        classification
       }
     }
   }
@@ -47,27 +47,20 @@ type createResponse struct {
 	CreateDocument struct {
 		DocumentEdge struct {
 			Node struct {
-				ID string `json:"id"`
+				ID    string `json:"id"`
+				Title string `json:"title"`
 			} `json:"node"`
 		} `json:"documentEdge"`
-		DocumentVersionEdge struct {
-			Node struct {
-				Title          string `json:"title"`
-				DocumentType   string `json:"documentType"`
-				Classification string `json:"classification"`
-			} `json:"node"`
-		} `json:"documentVersionEdge"`
 	} `json:"createDocument"`
 }
 
 func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 	var (
-		flagOrg                   string
-		flagTitle                 string
-		flagContent               string
-		flagDocumentType          string
-		flagClassification        string
-		flagTrustCenterVisibility string
+		flagOrg            string
+		flagTitle          string
+		flagContent        string
+		flagDocumentType   string
+		flagClassification string
 	)
 
 	cmd := &cobra.Command{
@@ -95,14 +88,12 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 				hc.Token,
 				"/api/console/v1/graphql",
 				cfg.HTTPTimeoutDuration(),
+				cmdutil.TokenRefreshOption(cfg, host, hc),
 			)
 
-			if flagOrg == "" {
-				flagOrg = hc.Organization
-			}
-
-			if flagOrg == "" {
-				return fmt.Errorf("organization is required; pass --org or set a default with 'prb auth login'")
+			flagOrg, err = cmdutil.ResolveOrganization(flagOrg, hc.Organization)
+			if err != nil {
+				return err
 			}
 
 			if f.IOStreams.IsInteractive() {
@@ -190,19 +181,12 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 			}
 
 			if flagContent != "" {
-				input["content"] = flagContent
-			}
-
-			if flagTrustCenterVisibility != "" {
-				if err := cmdutil.ValidateEnum(
-					"trust-center-visibility",
-					flagTrustCenterVisibility,
-					[]string{"NONE", "PRIVATE", "PUBLIC"},
-				); err != nil {
-					return err
+				content, err := cmdutil.CLIContent(flagContent)
+				if err != nil {
+					return fmt.Errorf("cannot read content: %w", err)
 				}
 
-				input["trustCenterVisibility"] = flagTrustCenterVisibility
+				input["content"] = content
 			}
 
 			data, err := client.Do(
@@ -219,24 +203,22 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 			}
 
 			doc := resp.CreateDocument.DocumentEdge.Node
-			ver := resp.CreateDocument.DocumentVersionEdge.Node
 			_, _ = fmt.Fprintf(
 				f.IOStreams.Out,
 				"Created document %s (%s)\n",
 				doc.ID,
-				ver.Title,
+				doc.Title,
 			)
 
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&flagOrg, "org", "", "Organization ID")
+	cmdutil.AddOrganizationFlag(cmd, &flagOrg, "Organization ID")
 	cmd.Flags().StringVar(&flagTitle, "title", "", "Document title")
-	cmd.Flags().StringVar(&flagContent, "content", "", "Document content")
+	cmd.Flags().StringVar(&flagContent, "content", "", "Document content as markdown or ProseMirror JSON. Images and links to /api/files/v1/{id} are kept")
 	cmd.Flags().StringVar(&flagDocumentType, "document-type", "", "Document type: OTHER, GOVERNANCE, POLICY, PROCEDURE, PLAN, REGISTER, RECORD, REPORT, TEMPLATE")
 	cmd.Flags().StringVar(&flagClassification, "classification", "", "Classification: PUBLIC, INTERNAL, CONFIDENTIAL, SECRET")
-	cmd.Flags().StringVar(&flagTrustCenterVisibility, "trust-center-visibility", "", "Trust center visibility: NONE, PRIVATE, PUBLIC")
 
 	return cmd
 }

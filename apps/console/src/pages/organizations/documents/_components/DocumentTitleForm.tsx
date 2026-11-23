@@ -1,64 +1,62 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
-import { Button, IconCheckmark1, IconCrossLargeX, IconPencil, Input, useToast } from "@probo/ui";
+import { Button, IconCheckmark1, IconCrossLargeX, IconPencil, Input } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { useState } from "react";
-import { useFragment, useMutation } from "react-relay";
+import { useTranslation } from "react-i18next";
+import { useMutation } from "react-relay";
 import { graphql } from "relay-runtime";
-import { z } from "zod";
 
-import type { DocumentTitleFormFragment$key } from "#/__generated__/core/DocumentTitleFormFragment.graphql";
 import type { DocumentTitleFormMutation } from "#/__generated__/core/DocumentTitleFormMutation.graphql";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
+import { z } from "#/lib/zod";
 
 const updateDocumentTitleMutation = graphql`
   mutation DocumentTitleFormMutation($input: UpdateDocumentInput!) {
     updateDocument(input: $input) {
-      documentVersion {
-        ...DocumentTitleFormFragment
+      document {
+        id
+        title
       }
     }
   }
 `;
 
-const fragment = graphql`
-  fragment DocumentTitleFormFragment on DocumentVersion {
-    title
-    status
-    canUpdate: permission(action: "core:document:update")
-  }
-`;
-
-const schema = z.object({
-  title: z.string().min(1, "Title is required").max(255),
-});
-
 export function DocumentTitleForm(props: {
-  fKey: DocumentTitleFormFragment$key;
+  title: string;
+  canUpdate: boolean;
   documentId: string;
   documentStatus: string;
   isEditable: boolean;
   onDocumentUpdated: () => void;
 }) {
-  const { fKey, documentId, documentStatus, isEditable, onDocumentUpdated } = props;
+  const { title, canUpdate, documentId, documentStatus, isEditable, onDocumentUpdated } = props;
 
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
+  const schema = z.object({
+    title: z.string().min(1, t("documentTitleForm.validation.titleRequired")).max(255),
+  });
 
-  const version = useFragment<DocumentTitleFormFragment$key>(fragment, fKey);
   const [updateDocument, isUpdating]
     = useMutation<DocumentTitleFormMutation>(updateDocumentTitleMutation);
 
@@ -67,13 +65,12 @@ export function DocumentTitleForm(props: {
     schema,
     {
       values: {
-        title: version.title,
+        title,
       },
     },
   );
 
-  const isDraft = version.status === "DRAFT";
-  const canEdit = version.canUpdate && isEditable && documentStatus !== "ARCHIVED";
+  const canEdit = canUpdate && isEditable && documentStatus !== "ARCHIVED";
 
   const handleUpdateTitle = (data: { title: string }) => {
     updateDocument({
@@ -83,19 +80,24 @@ export function DocumentTitleForm(props: {
           title: data.title,
         },
       },
-      onCompleted(data, errors) {
+      onCompleted(_, errors) {
         if (errors?.length) {
-          toast({ title: __("Error"), description: formatError(__("Failed to update document"), errors), variant: "error" });
+          toast.add({
+            title: t("documentTitleForm.errors.title"),
+            description: formatError(t("documentTitleForm.errors.update"), errors),
+            type: "error",
+          });
           return;
         }
         setIsEditingTitle(false);
-        const draftReturned = !!data.updateDocument.documentVersion;
-        if (isDraft !== draftReturned) {
-          onDocumentUpdated();
-        }
+        onDocumentUpdated();
       },
       onError(error) {
-        toast({ title: __("Error"), description: error.message, variant: "error" });
+        toast.add({
+          title: t("documentTitleForm.errors.title"),
+          description: error.message,
+          type: "error",
+        });
       },
     });
   };
@@ -111,7 +113,7 @@ export function DocumentTitleForm(props: {
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 setIsEditingTitle(false);
-                reset({ title: version.title });
+                reset({ title });
               }
               if (e.key === "Enter") {
                 void handleSubmit(handleUpdateTitle)();
@@ -129,14 +131,14 @@ export function DocumentTitleForm(props: {
             icon={IconCrossLargeX}
             onClick={() => {
               setIsEditingTitle(false);
-              reset({ title: version.title });
+              reset({ title });
             }}
           />
         </div>
       )
     : (
         <div className="flex items-center gap-2">
-          <span>{version.title}</span>
+          <span>{title}</span>
           {canEdit && (
             <Button
               variant="quaternary"

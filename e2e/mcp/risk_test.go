@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package mcp_test
 
@@ -32,15 +38,18 @@ func TestMCP_Risk_CRUD(t *testing.T) {
 	// Create
 	var addResult struct {
 		Risk struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+			ID          string `json:"id"`
+			ReferenceID string `json:"reference_id"`
+			Name        string `json:"name"`
 		} `json:"risk"`
 	}
 	mc.CallToolInto("addRisk", map[string]any{
-		"organizationId": orgID,
-		"name":           factory.SafeName("Risk"),
+		"organization_id": orgID,
+		"name":            factory.SafeName("Risk"),
+		"category":        "SECURITY",
 	}, &addResult)
 	require.NotEmpty(t, addResult.Risk.ID)
+	assert.Regexp(t, `^RSK-\d{3,}$`, addResult.Risk.ReferenceID)
 
 	// Get
 	var getResult struct {
@@ -74,13 +83,13 @@ func TestMCP_Risk_CRUD(t *testing.T) {
 		} `json:"risks"`
 	}
 	mc.CallToolInto("listRisks", map[string]any{
-		"organizationId": orgID,
+		"organization_id": orgID,
 	}, &listResult)
 	assert.NotEmpty(t, listResult.Risks)
 
 	// Delete
 	var deleteResult struct {
-		DeletedRiskID string `json:"deletedRiskId"`
+		DeletedRiskID string `json:"deleted_risk_id"`
 	}
 	mc.CallToolInto("deleteRisk", map[string]any{
 		"id": addResult.Risk.ID,
@@ -102,8 +111,130 @@ func TestMCP_Risk_PermissionDenied(t *testing.T) {
 	viewerMC := testutil.NewMCPClient(t, viewer)
 
 	msg := viewerMC.CallToolExpectToolError("addRisk", map[string]any{
-		"organizationId": orgID,
-		"name":           factory.SafeName("Risk"),
+		"organization_id": orgID,
+		"name":            factory.SafeName("Risk"),
+		"category":        "SECURITY",
 	})
 	assert.Contains(t, msg, "permission denied")
+}
+
+func TestMCP_Risk_ListInternalControls(t *testing.T) {
+	t.Parallel()
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	mc := testutil.NewMCPClient(t, owner)
+	orgID := owner.GetOrganizationID().String()
+
+	var riskResult struct {
+		Risk struct {
+			ID string `json:"id"`
+		} `json:"risk"`
+	}
+	mc.CallToolInto("addRisk", map[string]any{
+		"organization_id": orgID,
+		"name":            factory.SafeName("Risk"),
+		"category":        "SECURITY",
+	}, &riskResult)
+	require.NotEmpty(t, riskResult.Risk.ID)
+
+	var internalControlResult struct {
+		InternalControl struct {
+			ID string `json:"id"`
+		} `json:"internal_control"`
+	}
+	mc.CallToolInto("addInternalControl", map[string]any{
+		"organization_id": orgID,
+		"name":            factory.SafeName("Internal control"),
+		"category":        "POLICY",
+	}, &internalControlResult)
+	require.NotEmpty(t, internalControlResult.InternalControl.ID)
+
+	var emptyList struct {
+		InternalControls []struct {
+			ID string `json:"id"`
+		} `json:"internal_controls"`
+	}
+	mc.CallToolInto("listRiskInternalControls", map[string]any{
+		"risk_id": riskResult.Risk.ID,
+	}, &emptyList)
+	assert.Empty(t, emptyList.InternalControls)
+
+	mc.CallToolInto("linkInternalControl", map[string]any{
+		"internal_control_id": internalControlResult.InternalControl.ID,
+		"resource_id":         riskResult.Risk.ID,
+	}, &struct{}{})
+
+	var linkedList struct {
+		InternalControls []struct {
+			ID string `json:"id"`
+		} `json:"internal_controls"`
+	}
+	mc.CallToolInto("listRiskInternalControls", map[string]any{
+		"risk_id": riskResult.Risk.ID,
+	}, &linkedList)
+	require.Len(t, linkedList.InternalControls, 1)
+	assert.Equal(t, internalControlResult.InternalControl.ID, linkedList.InternalControls[0].ID)
+
+	msg := mc.CallToolExpectToolError("deleteRisk", map[string]any{
+		"id": riskResult.Risk.ID,
+	})
+	assert.Equal(t, "resource is in use", msg)
+
+	mc.CallToolInto("unlinkInternalControl", map[string]any{
+		"internal_control_id": internalControlResult.InternalControl.ID,
+		"resource_id":         riskResult.Risk.ID,
+	}, &struct{}{})
+
+	var deleteResult struct {
+		DeletedRiskID string `json:"deleted_risk_id"`
+	}
+	mc.CallToolInto("deleteRisk", map[string]any{
+		"id": riskResult.Risk.ID,
+	}, &deleteResult)
+	assert.Equal(t, riskResult.Risk.ID, deleteResult.DeletedRiskID)
+}
+
+func TestMCP_Risk_ListScenarioRisks(t *testing.T) {
+	t.Parallel()
+	owner := testutil.NewClient(t, testutil.RoleOwner)
+	mc := testutil.NewMCPClient(t, owner)
+	orgID := owner.GetOrganizationID().String()
+
+	plannedRiskID := factory.CreateRisk(owner)
+	unplannedRiskID := factory.CreateRisk(owner, factory.Attrs{"name": "FilterableScenarioRiskAlpha"})
+	otherUnplannedID := factory.CreateRisk(owner, factory.Attrs{"name": "UnrelatedScenarioRiskBeta"})
+	analysisID := factory.CreateRiskAnalysis(owner)
+	factory.LinkRiskToAnalysis(owner, plannedRiskID, analysisID)
+	factory.LinkRiskToAnalysis(owner, unplannedRiskID, analysisID)
+	factory.LinkRiskToAnalysis(owner, otherUnplannedID, analysisID)
+	factory.CreateTreatmentPlan(owner, plannedRiskID, analysisID)
+
+	var listResult struct {
+		Risks []struct {
+			ID string `json:"id"`
+		} `json:"risks"`
+	}
+	mc.CallToolInto("listRisks", map[string]any{
+		"organization_id":  orgID,
+		"risk_analysis_id": analysisID,
+	}, &listResult)
+	require.Len(t, listResult.Risks, 2)
+	ids := []string{listResult.Risks[0].ID, listResult.Risks[1].ID}
+	assert.Contains(t, ids, unplannedRiskID)
+	assert.Contains(t, ids, otherUnplannedID)
+	assert.NotContains(t, ids, plannedRiskID)
+
+	var filtered struct {
+		Risks []struct {
+			ID string `json:"id"`
+		} `json:"risks"`
+	}
+	mc.CallToolInto("listRisks", map[string]any{
+		"organization_id":  orgID,
+		"risk_analysis_id": analysisID,
+		"filter": map[string]any{
+			"query": "FilterableScenarioRiskAlpha",
+		},
+	}, &filtered)
+	require.Len(t, filtered.Risks, 1)
+	assert.Equal(t, unplannedRiskID, filtered.Risks[0].ID)
 }

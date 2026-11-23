@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package uri
 
@@ -102,6 +108,32 @@ func TestParse(t *testing.T) {
 
 				require.NoError(t, err)
 				assert.Equal(t, tt.want, got)
+			},
+		)
+	}
+}
+
+func TestURIIsHTTP(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		uri  URI
+		want bool
+	}{
+		{name: "https", uri: URI("https://example.com"), want: true},
+		{name: "http", uri: URI("http://localhost:3000"), want: true},
+		{name: "custom scheme", uri: URI("myapp://callback"), want: false},
+		{name: "javascript scheme", uri: URI("javascript://example.com/%0Aalert(1)"), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(
+			tt.name,
+			func(t *testing.T) {
+				t.Parallel()
+
+				assert.Equal(t, tt.want, tt.uri.IsHTTP())
 			},
 		)
 	}
@@ -447,4 +479,68 @@ func TestFilterSharedInfrastructureDomains(t *testing.T) {
 			assert.Equal(t, tt.want, FilterSharedInfrastructureDomains(tt.domains))
 		})
 	}
+}
+
+func TestRegistrableDomain(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		host string
+		want string
+	}{
+		{name: "strips a subdomain", host: "www.example.co.uk", want: "example.co.uk"},
+		{name: "keeps a platform customer apart", host: "foo.vercel.app", want: "foo.vercel.app"},
+		{name: "another platform customer", host: "bar.vercel.app", want: "bar.vercel.app"},
+		{name: "localhost has no public suffix", host: "localhost", want: "localhost"},
+		{name: "ipv4", host: "127.0.0.1", want: "127.0.0.1"},
+		{name: "ipv6", host: "::1", want: "::1"},
+		{name: "lowercases and drops a trailing dot", host: "WWW.Example.COM.", want: "example.com"},
+		{name: "empty", host: "  ", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, RegistrableDomain(tt.host))
+		})
+	}
+
+	assert.NotEqual(t, RegistrableDomain("foo.vercel.app"), RegistrableDomain("bar.vercel.app"))
+}
+
+func TestICANNRegistrableDomain(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		host string
+		want string
+	}{
+		{name: "strips a subdomain of a multi-label suffix", host: "www.shop.example.co.uk", want: "example.co.uk"},
+		{name: "single-label suffix uses the last two labels", host: "www.example.com", want: "example.com"},
+		{name: "platform suffix is the last two labels", host: "foo.vercel.app", want: "vercel.app"},
+		{name: "another host on the same platform suffix", host: "bar.vercel.app", want: "vercel.app"},
+		{name: "private suffix under an ICANN suffix", host: "foo.dh.bytemark.co.uk", want: "bytemark.co.uk"},
+		{name: "nested private suffix uses the registry label", host: "www.s3.dualstack.us-east-1.amazonaws.com", want: "amazonaws.com"},
+		{name: "wildcard suffix", host: "a.b.test.ck", want: "b.test.ck"},
+		{name: "exception to a wildcard", host: "www.ck", want: "www.ck"},
+		{name: "subdomain of an exception", host: "www.www.ck", want: "www.ck"},
+		{name: "localhost has no public suffix", host: "localhost", want: "localhost"},
+		{name: "ipv4", host: "127.0.0.1", want: "127.0.0.1"},
+		{name: "ipv6", host: "::1", want: "::1"},
+		{name: "lowercases and drops a trailing dot", host: "WWW.Example.COM.", want: "example.com"},
+		{name: "empty", host: "  ", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, ICANNRegistrableDomain(tt.host))
+		})
+	}
+
+	assert.Equal(t, ICANNRegistrableDomain("foo.vercel.app"), ICANNRegistrableDomain("bar.vercel.app"))
 }

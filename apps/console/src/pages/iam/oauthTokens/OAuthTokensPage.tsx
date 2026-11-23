@@ -1,19 +1,24 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   Card,
@@ -26,6 +31,7 @@ import {
   Thead,
   Tr,
 } from "@probo/ui";
+import { useTranslation } from "react-i18next";
 import {
   graphql,
   type PreloadedQuery,
@@ -81,9 +87,9 @@ export function OAuthTokensPage(props: {
   queryRef: PreloadedQuery<OAuthTokensPageQuery>;
 }) {
   const { queryRef } = props;
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
-  usePageTitle(__("OAuth tokens"));
+  usePageTitle(t("oauthTokensPage.pageTitle"));
 
   const { viewer } = usePreloadedQuery<OAuthTokensPageQuery>(
     oauthTokensPageQuery,
@@ -98,17 +104,15 @@ export function OAuthTokensPage(props: {
   const totalCount = data.oauth2AccessTokens.totalCount;
 
   return (
-    <div className="space-y-6 w-full py-6">
+    <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-8 py-8">
       <PageHeader
-        title={__("OAuth tokens")}
-        description={__(
-          "Create bearer tokens with scoped API access for your account.",
-        )}
+        title={t("oauthTokensPage.title")}
+        description={t("oauthTokensPage.description")}
       >
         {viewer.canCreateOAuth2AccessToken && (
           <Button asChild>
             <Link to="/me/oauth-tokens/new">
-              {__("Create token")}
+              {t("oauthTokensPage.actions.create")}
             </Link>
           </Button>
         )}
@@ -119,12 +123,10 @@ export function OAuthTokensPage(props: {
             <Card padded>
               <div className="text-center py-12">
                 <h3 className="text-lg font-medium text-gray-900 mb-2">
-                  {__("No OAuth tokens")}
+                  {t("oauthTokensPage.empty.title")}
                 </h3>
                 <p className="text-gray-600">
-                  {__(
-                    "Create a token to authenticate API requests on your behalf.",
-                  )}
+                  {t("oauthTokensPage.empty.description")}
                 </p>
               </div>
             </Card>
@@ -133,16 +135,16 @@ export function OAuthTokensPage(props: {
             <Card padded className="space-y-4">
               {totalCount > tokens.length && (
                 <p className="text-sm text-txt-tertiary">
-                  {`${__("Showing")} ${tokens.length} ${__("of")} ${totalCount}`}
+                  {t("oauthTokensPage.showing", { shown: tokens.length, total: totalCount })}
                 </p>
               )}
               <Table>
                 <Thead>
                   <Tr>
-                    <Th>{__("Name")}</Th>
-                    <Th>{__("Scopes")}</Th>
-                    <Th>{__("Created")}</Th>
-                    <Th>{__("Expires")}</Th>
+                    <Th>{t("oauthTokensPage.columns.name")}</Th>
+                    <Th>{t("oauthTokensPage.columns.scopes")}</Th>
+                    <Th>{t("oauthTokensPage.columns.created")}</Th>
+                    <Th>{t("oauthTokensPage.columns.expires")}</Th>
                     <Th className="w-0" />
                   </Tr>
                 </Thead>
@@ -164,11 +166,11 @@ export function OAuthTokensPage(props: {
                   disabled={isLoadingNext}
                   icon={isLoadingNext ? Spinner : IconChevronDown}
                 >
-                  {__("Show more")}
+                  {t("oauthTokensPage.actions.showMore")}
                 </Button>
               )}
             </Card>
           )}
-    </div>
+    </main>
   );
 }

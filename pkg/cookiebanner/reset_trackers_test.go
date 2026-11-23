@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package cookiebanner
 
@@ -41,14 +47,12 @@ func TestResetBannerTrackers_FullRebuild(t *testing.T) {
 	ctx := context.Background()
 	fx := seedWorkerFixture(t, ctx, client)
 
-	thirdPartyID := seedThirdParty(t, ctx, client, fx, "Reset Vendor")
 	commonPatternID := seedCommonTrackerPattern(t, ctx, client, "ga_linked")
 
 	glob := newGlobInCategory(fx, "_ga_*", fx.uncategorisedID, coredata.CookieSourceScript, nil)
 
 	linkedExact := newExactPattern(fx, "linked_cookie", fx.uncategorisedID, coredata.CookieSourcePreExisting, nil)
 	linkedExact.CommonTrackerPatternID = &commonPatternID
-	linkedExact.ThirdPartyID = &thirdPartyID
 	linkedExact.Description = "stale description"
 
 	categorised := newExactPattern(fx, "categorised_cookie", fx.normalCategoryID, coredata.CookieSourceScript, nil)
@@ -71,9 +75,9 @@ func TestResetBannerTrackers_FullRebuild(t *testing.T) {
 				CookieBannerID:   fx.banner.ID,
 				TrackerPatternID: &glob.ID,
 				TrackerType:      coredata.TrackerTypeCookie,
+				ObservedBy:       coredata.DetectedTrackerObserverSDK,
 				Identifier:       identifier,
 				Source:           new(coredata.CookieSourceScript),
-				LastDetectedAt:   now,
 				CreatedAt:        now,
 				UpdatedAt:        now,
 			}
@@ -111,13 +115,12 @@ func TestResetBannerTrackers_FullRebuild(t *testing.T) {
 			require.Equal(t, coredata.TrackerPatternMatchTypeExact, exact.MatchType)
 			require.Equal(t, fx.uncategorisedID, exact.CookieCategoryID)
 			require.Nil(t, exact.CommonTrackerPatternID)
-			require.Nil(t, exact.ThirdPartyID)
 			require.NotNil(t, exact.MappingRequestedAt)
 
 			detections, err := page.LoadAll(
 				ctx,
 				page.OrderBy[coredata.DetectedTrackerOrderField]{
-					Field:     coredata.DetectedTrackerOrderFieldLastDetectedAt,
+					Field:     coredata.DetectedTrackerOrderFieldCreatedAt,
 					Direction: page.OrderDirectionAsc,
 				},
 				func(ctx context.Context, cursor *page.Cursor[coredata.DetectedTrackerOrderField]) ([]*coredata.DetectedTracker, error) {
@@ -139,7 +142,6 @@ func TestResetBannerTrackers_FullRebuild(t *testing.T) {
 		var survivor coredata.TrackerPattern
 		require.NoError(t, survivor.LoadByBannerIDTypeAndPattern(ctx, conn, fx.scope, fx.banner.ID, coredata.TrackerTypeCookie, "linked_cookie", nil))
 		require.Nil(t, survivor.CommonTrackerPatternID)
-		require.Nil(t, survivor.ThirdPartyID)
 		require.Empty(t, survivor.Description)
 		require.NotNil(t, survivor.MappingRequestedAt)
 

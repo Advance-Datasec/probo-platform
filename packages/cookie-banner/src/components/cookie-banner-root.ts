@@ -1,21 +1,34 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
+import { getTCFRuntime } from "../addons";
 import { CookieBannerClient } from "../client";
-import type { BannerConfig, Regulation } from "../types";
+import { resolveGcmEnabled } from "../integrations";
+import { resolveLayout } from "../layout";
+import type { BannerConfig, BannerLayout, Regulation } from "../types";
 import { ProboElement } from "./base";
 import type { ProboState, ProboRootElement, ConsentDraft } from "./base";
+
+function uiVisible(state: ProboState): boolean {
+  return state === "banner" || state === "panel" || state === "privacy_choices";
+}
 
 export class ProboCookieBannerRoot extends ProboElement implements ProboRootElement {
   private _client: CookieBannerClient | null = null;
@@ -24,7 +37,7 @@ export class ProboCookieBannerRoot extends ProboElement implements ProboRootElem
   private _draft: ConsentDraft = {};
 
   static get observedAttributes(): string[] {
-    return ["banner-id", "base-url", "reopen-widget", "lang"];
+    return ["banner-id", "base-url", "lang"];
   }
 
   get client(): CookieBannerClient {
@@ -39,10 +52,6 @@ export class ProboCookieBannerRoot extends ProboElement implements ProboRootElem
       throw new Error("<probo-cookie-banner-root> not loaded yet");
     }
     return this._config;
-  }
-
-  get reopenWidget(): string {
-    return this.getAttribute("reopen-widget") ?? "floating";
   }
 
   get state(): ProboState {
@@ -67,20 +76,12 @@ export class ProboCookieBannerRoot extends ProboElement implements ProboRootElem
     return null;
   }
 
-  get reopenState(): ProboState {
-    return this.consentMode === "OPT_OUT" ? "banner" : "panel";
+  get layout(): BannerLayout | null {
+    return this._config ? resolveLayout(this._config) : null;
   }
 
-  attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
-    if (name === "reopen-widget" && oldValue !== newValue) {
-      this.dispatchEvent(
-        new CustomEvent("probo-reopen-widget", {
-          bubbles: true,
-          composed: true,
-          detail: { value: newValue ?? "floating" },
-        }),
-      );
-    }
+  get reopenState(): ProboState {
+    return this.layout?.reopen_state ?? "panel";
   }
 
   connectedCallback(): void {
@@ -103,6 +104,7 @@ export class ProboCookieBannerRoot extends ProboElement implements ProboRootElem
   setState(state: ProboState): void {
     const prev = this._state;
     this._state = state;
+    getTCFRuntime()?.onUIVisible?.(uiVisible(state));
     this.dispatchEvent(
       new CustomEvent("probo-state", {
         bubbles: true,
@@ -124,6 +126,7 @@ export class ProboCookieBannerRoot extends ProboElement implements ProboRootElem
   private buildDraft(config: BannerConfig): ConsentDraft {
     const draft: ConsentDraft = {};
     const existing = this._client?.visitorConsent?.consent_data;
+    const defaultGranted = resolveLayout(config).default_non_necessary_granted;
 
     for (const cat of config.categories) {
       if (cat.kind === "NECESSARY") {
@@ -131,7 +134,7 @@ export class ProboCookieBannerRoot extends ProboElement implements ProboRootElem
       } else if (existing && (cat.slug in existing || cat.name in existing)) {
         draft[cat.slug] = existing[cat.slug] ?? existing[cat.name];
       } else {
-        draft[cat.slug] = config.consent_mode === "OPT_OUT";
+        draft[cat.slug] = defaultGranted;
       }
     }
 
@@ -148,8 +151,14 @@ export class ProboCookieBannerRoot extends ProboElement implements ProboRootElem
     }
 
     const lang = this.getAttribute("lang") ?? undefined;
+    const gcmEnabled = resolveGcmEnabled(this.getAttribute("gcm-enabled"));
 
-    this._client = new CookieBannerClient({ bannerId, baseUrl, lang });
+    this._client = new CookieBannerClient({
+      bannerId,
+      baseUrl,
+      lang,
+      integrations: [{ name: "gcm", enabled: gcmEnabled }],
+    });
 
     try {
       await this._client.load();
@@ -174,10 +183,21 @@ export class ProboCookieBannerRoot extends ProboElement implements ProboRootElem
       }),
     );
 
+    this.scheduleValidation(() => this.validateSettingsLink());
+
     if (this._client.hasConsent) {
       this.setState("hidden");
     } else {
-      this.setState("banner");
+      this.setState(resolveLayout(this._config).initial_state);
+    }
+  }
+
+  private validateSettingsLink(): void {
+    if (!document.querySelector("probo-settings-link")) {
+      this.warn(
+        "<probo-settings-link> is required in the header or footer to reopen cookie preferences",
+      );
+      this.emitValidation(["probo-settings-link"]);
     }
   }
 }

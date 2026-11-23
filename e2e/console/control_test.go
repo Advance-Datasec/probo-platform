@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package console_test
 
@@ -752,11 +758,11 @@ func TestControl_SubResolvers(t *testing.T) {
 
 	controlID := controlResult.CreateControl.ControlEdge.Node.ID
 
-	// Create a measure and link it
-	createMeasureQuery := `
-		mutation CreateMeasure($input: CreateMeasureInput!) {
-			createMeasure(input: $input) {
-				measureEdge {
+	// Create an internal control and link it
+	createInternalControlQuery := `
+		mutation CreateInternalControl($input: CreateInternalControlInput!) {
+			createInternalControl(input: $input) {
+				internalControlEdge {
 					node {
 						id
 					}
@@ -765,31 +771,31 @@ func TestControl_SubResolvers(t *testing.T) {
 		}
 	`
 
-	var measureResult struct {
-		CreateMeasure struct {
-			MeasureEdge struct {
+	var internalControlResult struct {
+		CreateInternalControl struct {
+			InternalControlEdge struct {
 				Node struct {
 					ID string `json:"id"`
 				} `json:"node"`
-			} `json:"measureEdge"`
-		} `json:"createMeasure"`
+			} `json:"internalControlEdge"`
+		} `json:"createInternalControl"`
 	}
 
-	err = owner.Execute(createMeasureQuery, map[string]any{
+	err = owner.Execute(createInternalControlQuery, map[string]any{
 		"input": map[string]any{
 			"organizationId": owner.GetOrganizationID().String(),
-			"name":           "Test Measure for Control",
+			"name":           "Test Internal control for Control",
 			"category":       "POLICY",
 		},
-	}, &measureResult)
+	}, &internalControlResult)
 	require.NoError(t, err)
 
-	measureID := measureResult.CreateMeasure.MeasureEdge.Node.ID
+	internalControlID := internalControlResult.CreateInternalControl.InternalControlEdge.Node.ID
 
 	// Create mapping
 	createMappingQuery := `
-		mutation CreateControlMeasureMapping($input: CreateControlMeasureMappingInput!) {
-			createControlMeasureMapping(input: $input) {
+		mutation CreateControlInternalControlMapping($input: CreateControlInternalControlMappingInput!) {
+			createControlInternalControlMapping(input: $input) {
 				controlEdge {
 					node {
 						id
@@ -800,19 +806,19 @@ func TestControl_SubResolvers(t *testing.T) {
 	`
 
 	var mappingResult struct {
-		CreateControlMeasureMapping struct {
+		CreateControlInternalControlMapping struct {
 			ControlEdge struct {
 				Node struct {
 					ID string `json:"id"`
 				} `json:"node"`
 			} `json:"controlEdge"`
-		} `json:"createControlMeasureMapping"`
+		} `json:"createControlInternalControlMapping"`
 	}
 
 	err = owner.Execute(createMappingQuery, map[string]any{
 		"input": map[string]any{
-			"controlId": controlID,
-			"measureId": measureID,
+			"controlId":         controlID,
+			"internalControlId": internalControlID,
 		},
 	}, &mappingResult)
 	require.NoError(t, err)
@@ -849,13 +855,13 @@ func TestControl_SubResolvers(t *testing.T) {
 		assert.Equal(t, frameworkID, result.Node.Framework.ID)
 	})
 
-	t.Run("Control measures sub-resolver", func(t *testing.T) {
+	t.Run("Control internal controls sub-resolver", func(t *testing.T) {
 		query := `
-			query GetControlMeasures($id: ID!) {
+			query GetControlInternalControls($id: ID!) {
 				node(id: $id) {
 					... on Control {
 						id
-						measures(first: 10) {
+						internalControls(first: 10) {
 							edges {
 								node {
 									id
@@ -870,15 +876,15 @@ func TestControl_SubResolvers(t *testing.T) {
 
 		var result struct {
 			Node struct {
-				ID       string `json:"id"`
-				Measures struct {
+				ID               string `json:"id"`
+				InternalControls struct {
 					Edges []struct {
 						Node struct {
 							ID   string `json:"id"`
 							Name string `json:"name"`
 						} `json:"node"`
 					} `json:"edges"`
-				} `json:"measures"`
+				} `json:"internalControls"`
 			} `json:"node"`
 		}
 
@@ -886,6 +892,6 @@ func TestControl_SubResolvers(t *testing.T) {
 			"id": controlID,
 		}, &result)
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, len(result.Node.Measures.Edges), 1)
+		assert.GreaterOrEqual(t, len(result.Node.InternalControls.Edges), 1)
 	})
 }

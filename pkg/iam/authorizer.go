@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package iam
 
@@ -22,9 +28,11 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.gearno.de/kit/log"
 	"go.gearno.de/kit/pg"
+	"go.gearno.de/x/ref"
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/gid"
 	"go.probo.inc/probo/pkg/iam/oauth2"
@@ -51,6 +59,7 @@ type AuthorizeParams struct {
 	ResourceAttributes  policy.Attributes
 	DryRun              bool
 	SkipAssumptionCheck bool
+	Request             RequestMetadata
 }
 
 // AuthorizeBatchParams contains the parameters for a batch authorization request.
@@ -62,6 +71,7 @@ type AuthorizeBatchParams struct {
 	ResourceAttributes  policy.Attributes
 	DryRun              bool
 	SkipAssumptionCheck bool
+	Request             RequestMetadata
 }
 
 // MultiAuthorizeItem contains one authorization request in a multi-authorization batch.
@@ -80,6 +90,7 @@ type AuthorizeMultiParams struct {
 	Principal gid.GID
 	Session   *gid.GID
 	Items     []MultiAuthorizeItem
+	Request   RequestMetadata
 }
 
 // Authorizer evaluates authorization requests against registered policies.
@@ -141,6 +152,7 @@ func (a *Authorizer) Authorize(ctx context.Context, params AuthorizeParams) (*co
 			ResourceAttributes:  params.ResourceAttributes,
 			DryRun:              params.DryRun,
 			SkipAssumptionCheck: params.SkipAssumptionCheck,
+			Request:             params.Request,
 		},
 	)
 }
@@ -195,6 +207,7 @@ func (a *Authorizer) AuthorizeBatch(ctx context.Context, params AuthorizeBatchPa
 					Principal: params.Principal,
 					Session:   params.Session,
 					Items:     items,
+					Request:   params.Request,
 				},
 				params.ResourceAttributes,
 			)
@@ -217,9 +230,9 @@ func (a *Authorizer) AuthorizeBatch(ctx context.Context, params AuthorizeBatchPa
 // per item: a nil entry means allowed, a non-nil entry carries the iam
 // error explaining the denial (typically *ErrInsufficientPermissions).
 //
-// Audit log entries for allowed, non-dry-run items are written in a single
-// bulk insert. Use AuthorizeBatch instead when callers want all-or-nothing
-// semantics for a homogeneous batch.
+// Audit log entries for non-dry-run items are written in a single bulk
+// insert, including denials. Use AuthorizeBatch instead when callers want
+// all-or-nothing semantics for a homogeneous batch.
 func (a *Authorizer) AuthorizeMulti(
 	ctx context.Context,
 	params AuthorizeMultiParams,
@@ -245,39 +258,8 @@ func (a *Authorizer) AuthorizeMulti(
 				return err
 			}
 
-			entries := make(coredata.AuditLogEntries, 0, len(params.Items))
-			for i, item := range params.Items {
-				if d[i] != nil {
-					continue
-				}
-
-				entry := a.buildAuditLogEntry(
-					ctx,
-					AuthorizeParams{
-						Principal: params.Principal,
-						Resource:  item.Resource,
-						Session:   params.Session,
-						Action:    item.Action,
-						DryRun:    item.DryRun,
-					},
-					itemAttrs[i],
-				)
-				if entry == nil {
-					continue
-				}
-
-				entries = append(entries, entry)
-			}
-
-			if len(entries) > 0 {
-				if err := entries.BulkInsert(ctx, tx, s); err != nil {
-					a.logger.ErrorCtx(
-						ctx,
-						"cannot bulk insert audit log entries",
-						log.Error(err),
-						log.String("action", params.Items[0].Action),
-					)
-				}
+			if err := a.insertAuditEntries(ctx, tx, s, params, itemAttrs, d, false); err != nil {
+				return err
 			}
 
 			scope = s
@@ -308,41 +290,22 @@ func (a *Authorizer) authorizeMulti(
 		return nil, err
 	}
 
+	var denial error
+
 	for _, decision := range decisions {
 		if decision != nil {
-			return nil, decision
+			denial = decision
+			break
 		}
 	}
 
-	entries := make(coredata.AuditLogEntries, 0, len(params.Items))
-	for i, item := range params.Items {
-		entry := a.buildAuditLogEntry(
-			ctx,
-			AuthorizeParams{
-				Principal: params.Principal,
-				Resource:  item.Resource,
-				Session:   params.Session,
-				Action:    item.Action,
-				DryRun:    item.DryRun,
-			},
-			itemAttrs[i],
-		)
-		if entry == nil {
-			continue
-		}
-
-		entries = append(entries, entry)
+	if err := a.insertAuditEntries(ctx, tx, scope, params, itemAttrs, decisions, denial != nil); err != nil {
+		return nil, err
 	}
 
-	if len(entries) > 0 {
-		if err := entries.BulkInsert(ctx, tx, scope); err != nil {
-			a.logger.ErrorCtx(
-				ctx,
-				"cannot bulk insert audit log entries",
-				log.Error(err),
-				log.String("action", params.Items[0].Action),
-			)
-		}
+	if denial != nil {
+		// Commit the denial rows and still return the authorization error.
+		return nil, pg.NoRollback(denial)
 	}
 
 	return scope, nil
@@ -437,11 +400,30 @@ func (a *Authorizer) evaluateMultiInTx(
 		role = membership.Role.String()
 	}
 
+	policies := a.buildPoliciesForRole(role)
+
 	var scopedPrincipalAttrs policy.Attributes
 	if membership != nil && role != "" {
 		scopedPrincipalAttrs = policy.Attributes{
 			"organization_id": membership.OrganizationID.String(),
 			"role":            membership.Role.String(),
+		}
+
+		if policiesReferenceProfileID(policies, params) {
+			profile := &coredata.MembershipProfile{}
+			if err := profile.LoadByIdentityIDAndOrganizationID(
+				ctx,
+				tx,
+				coredata.NewScopeFromObjectID(membership.OrganizationID),
+				params.Principal,
+				membership.OrganizationID,
+			); err != nil {
+				if !errors.Is(err, coredata.ErrResourceNotFound) {
+					return nil, nil, nil, fmt.Errorf("cannot load membership profile: %w", err)
+				}
+			} else {
+				scopedPrincipalAttrs["profile_id"] = profile.ID.String()
+			}
 		}
 	}
 
@@ -453,8 +435,6 @@ func (a *Authorizer) evaluateMultiInTx(
 	if params.Session != nil {
 		principalAttrs["session_id"] = params.Session.String()
 	}
-
-	policies := a.buildPoliciesForRole(role)
 
 	decisions := make([]error, len(params.Items))
 	itemAttrs := make([]policy.Attributes, len(params.Items))
@@ -531,11 +511,11 @@ func (a *Authorizer) evaluateMultiInTx(
 		}
 	}
 
-	scope := coredata.NewScopeFromObjectID(uniqueResourceIDs[0])
+	scope := coredata.NewScope(uniqueResourceIDs[0].TenantID(), params.Principal)
 
 	if resourceOrgID != "" {
 		orgID, _ := gid.ParseGID(resourceOrgID)
-		scope = coredata.NewScope(orgID.TenantID())
+		scope = coredata.NewScope(orgID.TenantID(), params.Principal)
 	}
 
 	return scope, itemAttrs, decisions, nil
@@ -741,6 +721,42 @@ func (a *Authorizer) buildPrincipalAttributes(
 	return attrs, nil
 }
 
+func policiesReferenceProfileID(policies []*policy.Policy, params AuthorizeMultiParams) bool {
+	matcher := policy.ActionMatcher{}
+
+	for _, item := range policies {
+		for _, statement := range item.Statements {
+			applies := false
+
+			for _, request := range params.Items {
+				for _, pattern := range statement.Actions {
+					if matcher.Matches(pattern, request.Action) {
+						applies = true
+					}
+				}
+			}
+
+			if !applies {
+				continue
+			}
+
+			for _, condition := range statement.Conditions {
+				if strings.Contains(condition.Key, "profile_id") {
+					return true
+				}
+
+				for _, value := range condition.Values {
+					if strings.Contains(value, "profile_id") {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	return false
+}
+
 func (a *Authorizer) buildPoliciesForRole(role string) []*policy.Policy {
 	policies := append([]*policy.Policy{}, a.policySet.IdentityScopedPolicies...)
 
@@ -805,12 +821,108 @@ func resourceTypeFromAction(action string) string {
 	return strings.Join(segments, "")
 }
 
+type auditActor struct {
+	email string
+	name  string
+}
+
+func (a *Authorizer) insertAuditEntries(
+	ctx context.Context,
+	tx pg.Tx,
+	scope *coredata.Scope,
+	params AuthorizeMultiParams,
+	itemAttrs []policy.Attributes,
+	decisions []error,
+	denialsOnly bool,
+) error {
+	indexes := make([]int, 0, len(params.Items))
+
+	for i, item := range params.Items {
+		if denialsOnly && decisions[i] == nil {
+			continue
+		}
+
+		if item.DryRun {
+			continue
+		}
+
+		indexes = append(indexes, i)
+	}
+
+	if len(indexes) == 0 {
+		return nil
+	}
+
+	actor, err := a.loadAuditActor(ctx, tx, params.Principal)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	entries := make(coredata.AuditLogEntries, 0, len(indexes))
+
+	for _, i := range indexes {
+		item := params.Items[i]
+
+		entry := a.buildAuditLogEntry(
+			ctx,
+			AuthorizeParams{
+				Principal: params.Principal,
+				Resource:  item.Resource,
+				Session:   params.Session,
+				Action:    item.Action,
+				DryRun:    item.DryRun,
+			},
+			itemAttrs[i],
+			decisions[i],
+			actor,
+			params.Request,
+			now,
+		)
+		if entry == nil {
+			continue
+		}
+
+		entries = append(entries, entry)
+	}
+
+	if len(entries) == 0 {
+		return nil
+	}
+
+	if err := entries.BulkInsert(ctx, tx, scope); err != nil {
+		return fmt.Errorf("cannot bulk insert audit log entries: %w", err)
+	}
+
+	return nil
+}
+
+func (a *Authorizer) loadAuditActor(
+	ctx context.Context,
+	conn pg.Querier,
+	principalID gid.GID,
+) (auditActor, error) {
+	identity := &coredata.Identity{}
+	if err := identity.LoadByID(ctx, conn, principalID); err != nil {
+		return auditActor{}, fmt.Errorf("cannot load audit log actor: %w", err)
+	}
+
+	return auditActor{
+		email: identity.EmailAddress.String(),
+		name:  identity.FullName,
+	}, nil
+}
+
 // buildAuditLogEntry returns nil when no entry should be recorded
 // (dry run or missing/invalid organization id).
 func (a *Authorizer) buildAuditLogEntry(
 	ctx context.Context,
 	params AuthorizeParams,
 	resourceAttrs policy.Attributes,
+	decision error,
+	actor auditActor,
+	request RequestMetadata,
+	now time.Time,
 ) *coredata.AuditLogEntry {
 	if params.DryRun {
 		return nil
@@ -839,19 +951,45 @@ func (a *Authorizer) buildAuditLogEntry(
 		actorType = coredata.AuditLogActorTypeAPIKey
 	}
 
-	resourceType := resourceTypeFromAction(params.Action)
+	outcome := coredata.AuditLogOutcomeAllowed
 
-	metadata := []byte("{}")
+	var denialReason *string
+
+	if decision != nil {
+		outcome = coredata.AuditLogOutcomeDenied
+		reason := limitBytes(decision.Error(), 1024)
+		denialReason = &reason
+	}
 
 	return &coredata.AuditLogEntry{
 		ID:             gid.New(orgID.TenantID(), coredata.AuditLogEntryEntityType),
 		OrganizationID: orgID,
 		ActorID:        params.Principal,
 		ActorType:      actorType,
+		ActorEmail:     ref.RefOrNil(actor.email),
+		ActorName:      ref.RefOrNil(actor.name),
 		Action:         params.Action,
-		ResourceType:   resourceType,
+		ResourceType:   resourceTypeFromAction(params.Action),
 		ResourceID:     params.Resource,
-		Metadata:       metadata,
-		CreatedAt:      time.Now(),
+		Outcome:        outcome,
+		DenialReason:   denialReason,
+		Metadata:       []byte("{}"),
+		OriginIP:       ref.RefOrNil(request.IP),
+		UserAgent:      ref.RefOrNil(request.UserAgent),
+		RequestID:      ref.RefOrNil(request.RequestID),
+		CreatedAt:      now,
+		RecordedAt:     now,
 	}
+}
+
+func limitBytes(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+
+	for limit > 0 && !utf8.RuneStart(value[limit]) {
+		limit--
+	}
+
+	return value[:limit]
 }

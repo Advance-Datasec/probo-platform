@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -31,7 +37,7 @@ import (
 // its bare domain host (e.g. "acme.okta.com") supplied with the API token —
 // Okta has no central API gateway, so every request targets that org's own
 // host. The connection's transport attaches the `Authorization: SSWS <token>`
-// header (see connector.APIKeyConnection); the driver only sets Accept.
+// header (see connectorprotocol.APIKeyConnection); the driver only sets Accept.
 type OktaDriver struct {
 	httpClient *http.Client
 	domain     string
@@ -222,4 +228,57 @@ func parseOktaTimestamp(value string) (time.Time, bool) {
 	}
 
 	return time.Time{}, false
+}
+
+// oktaNameResolver resolves the Okta org name via GET /api/v1/org on the
+// configured org host. A non-2xx is terminal — a read-only API token may
+// lack org-settings read, so it returns ("", nil) to keep the generic
+// source name rather than make the source-name worker retry forever.
+type oktaNameResolver struct {
+	httpClient *http.Client
+	domain     string
+}
+
+func NewOktaNameResolver(httpClient *http.Client, domain string) NameResolver {
+	return &oktaNameResolver{httpClient: httpClient, domain: domain}
+}
+
+func (r *oktaNameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
+	if r.domain == "" {
+		return "", nil
+	}
+
+	endpoint := url.URL{Scheme: "https", Host: r.domain, Path: "/api/v1/org"}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return "", fmt.Errorf("cannot create okta org request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	httpResp, err := r.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("cannot execute okta org request: %w", err)
+	}
+
+	defer func() { _ = httpResp.Body.Close() }()
+
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return "", nil
+	}
+
+	var resp struct {
+		CompanyName string `json:"companyName"`
+		Subdomain   string `json:"subdomain"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		return "", fmt.Errorf("cannot decode okta org response: %w", err)
+	}
+
+	if resp.CompanyName != "" {
+		return resp.CompanyName, nil
+	}
+
+	return resp.Subdomain, nil
 }

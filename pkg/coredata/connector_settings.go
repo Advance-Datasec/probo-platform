@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -18,13 +24,28 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"go.probo.inc/probo/pkg/connector"
+	"go.probo.inc/probo/pkg/connectorprotocol"
+)
+
+const (
+	// DefaultAWSRoleName is the role name the customer setup template
+	// creates, used when a connector names none.
+	DefaultAWSRoleName = "ProboAudit"
 )
 
 type (
 	SlackConnectorSettings struct {
 		Channel   string `json:"channel,omitempty"`
 		ChannelID string `json:"channel_id,omitempty"`
+	}
+
+	LinearSyncConnectorSettings struct {
+		DefaultTeamID        string `json:"default_team_id,omitempty"`
+		DefaultTeamName      string `json:"default_team_name,omitempty"`
+		DefaultTeamKey       string `json:"default_team_key,omitempty"`
+		LinearOrganizationID string `json:"linear_organization_id,omitempty"`
+		LinearAppActorID     string `json:"linear_app_actor_id,omitempty"`
+		ImportNewIssues      bool   `json:"import_new_issues,omitempty"`
 	}
 
 	TallyConnectorSettings struct {
@@ -77,7 +98,27 @@ type (
 	}
 
 	AsanaConnectorSettings struct {
-		WorkspaceGID string `json:"workspace_gid"`
+		WorkspaceGID       string                                 `json:"workspace_gid"`
+		DefaultProjectGID  string                                 `json:"default_project_gid,omitempty"`
+		DefaultProjectName string                                 `json:"default_project_name,omitempty"`
+		ImportNewTasks     bool                                   `json:"import_new_tasks,omitempty"`
+		Webhooks           map[string]AsanaWebhookRegistration    `json:"webhooks,omitempty"`
+		Mappings           map[string]AsanaProjectMappingSettings `json:"mappings,omitempty"`
+	}
+
+	// Secret is ciphertext, base64-encoded, not the hook secret itself.
+	AsanaWebhookRegistration struct {
+		GID    string `json:"gid"`
+		Nonce  string `json:"nonce"`
+		Secret string `json:"secret"`
+	}
+
+	AsanaProjectMappingSettings struct {
+		States           map[string]string `json:"states,omitempty"`
+		SectionInbound   map[string]string `json:"section_inbound,omitempty"`
+		PriorityFieldGID string            `json:"priority_field_gid,omitempty"`
+		Priorities       map[string]string `json:"priorities,omitempty"`
+		OptionInbound    map[string]string `json:"option_inbound,omitempty"`
 	}
 
 	NetlifyConnectorSettings struct {
@@ -116,10 +157,11 @@ type (
 		BaseURL string `json:"base_url"`
 	}
 
-	// DatadogConnectorSettings holds the per-customer Datadog site captured
-	// during the OAuth callback. Region is the site key (e.g. "US3") used for
-	// the AccessReviewSource title; Domain is the API domain (e.g.
-	// "us3.datadoghq.com") the driver and name resolver use to build hosts.
+	// DatadogConnectorSettings holds the per-customer Datadog site, captured
+	// at the OAuth callback or picked on the API-key form. Region is the site
+	// key (e.g. "US3") used for the AccessReviewSource title; Domain is the
+	// API domain (e.g. "us3.datadoghq.com") the driver and name resolver use
+	// to build hosts.
 	DatadogConnectorSettings struct {
 		Region string `json:"region"`
 		Domain string `json:"domain"`
@@ -131,7 +173,7 @@ type (
 	// the per-org API host (https://<domain>/api/v1/...). Okta has no
 	// central API gateway — every org authenticates against its own
 	// domain — so the host is operator-supplied and validated (see
-	// connector.NormalizeOktaDomain) before it reaches URL construction.
+	// connectorprotocol.NormalizeOktaDomain) before it reaches URL construction.
 	OktaConnectorSettings struct {
 		Domain string `json:"domain"`
 	}
@@ -174,6 +216,130 @@ type (
 	LangfuseConnectorSettings struct {
 		BaseURL string `json:"base_url"`
 	}
+
+	// ScalewayConnectorSettings stores the Scaleway Organization ID. A secret
+	// key is bound to one Organization, but GET /iam/v1alpha1/users requires
+	// the organization_id explicitly, so it is captured up front.
+	ScalewayConnectorSettings struct {
+		OrganizationID string `json:"organization_id"`
+	}
+
+	// CrispConnectorSettings stores the Crisp Website ID. A plugin token can
+	// be connected to several websites, so the reviewed website is captured up
+	// front as the {website_id} path segment on /v1/website/{website_id}/...
+	CrispConnectorSettings struct {
+		WebsiteID string `json:"website_id"`
+	}
+
+	// SegmentConnectorSettings stores the Twilio Segment Public API base URL.
+	// A Public API token is bound to one workspace, but the workspace's region
+	// is not discoverable from the token and selects the API host
+	// (api.segmentapis.com for US, eu1.api.segmentapis.com for EU). The region
+	// the customer picks is resolved to this base URL up front, so the driver
+	// and probe read a single host with no region logic.
+	SegmentConnectorSettings struct {
+		BaseURL string `json:"base_url"`
+	}
+
+	// GoogleAnalyticsConnectorSettings stores the selected GA4 account ID
+	// (the numeric portion of the `accounts/{account}` resource name). A
+	// Google OAuth token can reach many GA4 accounts, so the reviewed account
+	// is picked after authorization; the driver then lists the account's
+	// access bindings plus the bindings of every property beneath it.
+	GoogleAnalyticsConnectorSettings struct {
+		AccountID string `json:"account_id"`
+	}
+
+	// CloudflareConnectorSettings stores the Cloudflare account the user
+	// picked after connecting. An API token can reach many accounts, so the
+	// post-connect picker scopes the access source to one; AccountID is the
+	// selected account's UUID used as the {account_id} path segment on
+	// /accounts/{account_id}/members.
+	CloudflareConnectorSettings struct {
+		AccountID string `json:"account_id"`
+	}
+
+	// AuthentikConnectorSettings holds the base URL of the customer's
+	// authentik instance. Self-hosted, so there is no shared API host: the
+	// driver, name resolver and probe all join onto this origin.
+	AuthentikConnectorSettings struct {
+		BaseURL string `json:"base_url"`
+	}
+
+	// NewRelicConnectorSettings holds the New Relic data region the user key
+	// belongs to. NerdGraph runs one endpoint per region and answers a key
+	// from the other region with 403 "not authorized for account region", so
+	// the region is not discoverable from the credential — the customer names
+	// it and the driver, name resolver and probe all resolve their host from
+	// it.
+	NewRelicConnectorSettings struct {
+		Region string `json:"region"`
+	}
+
+	// RetoolConnectorSettings optionally holds the base URL of a self-hosted
+	// Retool instance. It is empty for Retool Cloud, whose API token already
+	// routes to its own organization through the shared api.retool.com
+	// gateway, so a cloud customer has no URL to supply.
+	RetoolConnectorSettings struct {
+		BaseURL string `json:"base_url"`
+	}
+
+	// TwingateConnectorSettings holds the customer's Twingate network name,
+	// the label in {network}.twingate.com. Twingate is cloud-only and gives
+	// every tenant its own host, so the network is the whole of what
+	// identifies the tenant.
+	TwingateConnectorSettings struct {
+		Network string `json:"network"`
+	}
+
+	// UniFiConnectorSettings holds the UniFi console the source reviews, as Site
+	// Manager identifies it in api.ui.com connector paths.
+	UniFiConnectorSettings struct {
+		ConsoleID string `json:"console_id"`
+	}
+
+	// AWSConnectorSettings names the IAM role Probo assumes. Every field is
+	// public knowledge — the account owns the trust, and the connection
+	// itself holds no credential — so unlike the connection blob these stay
+	// in plain settings JSONB.
+	AWSConnectorSettings struct {
+		// RoleARN is the IAM role the customer created for Probo. The account
+		// is the one that ARN names; it is not stored separately.
+		RoleARN string `json:"role_arn"`
+		// MemberRoleName is the IAM role assumed in each member account of an
+		// organization install. Empty on a standalone connector.
+		MemberRoleName string `json:"member_role_name,omitempty"`
+	}
+
+	// GCPConnectorSettings names the workload identity provider and the
+	// service account Probo impersonates. Every field is public knowledge —
+	// the project owns the trust, and the connection itself holds no
+	// credential — so unlike the connection blob these stay in plain
+	// settings JSONB.
+	GCPConnectorSettings struct {
+		WorkloadIdentityProvider string `json:"workload_identity_provider"`
+		ServiceAccountEmail      string `json:"service_account_email"`
+		// Parent is the Cloud Asset scope of an organization install
+		// (`organizations/{number}` or `folders/{number}`). Empty on a
+		// standalone connector.
+		Parent string `json:"parent,omitempty"`
+	}
+
+	// AzureConnectorSettings names the Entra application Probo federates
+	// with and the subscription it reviews. Every field is public knowledge —
+	// the tenant owns the trust, and the connection itself holds no
+	// credential — so unlike the connection blob these stay in plain
+	// settings JSONB.
+	AzureConnectorSettings struct {
+		TenantID       string `json:"tenant_id"`
+		ClientID       string `json:"client_id"`
+		SubscriptionID string `json:"subscription_id"`
+		Environment    string `json:"environment"`
+	}
+
+	PlanetScaleConnectorSettings struct {
+		Organization string `json:"organization"`
+	}
 )
 
 // GrantType returns the OAuth2 grant type recorded on the connector's
@@ -181,7 +347,7 @@ type (
 // connector. Driver factories that dispatch on grant type (1Password)
 // read this instead of inspecting the typed Connection directly.
 func (c *Connector) GrantType() string {
-	if oauth2Conn, ok := c.Connection.(*connector.OAuth2Connection); ok {
+	if oauth2Conn, ok := c.Connection.(*connectorprotocol.OAuth2Connection); ok {
 		return string(oauth2Conn.GrantType)
 	}
 

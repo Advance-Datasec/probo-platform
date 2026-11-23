@@ -1,18 +1,23 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   ErrorDetailMessage,
@@ -20,7 +25,10 @@ import {
   ErrorLayout,
 } from "@probo/ui";
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { Link, useLocation, useRouteError } from "react-router";
+
+import { NotFoundError } from "#/lib/relay/errors";
 
 type Props = {
   resetErrorBoundary?: () => void;
@@ -30,7 +38,7 @@ type Props = {
 export function PageError({ resetErrorBoundary, error: propsError }: Props) {
   const routeError = useRouteError();
   const error = routeError ?? propsError;
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const location = useLocation();
   const baseLocation = useRef(location);
 
@@ -50,7 +58,7 @@ export function PageError({ resetErrorBoundary, error: propsError }: Props) {
 
   const actions = (
     <Button asChild>
-      <Link to="/">{__("Go home")}</Link>
+      <Link to="/">{t("pageError.actions.goHome")}</Link>
     </Button>
   );
 
@@ -60,12 +68,16 @@ export function PageError({ resetErrorBoundary, error: propsError }: Props) {
     actions,
   };
 
-  if (!error || (error instanceof Error && error.message.includes("PAGE_NOT_FOUND"))) {
+  if (
+    !error
+    || error instanceof NotFoundError
+    || (error instanceof Error && error.message.includes("PAGE_NOT_FOUND"))
+  ) {
     return (
       <ErrorLayout
         {...layoutProps}
-        title={__("Page not found")}
-        description={__("The page you are looking for does not exist.")}
+        title={t("pageError.notFound.title")}
+        description={t("pageError.notFound.description")}
       />
     );
   }
@@ -74,8 +86,8 @@ export function PageError({ resetErrorBoundary, error: propsError }: Props) {
     return (
       <ErrorLayout
         {...layoutProps}
-        title={__("Page not found")}
-        description={__("The page you are looking for does not exist.")}
+        title={t("pageError.forbidden.title")}
+        description={t("pageError.forbidden.description")}
       />
     );
   }
@@ -83,11 +95,11 @@ export function PageError({ resetErrorBoundary, error: propsError }: Props) {
   return (
     <ErrorLayout
       {...layoutProps}
-      title={__("Something went wrong")}
-      description={__("We hit an unexpected error. Head back home to continue.")}
+      title={t("pageError.unexpected.title")}
+      description={t("pageError.unexpected.description")}
     >
       {error instanceof Error && (
-        <ErrorDetails summary={__("Technical details")}>
+        <ErrorDetails summary={t("pageError.technicalDetails")}>
           <ErrorDetailMessage>{error.message}</ErrorDetailMessage>
         </ErrorDetails>
       )}

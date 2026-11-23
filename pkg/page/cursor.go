@@ -1,20 +1,28 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package page
 
 import (
+	"strings"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -58,31 +66,27 @@ func NewCursor[T OrderField](size int, from *CursorKey, pos Position, orderBy Or
 }
 
 func (c *Cursor[T]) SQLFragment() string {
-	fieldName := c.OrderBy.Field.Column()
+	field := c.OrderBy.Field.Column()
+	value := cursorValue(field)
+	direction := c.sqlDirection()
+	// NULLs sort after every real value. A reverse page flips that with the scan.
+	nullsLast := c.Position != Tail
 
-	var orderDirection string
+	tieBreak := "id"
 
-	switch {
-	case c.OrderBy.Direction == OrderDirectionAsc && c.Position == Head:
-		orderDirection = "ASC"
-	case c.OrderBy.Direction == OrderDirectionDesc && c.Position == Head:
-		orderDirection = "DESC"
-	case c.OrderBy.Direction == OrderDirectionAsc && c.Position == Tail:
-		orderDirection = "DESC"
-	case c.OrderBy.Direction == OrderDirectionDesc && c.Position == Tail:
-		orderDirection = "ASC"
+	where := "TRUE"
+	if c.Key != nil {
+		where = cursorWhere(field, value, tieBreak, direction, nullsLast, c.Key.Value == nil)
 	}
 
-	whereClause := "TRUE"
-	if c.Key != nil && orderDirection == "DESC" {
-		whereClause = "(" + fieldName + " <= @cursor_field_value) AND NOT (" + fieldName + " = @cursor_field_value AND id > @cursor_id)"
-	} else if c.Key != nil && orderDirection == "ASC" {
-		whereClause = "(" + fieldName + " >= @cursor_field_value) AND NOT (" + fieldName + " = @cursor_field_value AND id < @cursor_id)"
+	nulls := " NULLS FIRST"
+	if nullsLast {
+		nulls = " NULLS LAST"
 	}
 
-	orderByClause := fieldName + " " + orderDirection + ", id " + orderDirection
+	orderBy := field + " " + direction + nulls + ", " + tieBreak + " " + direction
 
-	return whereClause + " ORDER BY " + orderByClause + " LIMIT @cursor_limit"
+	return where + " ORDER BY " + orderBy + " LIMIT @cursor_limit"
 }
 
 func (c *Cursor[T]) SQLArguments() pgx.NamedArgs {
@@ -97,10 +101,93 @@ func (c *Cursor[T]) SQLArguments() pgx.NamedArgs {
 		"cursor_limit": size,
 	}
 
-	if c.Key != nil {
-		arguments["cursor_id"] = c.Key.ID
+	if c.Key == nil {
+		return arguments
+	}
+
+	arguments["cursor_id"] = c.Key.ID
+	if strings.Contains(c.SQLFragment(), "@cursor_field_value") {
 		arguments["cursor_field_value"] = c.Key.Value
 	}
 
 	return arguments
+}
+
+// cursorValue keeps the cursor key's raw value. When Column is a single-argument
+// call such as section_title_sort_key(section_title), the comparison applies
+// that same function to the bound value.
+func cursorValue(column string) string {
+	name, arg, ok := sqlCall(column)
+	if !ok || !sqlIdent(name) || !sqlIdent(arg) {
+		return "@cursor_field_value"
+	}
+
+	return name + "(@cursor_field_value)"
+}
+
+func sqlCall(column string) (string, string, bool) {
+	open := strings.IndexByte(column, '(')
+	if open <= 0 || !strings.HasSuffix(column, ")") || strings.Contains(column[open+1:], "(") {
+		return "", "", false
+	}
+
+	return column[:open], column[open+1 : len(column)-1], true
+}
+
+func sqlIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+
+	for i, r := range s {
+		letter := r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+
+		digit := r >= '0' && r <= '9'
+		if !letter && (i == 0 || !digit) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (c *Cursor[T]) sqlDirection() string {
+	switch {
+	case c.OrderBy.Direction == OrderDirectionAsc && c.Position == Head:
+		return "ASC"
+	case c.OrderBy.Direction == OrderDirectionDesc && c.Position == Head:
+		return "DESC"
+	case c.OrderBy.Direction == OrderDirectionAsc && c.Position == Tail:
+		return "DESC"
+	case c.OrderBy.Direction == OrderDirectionDesc && c.Position == Tail:
+		return "ASC"
+	default:
+		return ""
+	}
+}
+
+func cursorWhere(field string, value string, tieBreak string, direction string, nullsLast bool, valueNull bool) string {
+	cmp := ">="
+	idExclude := tieBreak + " < @cursor_id"
+
+	if direction == "DESC" {
+		cmp = "<="
+		idExclude = tieBreak + " > @cursor_id"
+	}
+
+	matched := "(" + field + " " + cmp + " " + value + ") AND NOT (" + field + " = " + value + " AND " + idExclude + ")"
+
+	if !nullsLast {
+		if valueNull {
+			return "NOT (" + field + " IS NULL AND " + idExclude + ")"
+		}
+
+		return matched
+	}
+
+	if valueNull {
+		return field + " IS NULL AND NOT (" + idExclude + ")"
+	}
+
+	return "(" + field + " IS NULL OR (" + matched + "))"
 }

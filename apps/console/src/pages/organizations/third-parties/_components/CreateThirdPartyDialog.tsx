@@ -1,19 +1,24 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { formatError } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   Combobox,
   ComboboxItem,
@@ -22,9 +27,10 @@ import {
   DialogFooter,
   IconPlusLarge,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { type ReactNode, Suspense, useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation, useQueryLoader } from "react-relay";
 import { graphql } from "relay-runtime";
 import { useDebounceCallback } from "usehooks-ts";
@@ -48,25 +54,32 @@ const createThirdPartyMutation = graphql`
           id
           canDelete: permission(action: "core:thirdParty:delete")
           ...ThirdPartyRow_thirdParty
+          ...ThirdPartySwitcherListItem_thirdParty
         }
       }
     }
   }
 `;
 
-type Props = {
-  children: ReactNode;
+export interface CreateThirdPartyDialogProps {
+  children?: ReactNode;
   organizationId: string;
   connection: string;
-};
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  onCreated?: (thirdPartyId: string) => void;
+}
 
 export function CreateThirdPartyDialog({
   children,
   organizationId,
   connection,
-}: Props) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  defaultOpen,
+  onOpenChange,
+  onCreated,
+}: CreateThirdPartyDialogProps) {
+  const { t } = useTranslation();
+  const toast = useToast();
   const [createThirdParty] = useMutation<CreateThirdPartyDialogCreateMutation>(createThirdPartyMutation);
   const dialogRef = useDialogRef();
   const [searchQuery, setSearchQuery] = useState("");
@@ -90,27 +103,28 @@ export function CreateThirdPartyDialog({
         input,
         connections: [connection],
       },
-      onCompleted(_response, errors) {
+      onCompleted(response, errors) {
         if (errors) {
-          toast({
-            title: __("Error"),
-            description: formatError(__("Failed to create third party"), errors),
-            variant: "error",
+          toast.add({
+            title: t("createThirdPartyDialog.messages.error"),
+            description: formatError(t("createThirdPartyDialog.errors.create"), errors),
+            type: "error",
           });
           return;
         }
-        toast({
-          title: __("Success"),
-          description: __("Third party created successfully"),
-          variant: "success",
+        toast.add({
+          title: t("createThirdPartyDialog.messages.success"),
+          description: t("createThirdPartyDialog.messages.created"),
+          type: "success",
         });
+        onCreated?.(response.createThirdParty.thirdPartyEdge.node.id);
         dialogRef.current?.close();
       },
       onError(error) {
-        toast({
-          title: __("Error"),
-          description: formatError(__("Failed to create third party"), error),
-          variant: "error",
+        toast.add({
+          title: t("createThirdPartyDialog.messages.error"),
+          description: formatError(t("createThirdPartyDialog.errors.create"), error),
+          type: "error",
         });
       },
     });
@@ -135,9 +149,15 @@ export function CreateThirdPartyDialog({
   };
 
   return (
-    <Dialog ref={dialogRef} trigger={children} title={__("Add a third party")}>
+    <Dialog
+      ref={dialogRef}
+      trigger={children}
+      title={t("createThirdPartyDialog.title")}
+      defaultOpen={defaultOpen}
+      onOpenChange={onOpenChange}
+    >
       <DialogContent className="p-6">
-        <Combobox onSearch={handleSearch} placeholder={__("Type third party's name")}>
+        <Combobox onSearch={handleSearch} placeholder={t("createThirdPartyDialog.searchPlaceholder")}>
           {searchQuery.trim().length >= 2 && queryRef && (
             <Suspense>
               <CommonThirdPartyCombobox
@@ -150,10 +170,7 @@ export function CreateThirdPartyDialog({
           {searchQuery.trim().length >= 2 && (
             <ComboboxItem onClick={() => onSelect(searchQuery.trim())}>
               <IconPlusLarge size={20} />
-              {__("Create a new third party")}
-              {" "}
-              :
-              {searchQuery}
+              {t("createThirdPartyDialog.createNew", { name: searchQuery })}
             </ComboboxItem>
           )}
         </Combobox>

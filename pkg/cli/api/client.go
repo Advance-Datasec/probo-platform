@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package api
 
@@ -19,13 +25,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/parser"
+	"go.probo.inc/probo/pkg/filevalidation"
 	"go.probo.inc/probo/pkg/version"
+)
+
+const (
+	// Refresh slightly early so a command started on the expiry boundary
+	// does not send a token the server is about to reject.
+	accessTokenRefreshSkew = time.Minute
 )
 
 type (
@@ -37,22 +54,39 @@ type (
 		refresher  *TokenRefresher
 	}
 
+	// StoredCredentials is the access token, refresh token, and access-token
+	// expiry last written for this host.
+	StoredCredentials struct {
+		AccessToken  string
+		RefreshToken string
+		ExpiresAt    time.Time
+	}
+
 	// TokenRefresher holds the information needed to automatically refresh
 	// an expired access token using the OAuth2 refresh_token grant.
 	TokenRefresher struct {
 		RefreshToken  string
 		TokenEndpoint string
 		ClientID      string
-		// OnRefresh is called after a successful token refresh with the new
-		// access token and refresh token so the caller can persist them.
-		OnRefresh func(accessToken, refreshToken string) error
+		ExpiresAt     time.Time
+		// Lock serializes a refresh across processes. Refresh tokens rotate,
+		// and a second presenter of the spent token is treated as theft.
+		Lock func() (unlock func(), err error)
+		// Current returns the credentials on disk. A newer access token means
+		// another process already refreshed.
+		Current func() (StoredCredentials, error)
+		// OnRefresh is called after a successful token refresh so the caller
+		// can persist the new credentials. expiresAt is zero when the token
+		// response omits expires_in.
+		OnRefresh func(accessToken, refreshToken string, expiresAt time.Time) error
 	}
 
 	Option func(*Client)
 
 	graphQLRequest struct {
-		Query     string         `json:"query"`
-		Variables map[string]any `json:"variables,omitempty"`
+		Query         string         `json:"query"`
+		OperationName string         `json:"operationName,omitempty"`
+		Variables     map[string]any `json:"variables,omitempty"`
 	}
 
 	graphQLResponse struct {
@@ -122,6 +156,8 @@ func (c *Client) DoRaw(
 	query string,
 	variables map[string]any,
 ) ([]byte, error) {
+	c.refreshIfDue()
+
 	respBody, statusCode, err := c.doRequest(query, variables)
 	if err != nil {
 		return nil, err
@@ -154,14 +190,28 @@ func (c *Client) DoRaw(
 	return respBody, nil
 }
 
+func operationNameFromQuery(query string) string {
+	doc, err := parser.ParseQuery(&ast.Source{Input: query})
+	if err != nil || doc == nil || len(doc.Operations) != 1 {
+		return ""
+	}
+
+	return doc.Operations[0].Name
+}
+
+func newGraphQLRequest(query string, variables map[string]any) graphQLRequest {
+	return graphQLRequest{
+		Query:         query,
+		OperationName: operationNameFromQuery(query),
+		Variables:     variables,
+	}
+}
+
 func (c *Client) doRequest(
 	query string,
 	variables map[string]any,
 ) ([]byte, int, error) {
-	reqBody := graphQLRequest{
-		Query:     query,
-		Variables: variables,
-	}
+	reqBody := newGraphQLRequest(query, variables)
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
@@ -201,7 +251,8 @@ func (c *Client) doRequest(
 
 // DoUpload sends a GraphQL multipart file upload request following the
 // graphql-multipart-request-spec. It maps the given file to the variable
-// at the provided path (e.g. "variables.input.file").
+// at the provided path (e.g. "variables.input.file"). The file part's
+// MIME type is inferred from the filename.
 func (c *Client) DoUpload(
 	query string,
 	variables map[string]any,
@@ -240,17 +291,14 @@ func (c *Client) doUploadRequest(
 	filename string,
 	file io.Reader,
 ) ([]byte, error) {
+	c.refreshIfDue()
+
 	var buf bytes.Buffer
 
 	writer := multipart.NewWriter(&buf)
 
 	// Part 1: operations
-	operationsJSON, err := json.Marshal(
-		graphQLRequest{
-			Query:     query,
-			Variables: variables,
-		},
-	)
+	operationsJSON, err := json.Marshal(newGraphQLRequest(query, variables))
 	if err != nil {
 		return nil, fmt.Errorf("cannot marshal operations: %w", err)
 	}
@@ -273,8 +321,13 @@ func (c *Client) doUploadRequest(
 		return nil, fmt.Errorf("cannot write map field: %w", err)
 	}
 
-	// Part 3: file
-	part, err := writer.CreateFormFile("0", filename)
+	// CreateFormFile forces application/octet-stream, which evidence upload rejects.
+	header, err := filePartHeader("0", filename)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build file part: %w", err)
+	}
+
+	part, err := writer.CreatePart(header)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create form file: %w", err)
 	}
@@ -336,8 +389,61 @@ func (c *Client) doUploadRequest(
 	return respBody, nil
 }
 
+func (c *Client) refreshIfDue() {
+	r := c.refresher
+	if r == nil || r.ExpiresAt.IsZero() {
+		return
+	}
+
+	if time.Now().Before(r.ExpiresAt.Add(-accessTokenRefreshSkew)) {
+		return
+	}
+
+	_ = c.tryRefreshToken()
+}
+
 func (c *Client) tryRefreshToken() error {
 	r := c.refresher
+	if r == nil {
+		return fmt.Errorf("cannot refresh token: refresher is not configured")
+	}
+
+	if r.Lock != nil {
+		unlock, err := r.Lock()
+		if err != nil {
+			return fmt.Errorf("cannot lock credentials: %w", err)
+		}
+
+		defer unlock()
+	}
+
+	if r.Current != nil {
+		stored, err := r.Current()
+		if err != nil {
+			return fmt.Errorf("cannot read stored credentials: %w", err)
+		}
+
+		if stored.AccessToken != "" && stored.AccessToken != c.token {
+			c.token = stored.AccessToken
+			if stored.RefreshToken != "" {
+				r.RefreshToken = stored.RefreshToken
+			}
+
+			if !stored.ExpiresAt.IsZero() {
+				r.ExpiresAt = stored.ExpiresAt
+			}
+
+			return nil
+		}
+
+		if stored.RefreshToken != "" {
+			r.RefreshToken = stored.RefreshToken
+		}
+	}
+
+	if r.RefreshToken == "" {
+		return fmt.Errorf("cannot refresh token: refresh token is missing")
+	}
 
 	values := url.Values{
 		"grant_type":    {"refresh_token"},
@@ -378,12 +484,59 @@ func (c *Client) tryRefreshToken() error {
 		return fmt.Errorf("cannot decode refresh response: %w", err)
 	}
 
+	refreshToken := token.RefreshToken
+	if refreshToken == "" {
+		refreshToken = r.RefreshToken
+	}
+
+	var expiresAt time.Time
+	if token.ExpiresIn > 0 {
+		expiresAt = time.Now().Add(time.Duration(token.ExpiresIn) * time.Second)
+	}
+
 	c.token = token.AccessToken
-	r.RefreshToken = token.RefreshToken
+	r.RefreshToken = refreshToken
+
+	if !expiresAt.IsZero() {
+		r.ExpiresAt = expiresAt
+	}
 
 	if r.OnRefresh != nil {
-		return r.OnRefresh(token.AccessToken, token.RefreshToken)
+		return r.OnRefresh(token.AccessToken, refreshToken, expiresAt)
 	}
 
 	return nil
+}
+
+func filePartHeader(fieldname, filename string) (textproto.MIMEHeader, error) {
+	if !validContentDispositionValue(fieldname) || !validContentDispositionValue(filename) {
+		return nil, fmt.Errorf("cannot use filename %q in content disposition", filename)
+	}
+
+	disposition := mime.FormatMediaType(
+		"form-data",
+		map[string]string{
+			"name":     fieldname,
+			"filename": filename,
+		},
+	)
+	if disposition == "" {
+		return nil, fmt.Errorf("cannot encode content disposition for %q", filename)
+	}
+
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", disposition)
+	h.Set("Content-Type", filevalidation.ResolveContentType("", filename))
+
+	return h, nil
+}
+
+func validContentDispositionValue(value string) bool {
+	for i := 0; i < len(value); i++ {
+		if value[i] < ' ' || value[i] == 0x7f {
+			return false
+		}
+	}
+
+	return true
 }

@@ -1,23 +1,28 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { formatDate, formatError, type GraphQLError, promisifyMutation, sprintf } from "@probo/helpers";
+import { formatError, type GraphQLError, promisifyMutation } from "@probo/helpers";
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
+import { dateFormat } from "@probo/i18n";
 import {
   ActionDropdown,
-  Breadcrumb,
   Button,
   Card,
   DropdownItem,
@@ -30,9 +35,10 @@ import {
   Input,
   PageHeader,
   useConfirm,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ConnectionHandler,
   graphql,
@@ -41,7 +47,6 @@ import {
   usePreloadedQuery,
 } from "react-relay";
 import { Link, useNavigate, useParams } from "react-router";
-import { z } from "zod";
 
 import type { StatementOfApplicabilityDetailPageDeleteMutation } from "#/__generated__/core/StatementOfApplicabilityDetailPageDeleteMutation.graphql";
 import type { StatementOfApplicabilityDetailPageQuery } from "#/__generated__/core/StatementOfApplicabilityDetailPageQuery.graphql";
@@ -50,6 +55,7 @@ import type { StatementOfApplicabilityDetailPageUpdateMutation } from "#/__gener
 import { PeopleMultiSelectField } from "#/components/form/PeopleMultiSelectField";
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
 import { useOrganizationId } from "#/hooks/useOrganizationId";
+import { z } from "#/lib/zod";
 
 import { PublishStatementOfApplicabilityDialog } from "./dialogs/PublishStatementOfApplicabilityDialog";
 import StatementOfApplicabilityControlsTab from "./tabs/StatementOfApplicabilityControlsTab";
@@ -143,10 +149,10 @@ export default function StatementOfApplicabilityDetailPage(props: Props) {
     props.queryRef,
   );
   const statementOfApplicability = data.node;
-  const { __ } = useTranslate();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const confirm = useConfirm();
-  const { toast } = useToast();
+  const toast = useToast();
 
   if (!statementOfApplicabilityId || !statementOfApplicability) {
     throw new Error(
@@ -164,7 +170,7 @@ export default function StatementOfApplicabilityDetailPage(props: Props) {
 
   const handleDelete = () => {
     if (!statementOfApplicability.id || !statementOfApplicability.name) {
-      return alert(__("Failed to delete statement of applicability: missing id or name"));
+      return alert(t("statementOfApplicabilityDetailPage.errors.missingDeleteData"));
     }
     confirm(
       () =>
@@ -177,30 +183,25 @@ export default function StatementOfApplicabilityDetailPage(props: Props) {
           },
         })
           .then(() => {
-            void navigate(`/organizations/${organizationId}/statements-of-applicability`);
+            void navigate(`/organizations/${organizationId}/governance/statements-of-applicability`);
           })
           .catch((error) => {
-            toast({
-              title: __("Error"),
+            toast.add({
+              title: t("statementOfApplicabilityDetailPage.messages.error"),
               description: formatError(
-                __("Failed to delete statement of applicability"),
+                t("statementOfApplicabilityDetailPage.errors.delete"),
                 error as GraphQLError,
               ),
-              variant: "error",
+              type: "error",
             });
           }),
       {
-        message: sprintf(
-          __(
-            "This will permanently delete \"%s\". This action cannot be undone.",
-          ),
-          statementOfApplicability.name,
-        ),
+        message: t("statementOfApplicabilityDetailPage.deleteConfirmation", { name: statementOfApplicability.name }),
       },
     );
   };
 
-  usePageTitle(statementOfApplicability.name || __("Statement of Applicability"));
+  usePageTitle(statementOfApplicability.name || t("statementOfApplicabilityDetailPage.title"));
 
   const [isEditingName, setIsEditingName] = useState(false);
   const [updateStatementOfApplicability, isUpdating]
@@ -210,7 +211,7 @@ export default function StatementOfApplicabilityDetailPage(props: Props) {
   const canDelete = statementOfApplicability.canDelete;
 
   const nameSchema = z.object({
-    name: z.string().min(1, __("Name is required")),
+    name: z.string().min(1, t("statementOfApplicabilityDetailPage.validation.nameRequired")),
   });
 
   const {
@@ -234,22 +235,22 @@ export default function StatementOfApplicabilityDetailPage(props: Props) {
         },
       },
       onCompleted() {
-        toast({
-          title: __("Success"),
-          description: __("Statement of Applicability updated successfully."),
-          variant: "success",
+        toast.add({
+          title: t("statementOfApplicabilityDetailPage.messages.success"),
+          description: t("statementOfApplicabilityDetailPage.messages.updated"),
+          type: "success",
         });
         setIsEditingName(false);
         resetName({ name: data.name });
       },
       onError(error) {
-        toast({
-          title: __("Error"),
+        toast.add({
+          title: t("statementOfApplicabilityDetailPage.messages.error"),
           description: formatError(
-            __("Failed to update Statement of Applicability"),
+            t("statementOfApplicabilityDetailPage.errors.update"),
             error,
           ),
-          variant: "error",
+          type: "error",
         });
       },
     });
@@ -291,21 +292,21 @@ export default function StatementOfApplicabilityDetailPage(props: Props) {
         },
       },
       onCompleted() {
-        toast({
-          title: __("Success"),
-          description: __("Approvers updated successfully."),
-          variant: "success",
+        toast.add({
+          title: t("statementOfApplicabilityDetailPage.messages.success"),
+          description: t("statementOfApplicabilityDetailPage.messages.approversUpdated"),
+          type: "success",
         });
         setIsEditingApprovers(false);
       },
       onError(error) {
-        toast({
-          title: __("Error"),
+        toast.add({
+          title: t("statementOfApplicabilityDetailPage.messages.error"),
           description: formatError(
-            __("Failed to update approvers"),
+            t("statementOfApplicabilityDetailPage.errors.updateApprovers"),
             error,
           ),
-          variant: "error",
+          type: "error",
         });
       },
     });
@@ -316,24 +317,8 @@ export default function StatementOfApplicabilityDetailPage(props: Props) {
     resetApprovers({ approverIds: defaultApproverIds });
   };
 
-  const listUrl = `/organizations/${organizationId}/statements-of-applicability`;
-
   return (
     <div className="space-y-6">
-      <Breadcrumb
-        items={[
-          {
-            label: __("Statements of Applicability"),
-            to: listUrl,
-          },
-          {
-            label:
-                            statementOfApplicability.name
-                            || __("Statement of Applicability detail"),
-          },
-        ]}
-      />
-
       <PageHeader
         title={
           isEditingName && canUpdate
@@ -383,10 +368,10 @@ export default function StatementOfApplicabilityDetailPage(props: Props) {
         {statementOfApplicability.document?.id && (
           <Button variant="secondary" asChild>
             <Link
-              to={`/organizations/${organizationId}/documents/${statementOfApplicability.document.id}`}
+              to={`/organizations/${organizationId}/governance/documents/${statementOfApplicability.document.id}`}
             >
               <IconPageTextLine size={16} />
-              {__("Document")}
+              {t("statementOfApplicabilityDetailPage.actions.document")}
             </Link>
           </Button>
         )}
@@ -396,14 +381,14 @@ export default function StatementOfApplicabilityDetailPage(props: Props) {
             defaultApproverIds={defaultApproverIds}
             onPublished={(documentId) => {
               void navigate(
-                `/organizations/${organizationId}/documents/${documentId}`,
+                `/organizations/${organizationId}/governance/documents/${documentId}`,
               );
             }}
           >
             <Button
               icon={IconUpload}
             >
-              {__("Publish")}
+              {t("statementOfApplicabilityDetailPage.actions.publish")}
             </Button>
           </PublishStatementOfApplicabilityDialog>
         )}
@@ -414,7 +399,7 @@ export default function StatementOfApplicabilityDetailPage(props: Props) {
               icon={IconTrashCan}
               onClick={handleDelete}
             >
-              {__("Delete")}
+              {t("statementOfApplicabilityDetailPage.actions.delete")}
             </DropdownItem>
           </ActionDropdown>
         )}
@@ -422,29 +407,29 @@ export default function StatementOfApplicabilityDetailPage(props: Props) {
 
       <div className="space-y-6">
         <div className="space-y-4">
-          <h2 className="text-base font-medium">{__("Details")}</h2>
+          <h2 className="text-base font-medium">{t("statementOfApplicabilityDetailPage.sections.details")}</h2>
           <Card className="space-y-4" padded>
             <div className="grid grid-cols-3 gap-4">
               <div>
                 <div className="text-xs text-txt-tertiary font-semibold mb-1">
-                  {__("Created at")}
+                  {t("statementOfApplicabilityDetailPage.fields.createdAt")}
                 </div>
                 <div className="text-sm text-txt-primary">
-                  {formatDate(statementOfApplicability.createdAt)}
+                  {dateFormat(i18n.language, statementOfApplicability.createdAt)}
                 </div>
               </div>
               <div>
                 <div className="text-xs text-txt-tertiary font-semibold mb-1">
-                  {__("Updated at")}
+                  {t("statementOfApplicabilityDetailPage.fields.updatedAt")}
                 </div>
                 <div className="text-sm text-txt-primary">
-                  {formatDate(statementOfApplicability.updatedAt)}
+                  {dateFormat(i18n.language, statementOfApplicability.updatedAt)}
                 </div>
               </div>
               {documentId && (
                 <div>
                   <div className="text-xs text-txt-tertiary font-semibold mb-1">
-                    {__("Approvers")}
+                    {t("statementOfApplicabilityDetailPage.fields.approvers")}
                   </div>
                   {isEditingApprovers
                     ? (
@@ -459,7 +444,7 @@ export default function StatementOfApplicabilityDetailPage(props: Props) {
                                 fullName: a.fullName,
                                 emailAddress: a.emailAddress,
                               }))}
-                              placeholder={__("Add approvers...")}
+                              placeholder={t("statementOfApplicabilityDetailPage.placeholders.approvers")}
                             />
                           </div>
                           <Button
@@ -480,7 +465,7 @@ export default function StatementOfApplicabilityDetailPage(props: Props) {
                           <div className="text-sm text-txt-primary">
                             {defaultApprovers.length > 0
                               ? defaultApprovers.map(a => a.fullName).join(", ")
-                              : __("None")}
+                              : t("statementOfApplicabilityDetailPage.none")}
                           </div>
                           {canUpdateDocument && (
                             <Button
@@ -500,7 +485,7 @@ export default function StatementOfApplicabilityDetailPage(props: Props) {
         {statementOfApplicability.id && (
           <div className="space-y-4">
             <h2 className="text-base font-medium">
-              {__("Statements")}
+              {t("statementOfApplicabilityDetailPage.sections.statements")}
             </h2>
             <StatementOfApplicabilityControlsTab
               statementOfApplicability={

@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
-// Use of this source code is governed by the ISC license
+// Use of this source code is governed by the MIT license
 // that can be found in the LICENSE file.
 
 import type { PropsWithChildren } from "react";
-import { tv } from "tailwind-variants";
+import { tv } from "tailwind-variants/lite";
 
 const menuButtonVariants = tv({
   base: [
@@ -22,10 +22,15 @@ type MenuButtonProps = {
   onClick: () => void;
 };
 
-export function MenuButton({ children, active, onClick }: PropsWithChildren<MenuButtonProps>) {
+export function MenuButton({
+  children,
+  active,
+  onClick,
+}: PropsWithChildren<MenuButtonProps>) {
   return (
     <button
       type="button"
+      onMouseDown={e => e.preventDefault()}
       onClick={onClick}
       className={menuButtonVariants({ active })}
     >

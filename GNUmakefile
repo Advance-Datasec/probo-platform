@@ -1,6 +1,8 @@
-MAKEFLAGS := --jobs=$(shell nproc)
+NPROC ?=	$(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+MAKEFLAGS := --jobs=$(NPROC)
 
 CAT ?=	cat
+CARGO ?=	cargo
 CP ?=	cp
 DOCKER ?=	docker
 GO ?=	go
@@ -8,14 +10,45 @@ GRYPE ?=	grype
 TRIVY ?=	trivy
 MKCERT ?=	mkcert
 MKDIR ?=	mkdir -p
+NODE ?=	node
 NPM ?=	npm
 NPX ?=	npx
 OPENSSL ?=	openssl
 SED ?= sed
+SHA256SUM ?= shasum -a 256
 SYFT ?=	syft
 TAIL ?= tail
 ECHO ?= echo
 GOLINTCMD ?= golangci-lint
+SWIFTLINTCMD ?= swiftlint
+SWIFTCMD ?= swift
+SWIFT_ENROLL_UI ?= cmd/probo-agent/installer/macos/enroll-ui
+SWIFT_FORMAT_CONFIG ?= .swift-format
+SWIFTLINT_CONFIG ?= .swiftlint.yml
+
+swift_sources = $(shell find $(SWIFT_ENROLL_UI) \( -name '*.swift' ! -name '*.generated.swift' ! -path '*/.build/*' \) | sort)
+
+SHELLCHECKCMD ?= shellcheck
+SHFMTCMD ?= shfmt
+SHFMTFLAGS ?= -i 2 -ci -bn
+RUST_TOOLCHAIN ?= 1.90.0
+
+# First-party shell scripts linted by lint-shell / fmt-shell (CI).
+# Add every new first-party *.sh here; do not include vendored/submodule scripts.
+SHELL_SCRIPTS := \
+	cmd/probo-agent/installer/install.sh \
+	cmd/probo-agent/installer/macos/build.sh \
+	cmd/probo-agent/installer/macos/reinstall.sh \
+	cmd/probo-agent/installer/macos/uninstall.sh \
+	compose/postgres/01_probod.sh \
+	contrib/benchmarks/automerge-battery.sh \
+	contrib/ci/classify-changes.sh \
+	contrib/ci/go-package-affected.sh \
+	contrib/lima/provision.sh \
+	contrib/lima/sandbox.sh \
+	contrib/merge-graphql-schema.sh \
+	contrib/seed.sh \
+	entrypoint.sh
 
 DOCKER_BUILD_FLAGS?=
 DOCKER_BUILD=	DOCKER_BUILDKIT=1 $(DOCKER) build $(DOCKER_BUILD_FLAGS)
@@ -33,13 +66,14 @@ PROBOD_LDFLAGS=          -ldflags "-X 'main.version=$(PROBOD_VERSION)' -X 'main.
 PROBOD_BOOTSTRAP_LDFLAGS=-ldflags "-X 'main.version=$(PROBOD_BOOTSTRAP_VERSION)'"
 PROBOCTL_LDFLAGS=        -ldflags "-X 'main.version=$(PROBOCTL_VERSION)'"
 PROBO_AGENT_LDFLAGS=     -ldflags "-X 'main.version=$(PROBO_AGENT_VERSION)'"
+PROBO_AGENT_GUI_LDFLAGS= -ldflags "-H windowsgui -X 'main.version=$(PROBO_AGENT_VERSION)'"
 
 GCFLAGS=	-gcflags="-e"
 
 CGO_ENABLED?=	0
 GOOS?=
 
-GO_BASE=	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) go
+GO_BASE=	CGO_ENABLED=$(CGO_ENABLED) $(if $(GOOS),GOOS=$(GOOS)) go
 GO_BUILD=	$(GO_BASE) build $(GCFLAGS)
 GO_GENERATE=	$(GO_BASE) generate
 GO_TEST=	$(GO_BASE) tool gotestsum -- $(TEST_FLAGS)
@@ -47,9 +81,16 @@ GO_VET=	$(GO_BASE) vet
 GO_TOOL=	$(GO_BASE) tool
 
 TEST_FLAGS?=	-race -cover -coverprofile=coverage.out
+# CI sets this so ./pkg/automerge/... runs in .github/workflows/automerge.yaml.
+# Spot reclaim SIGTERMs the main test job while that package is still running.
+SKIP_AUTOMERGE?=
+E2E_TEST_FLAGS?=
 
 E2E_CONFIG ?= $(CURDIR)/e2e/console/testdata/config.yaml
 E2E_COVER_DIR ?= $(CURDIR)/coverage/e2e
+E2E_BINARY ?=
+E2E_COVERAGE_BINARY ?= $(CURDIR)/bin/probod-coverage
+E2E_CORE_COVER_PKGS ?= go.probo.inc/probo/pkg/coredata,go.probo.inc/probo/pkg/probo,go.probo.inc/probo/pkg/server/api/console/v1,go.probo.inc/probo/pkg/server/api/connect/v1,go.probo.inc/probo/pkg/server/api/complianceportal/v1,go.probo.inc/probo/pkg/server/api/mcp/v1,go.probo.inc/probo/pkg/accessreview,go.probo.inc/probo/pkg/agentexecution,go.probo.inc/probo/pkg/complianceportal/management,go.probo.inc/probo/pkg/complianceportal/visitor,go.probo.inc/probo/pkg/cookiebanner,go.probo.inc/probo/pkg/riskmanagement,go.probo.inc/probo/pkg/thirdparty,go.probo.inc/probo/pkg/webhook
 
 DOCKER_REGISTRY=	artifact.probo.inc
 DOCKER_PROXY=		$(DOCKER_REGISTRY)/dockerhub
@@ -65,14 +106,20 @@ GENERATED= pkg/server/api/connect/v1/schema/schema.go \
 	pkg/server/api/connect/v1/types/types.go \
 	pkg/server/api/console/v1/schema/schema.go \
 	pkg/server/api/console/v1/types/types.go \
-	pkg/server/api/trust/v1/schema/schema.go \
-	pkg/server/api/trust/v1/types/types.go \
+	pkg/server/api/complianceportal/v1/schema/schema.go \
+	pkg/server/api/complianceportal/v1/types/types.go \
 	pkg/server/api/mcp/v1/server/server.go \
 	pkg/server/api/mcp/v1/types/types.go
 
 EMBEDDED= apps/console/dist/index.html \
-	apps/trust/dist/index.html \
+	apps/compliance-portal/dist/index.html \
+	apps/employee-portal/dist/index.html \
 	@probo/emails
+
+AUTOMERGE_REFERENCE_DIR=	pkg/automerge/internal/testsupport/reference
+AUTOMERGE_REFERENCE_WASM=	$(AUTOMERGE_REFERENCE_DIR)/reference.wasm
+AUTOMERGE_BATTERY_OUTPUT?=	/tmp/probo-automerge-battery.json
+AUTOMERGE_BATTERY_FIXTURES?=	/tmp/probo-automerge-battery-fixtures
 
 PROBOD_BIN_EXTRA_DEPS=
 PROBOD_BIN=	bin/probod
@@ -88,13 +135,25 @@ PROBOCTL_BIN=	bin/proboctl
 PROBOCTL_SRC=	cmd/proboctl/main.go
 
 PROBO_AGENT_BIN=	bin/probo-agent
-PROBO_AGENT_SRC=	cmd/probo-agent/main.go
+PROBO_AGENT_SRC=	./cmd/probo-agent
+# Menu bar / tray enrollment is macOS and Windows; only macOS needs CGO.
+PROBO_AGENT_TARGET_OS=	$(if $(GOOS),$(GOOS),$(shell $(GO) env GOOS))
+PROBO_AGENT_BINS=	$(PROBO_AGENT_BIN)
+PROBO_AGENT_CGO=	0
+ifeq ($(PROBO_AGENT_TARGET_OS),darwin)
+PROBO_AGENT_CGO=	1
+endif
+ifeq ($(PROBO_AGENT_TARGET_OS),windows)
+PROBO_AGENT_GUI_BIN=	bin/probo-agentw
+PROBO_AGENT_BINS+=	$(PROBO_AGENT_GUI_BIN)
+endif
 
 ifdef WITH_APPS
 GENERATED += relay
 EMBEDDED += \
 	@probo/console \
-	@probo/trust
+	@probo/compliance-portal \
+	@probo/employee-portal
 endif
 
 .PHONY: all
@@ -109,6 +168,28 @@ lint-go: vet go-fmt go-fix go-lint
 .PHONY: lint-js
 lint-js:
 	$(NPM) run lint
+
+.PHONY: lint-swift
+lint-swift: swift-fmt swift-lint ## Lint Swift enroll-ui (format + SwiftLint)
+
+.PHONY: swift-fmt
+swift-fmt: ## Check Swift formatting with swift format
+	@command -v $(SWIFTCMD) >/dev/null 2>&1 || { echo "error: '$(SWIFTCMD)' not found; install the Swift toolchain (Xcode on macOS)"; exit 1; }
+	$(SWIFTCMD) format lint --configuration $(SWIFT_FORMAT_CONFIG) --strict --parallel $(swift_sources)
+
+.PHONY: swift-lint
+swift-lint: ## Lint Swift with SwiftLint
+	@command -v $(SWIFTLINTCMD) >/dev/null 2>&1 || { echo "error: '$(SWIFTLINTCMD)' not found; install SwiftLint (e.g. brew install swiftlint)"; exit 1; }
+	$(SWIFTLINTCMD) lint --strict --config $(SWIFTLINT_CONFIG) --cache-path .cache/swiftlint
+
+.PHONY: lint-shell
+lint-shell: ## Lint first-party shell scripts (shfmt + shellcheck)
+	@if [ -z "$(SHELL_SCRIPTS)" ]; then \
+		echo "error: no shell scripts found"; \
+		exit 1; \
+	fi
+	$(SHFMTCMD) -d $(SHFMTFLAGS) $(SHELL_SCRIPTS)
+	$(SHELLCHECKCMD) $(SHELL_SCRIPTS)
 
 .PHONY: vet
 vet: generate embed
@@ -136,11 +217,15 @@ go-fix: generate embed
 go-lint: generate
 	$(GOLINTCMD) run ./...
 
+ifeq ($(SKIP_AUTOMERGE),1)
+TEST_LIST_FILTER = | grep -v '/pkg/automerge'
+endif
+
 .PHONY: test
 test: generate
 test: CGO_ENABLED=1
-test: ## Run tests with race detection and coverage (usage: make test [MODULE=./pkg/some/module])
-	$(GO_TEST) $(if $(MODULE),$(MODULE),$(shell $(GO) list ./... | grep -v /e2e/))
+test: ## Run tests with race detection and coverage (usage: make test [MODULE=./pkg/some/module] [SKIP_AUTOMERGE=1])
+	$(GO_TEST) $(if $(MODULE),$(MODULE),$(shell $(GO) list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... | awk 'NF && !/\/e2e\//' $(TEST_LIST_FILTER)))
 
 .PHONY: test-verbose
 test-verbose: TEST_FLAGS+=-v
@@ -149,6 +234,108 @@ test-verbose: test ## Run tests with verbose output
 .PHONY: test-short
 test-short: TEST_FLAGS+=-short
 test-short: test ## Run short tests only
+
+.PHONY: generate-automerge-official-fixtures
+generate-automerge-official-fixtures: ## Build official Automerge benchmark documents for the Go suite
+	rm -rf $(AUTOMERGE_BATTERY_FIXTURES)
+	if ! rustup run $(RUST_TOOLCHAIN) rustc --version >/dev/null 2>&1; then \
+		rustup toolchain install $(RUST_TOOLCHAIN) --profile minimal; \
+	fi
+	$(CARGO) +$(RUST_TOOLCHAIN) run --release --locked \
+		--manifest-path contrib/benchmarks/automerge-native/official-fixtures/Cargo.toml \
+		-- $(AUTOMERGE_BATTERY_FIXTURES)
+
+.PHONY: test-automerge
+test-automerge: generate-automerge-official-fixtures
+test-automerge: CGO_ENABLED=1
+test-automerge: ## Run the full Automerge suite, including the JS oracle and official fixtures
+	AUTOMERGE_JS_ORACLE=$(CURDIR)/packages/automerge-conformance/oracle.mjs \
+	AUTOMERGE_REPO_INTEROP_CLIENT=$(CURDIR)/packages/automerge-conformance/collaboration-interop-client.mjs \
+	AUTOMERGE_OFFICIAL_BATTERY_FIXTURES=$(AUTOMERGE_BATTERY_FIXTURES) \
+		$(GO_TEST) ./pkg/automerge/...
+
+.PHONY: test-js
+test-js: relay ## Run frontend unit tests (vitest) across workspaces
+	$(NPM) run test
+
+.PHONY: test-automerge-conformance
+test-automerge-conformance: ## Test Go binary compatibility with official Automerge JS
+	AUTOMERGE_JS_ORACLE=$(CURDIR)/packages/automerge-conformance/oracle.mjs \
+		$(GO_BASE) test -count=1 ./pkg/automerge
+
+.PHONY: generate-prosemirror-parity
+generate-prosemirror-parity: ## Regenerate the ProseMirror render parity fixture from @automerge/prosemirror
+	GEN_PROSEMIRROR_PARITY=1 $(NPX) vitest run \
+		--root packages/ui src/RichEditor/prosemirrorRenderParity.test.ts
+
+.PHONY: audit-automerge-parity
+audit-automerge-parity: test-automerge-conformance
+audit-automerge-parity: ## Require every pinned upstream Automerge test to be mapped
+	AUTOMERGE_REQUIRE_FULL_PARITY=1 \
+		$(GO_BASE) test -count=1 -run '^TestUpstreamParityManifest$$' ./pkg/automerge
+
+.PHONY: audit-automerge-interop
+audit-automerge-interop: test-automerge-conformance
+audit-automerge-interop: ## Require complete Rust/JS wire and state interoperability
+	AUTOMERGE_REQUIRE_FULL_INTEROP=1 \
+		$(GO_BASE) test -count=1 -run '^TestUpstreamParityManifest$$' ./pkg/automerge
+
+.PHONY: benchmark-automerge
+benchmark-automerge: ## Benchmark Go and Rust/WASM Automerge implementations
+	$(GO_BASE) test -run '^$$' -bench . -benchmem ./pkg/automerge
+
+.PHONY: benchmark-automerge-native
+benchmark-automerge-native: ## Compare optimized native Go and native Rust
+	$(NODE) contrib/benchmarks/automerge-native/compare.mjs
+
+.PHONY: benchmark-automerge-gate
+benchmark-automerge-gate: ## Enforce portable Automerge Go/Rust ratio gates
+	$(NODE) contrib/benchmarks/automerge-native/compare.mjs \
+		--baseline pkg/automerge/testdata/benchmark-baseline.json
+
+.PHONY: benchmark-automerge-official
+benchmark-automerge-official: ## Run the pinned official Automerge fast benchmark battery
+	@mkdir -p $(dir $(AUTOMERGE_BATTERY_OUTPUT))
+	contrib/benchmarks/automerge-battery.sh run \
+		--tier fast \
+		--output $(AUTOMERGE_BATTERY_OUTPUT)
+
+.PHONY: list-automerge-official-benchmarks
+list-automerge-official-benchmarks: ## List the pinned official Automerge benchmark battery
+	contrib/benchmarks/automerge-battery.sh list --tier all
+
+.PHONY: test-automerge-official-fixtures
+test-automerge-official-fixtures: generate-automerge-official-fixtures
+test-automerge-official-fixtures: ## Replay official benchmark-battery documents through Rust and Go
+	AUTOMERGE_OFFICIAL_BATTERY_FIXTURES=$(AUTOMERGE_BATTERY_FIXTURES) \
+		$(GO_BASE) test -count=1 -run '^TestOfficialBenchmarkBatteryFixtures$$' \
+		./pkg/automerge
+
+.PHONY: generate-automerge-collaboration-fixtures
+generate-automerge-collaboration-fixtures: ## Regenerate automerge-repo protocol fixtures from the pinned JS packages
+	$(NODE) packages/automerge-conformance/generate-collaboration-fixtures.mjs
+
+.PHONY: test-automerge-repo-interop
+test-automerge-repo-interop: ## Sync a real automerge-repo JS client against the Go gateway
+	AUTOMERGE_REPO_INTEROP_CLIENT=$(CURDIR)/packages/automerge-conformance/collaboration-interop-client.mjs \
+		$(GO_BASE) test -count=1 -run '^TestInterop_' ./pkg/automerge/collaboration
+
+.PHONY: benchmark-prosemirror
+benchmark-prosemirror: ## Benchmark Go rendering and the frontend ProseMirror bridge
+	$(GO_BASE) test -run '^$$' -bench '^BenchmarkRender$$' -benchmem \
+		./pkg/automerge/prosemirror
+	$(NPX) vitest bench --run --root packages/ui \
+		src/RichEditor/prosemirrorBridge.bench.ts
+
+.PHONY: fuzz-automerge
+fuzz-automerge: ## Fuzz Automerge public, wire, sync, and projection surfaces
+	$(GO_BASE) test -run '^$$' -fuzz '^FuzzLoad$$' -fuzztime=$(AUTOMERGE_FUZZ_TIME) ./pkg/automerge
+	$(GO_BASE) test -run '^$$' -fuzz '^FuzzCoreOperations$$' -fuzztime=$(AUTOMERGE_FUZZ_TIME) ./pkg/automerge
+	$(GO_BASE) test -run '^$$' -fuzz '^FuzzDecode$$' -fuzztime=$(AUTOMERGE_FUZZ_TIME) ./pkg/automerge/internal/core
+	$(GO_BASE) test -run '^$$' -fuzz '^FuzzParseSyncMessage$$' -fuzztime=$(AUTOMERGE_FUZZ_TIME) ./pkg/automerge/internal/core
+	$(GO_BASE) test -run '^$$' -fuzz '^FuzzRender$$' -fuzztime=$(AUTOMERGE_FUZZ_TIME) ./pkg/automerge/prosemirror
+	$(GO_BASE) test -run '^$$' -fuzz '^FuzzDecodePresence$$' -fuzztime=$(AUTOMERGE_FUZZ_TIME) ./pkg/automerge/collaboration
+	$(GO_BASE) test -run '^$$' -fuzz '^FuzzDecodeMessage$$' -fuzztime=$(AUTOMERGE_FUZZ_TIME) ./pkg/automerge/collaboration
 
 .PHONY: coverage-report
 coverage-report: test ## Generate HTML coverage report
@@ -160,24 +347,44 @@ test-bench: TEST_FLAGS+=-bench=.
 test-bench: test ## Run benchmark tests
 
 .PHONY: test-e2e
-test-e2e: CGO_ENABLED=1
-test-e2e: $(PROBOD_BIN) ## Run console e2e tests
-	PROBO_E2E_BINARY=$(CURDIR)/$(PROBOD_BIN) \
-	PROBO_E2E_CONFIG=$(E2E_CONFIG) \
-	GOTESTSUM_FORMAT=testname $(GO_TEST) -count=1 ./e2e/console/...
+test-e2e: $(PROBOD_BIN) bin/prb ## Run console e2e tests
+	$(MAKE) test-e2e-run E2E_BINARY=$(E2E_BINARY)
 
-bin/probod-coverage:
-	CGO_ENABLED=0 $(GO_BUILD) $(PROBOD_LDFLAGS) -cover -o $@ $(PROBOD_SRC)
+.PHONY: test-e2e-run
+test-e2e-run: CGO_ENABLED=1
+test-e2e-run:
+	PROBO_E2E_BINARY=$(or $(E2E_BINARY),$(CURDIR)/$(PROBOD_BIN)) \
+	PROBO_E2E_PRB=$(CURDIR)/$(PRB_BIN) \
+	PROBO_E2E_CONFIG=$(E2E_CONFIG) \
+	GOTESTSUM_FORMAT=testname $(GO_BASE) tool gotestsum -- $(E2E_TEST_FLAGS) -count=1 ./e2e/internal/... ./e2e/console/...
+
+.PHONY: bin/probod-coverage
+bin/probod-coverage: CGO_ENABLED=0
+bin/probod-coverage: generate embed
+	$(GO_BUILD) $(PROBOD_LDFLAGS) -cover -covermode=atomic -o $@ $(PROBOD_SRC)
 
 .PHONY: test-e2e-coverage
-test-e2e-coverage: bin/probod-coverage ## Run e2e tests with coverage
+test-e2e-coverage: bin/probod-coverage bin/prb ## Run e2e tests with coverage
+	$(MAKE) test-e2e-coverage-run E2E_BINARY=$(E2E_BINARY)
+
+.PHONY: test-e2e-coverage-run
+test-e2e-coverage-run: CGO_ENABLED=1
+test-e2e-coverage-run:
 	@$(RM) -rf $(E2E_COVER_DIR) && $(MKDIR) -p $(E2E_COVER_DIR)
-	PROBO_E2E_BINARY=$(CURDIR)/bin/probod-coverage \
+	PROBO_E2E_BINARY=$(or $(E2E_BINARY),$(E2E_COVERAGE_BINARY)) \
+	PROBO_E2E_PRB=$(CURDIR)/$(PRB_BIN) \
 	PROBO_E2E_COVERDIR=$(E2E_COVER_DIR) \
 	PROBO_E2E_CONFIG=$(E2E_CONFIG) \
-	CGO_ENABLED=1 $(GO) test -count=1 -v ./e2e/console/...
+	GOTESTSUM_FORMAT=testname $(GO_BASE) tool gotestsum -- $(E2E_TEST_FLAGS) -p=1 -count=1 ./e2e/internal/... ./e2e/console/... ./e2e/mcp/...
 	$(GO) tool covdata textfmt -i=$(E2E_COVER_DIR) -o=coverage-e2e.out
+	$(GO) tool covdata textfmt -i=$(E2E_COVER_DIR) -pkg=$(E2E_CORE_COVER_PKGS) -o=coverage-e2e-core.out
+	$(GO) tool covdata percent -i=$(E2E_COVER_DIR) > coverage-e2e-packages.txt
+	$(GO) tool cover -func=coverage-e2e.out > coverage-e2e.txt
+	$(GO) tool cover -func=coverage-e2e-core.out > coverage-e2e-core.txt
 	$(GO) tool cover -html=coverage-e2e.out -o=coverage-e2e.html
+	$(GO) tool cover -html=coverage-e2e-core.out -o=coverage-e2e-core.html
+	$(CAT) coverage-e2e.txt
+	$(CAT) coverage-e2e-core.txt
 
 .PHONY: coverage-combined
 coverage-combined: coverage-report test-e2e-coverage ## Generate combined coverage report (unit + e2e)
@@ -186,10 +393,12 @@ coverage-combined: coverage-report test-e2e-coverage ## Generate combined covera
 	$(GO) tool cover -html=coverage-combined.out -o=coverage-combined.html
 
 .PHONY: build
-build: $(PROBOD_BIN) bin/prb bin/probod-bootstrap bin/proboctl $(PROBO_AGENT_BIN)
+build: $(PROBOD_BIN) bin/prb bin/probod-bootstrap bin/proboctl $(PROBO_AGENT_BINS)
 
-CFG_DEV_OAUTH2_KEY = cfg/.dev-oauth2-signing-key.pem
-DEV_ENV            = .env
+CFG_DEV_OAUTH2_KEY       = cfg/.dev-oauth2-signing-key.pem
+CFG_DEV_IDENTITY_FEDERATION_KEY   = cfg/.dev-identity-federation-signing-key.pem
+CFG_DEV_ACME_ACCOUNT_KEY = cfg/.dev-acme-account-key.pem
+DEV_ENV                  = .env
 
 .PHONY: dev-config
 dev-config: cfg/dev.yaml ## Generate cfg/dev.yaml via probod-bootstrap (picks up edits to .env)
@@ -198,7 +407,19 @@ $(CFG_DEV_OAUTH2_KEY):
 	@$(MKDIR) $(@D)
 	$(OPENSSL) genrsa -out $@ 2048
 
-cfg/dev.yaml: bin/probod-bootstrap $(CFG_DEV_OAUTH2_KEY) compose/pebble/certs/rootCA.pem $(wildcard $(DEV_ENV))
+# The identity federation issuer signs with its own key so that rotating the OAuth2 key
+# cannot break customer cloud access.
+$(CFG_DEV_IDENTITY_FEDERATION_KEY):
+	@$(MKDIR) $(@D)
+	$(OPENSSL) genrsa -out $@ 2048
+
+# Stable ACME account key for local step-ca. Without this, each probod restart
+# registers a new account and orphaned in-flight orders return 401 unauthorized.
+$(CFG_DEV_ACME_ACCOUNT_KEY):
+	@$(MKDIR) $(@D)
+	$(OPENSSL) ecparam -name prime256v1 -genkey -noout -out $@
+
+cfg/dev.yaml: bin/probod-bootstrap $(CFG_DEV_OAUTH2_KEY) $(CFG_DEV_IDENTITY_FEDERATION_KEY) $(CFG_DEV_ACME_ACCOUNT_KEY) compose/step-ca/certs/root_ca.crt $(wildcard $(DEV_ENV))
 	@$(MKDIR) $(@D)
 	set -a; \
 	PROBOD_BASE_URL=http://localhost:8080; \
@@ -210,13 +431,17 @@ cfg/dev.yaml: bin/probod-bootstrap $(CFG_DEV_OAUTH2_KEY) compose/pebble/certs/ro
 	PROBOD_AUTH_PASSWORD_PEPPER="this-is-a-secure-pepper-for-password-hashing-at-least-32-bytes"; \
 	PROBOD_AUTH_COOKIE_SECURE=false; \
 	PROBOD_OAUTH2_SERVER_SIGNING_KEY="$$($(CAT) $(CFG_DEV_OAUTH2_KEY))"; \
-	PROBOD_API_CORS_ALLOWED_ORIGINS="http://localhost:8080,http://localhost:5173,http://localhost:5174"; \
+	PROBOD_IDENTITY_FEDERATION_ENABLED=true; \
+	PROBOD_IDENTITY_FEDERATION_SIGNING_KEY="$$($(CAT) $(CFG_DEV_IDENTITY_FEDERATION_KEY))"; \
+	PROBOD_API_CORS_ALLOWED_ORIGINS="http://localhost:8080,http://localhost:5173,http://localhost:5174,http://localhost:5175"; \
 	PROBOD_PG_ADDR=localhost:5432; \
 	PROBOD_PG_USERNAME=postgres; \
 	PROBOD_PG_PASSWORD=postgres; \
 	PROBOD_PG_DATABASE=probod; \
 	PROBOD_TRUST_CENTER_HTTP_ADDR=:10080; \
-	PROBOD_TRUST_CENTER_HTTPS_ADDR=:10443; \
+	PROBOD_TRUST_CENTER_HTTPS_ADDR=:443; \
+	PROBOD_TRUST_CENTER_BASE_DOMAIN=probopage.localhost; \
+	PROBOD_TRUST_CENTER_TLS_MODE=direct; \
 	PROBOD_AWS_REGION=us-east-1; \
 	PROBOD_AWS_BUCKET=probod; \
 	PROBOD_AWS_ACCESS_KEY_ID=probod; \
@@ -229,9 +454,11 @@ cfg/dev.yaml: bin/probod-bootstrap $(CFG_DEV_OAUTH2_KEY) compose/pebble/certs/ro
 	PROBOD_AGENT_THIRD_PARTY_VETTER_PROVIDER=openai; \
 	PROBOD_AGENT_THIRD_PARTY_VETTER_MODEL_NAME=gpt-4o; \
 	PROBOD_CHROME_DP_ADDR=localhost:9222; \
-	PROBOD_ACME_DIRECTORY=https://localhost:14000/dir; \
+	PROBOD_ACME_DIRECTORY=https://localhost:9000/acme/acme/directory; \
 	PROBOD_ACME_EMAIL=admin@probo.com; \
-	PROBOD_ACME_ROOT_CA="$$($(CAT) compose/pebble/certs/rootCA.pem)"; \
+	PROBOD_ACME_KEY_TYPE=EC256; \
+	PROBOD_ACME_ACCOUNT_KEY="$$($(CAT) $(CFG_DEV_ACME_ACCOUNT_KEY))"; \
+	PROBOD_ACME_ROOT_CA="$$($(CAT) compose/step-ca/certs/root_ca.crt)"; \
 	if [ -f $(DEV_ENV) ]; then . $(DEV_ENV); fi; \
 	set +a; \
 	./bin/probod-bootstrap -output $@
@@ -290,8 +517,16 @@ bin/proboctl:
 	$(GO_BUILD) $(PROBOCTL_LDFLAGS) -o $(PROBOCTL_BIN) $(PROBOCTL_SRC)
 
 .PHONY: $(PROBO_AGENT_BIN)
+$(PROBO_AGENT_BIN): CGO_ENABLED=$(PROBO_AGENT_CGO)
 $(PROBO_AGENT_BIN):
 	$(GO_BUILD) $(PROBO_AGENT_LDFLAGS) -o $(PROBO_AGENT_BIN) $(PROBO_AGENT_SRC)
+
+ifneq ($(PROBO_AGENT_GUI_BIN),)
+.PHONY: $(PROBO_AGENT_GUI_BIN)
+$(PROBO_AGENT_GUI_BIN): CGO_ENABLED=0
+$(PROBO_AGENT_GUI_BIN):
+	$(GO_BUILD) $(PROBO_AGENT_GUI_LDFLAGS) -o $(PROBO_AGENT_GUI_BIN) $(PROBO_AGENT_SRC)
+endif
 
 .PHONY: @probo/emails
 @probo/emails:
@@ -300,7 +535,7 @@ $(PROBO_AGENT_BIN):
 RELAY_SCHEMAS = \
 	pkg/server/api/connect/v1/schema.graphql \
 	pkg/server/api/console/v1/schema.graphql \
-	pkg/server/api/trust/v1/schema.graphql
+	pkg/server/api/complianceportal/v1/schema.graphql
 
 .PHONY: relay
 relay: $(RELAY_SCHEMAS)
@@ -310,16 +545,16 @@ MERGE_GRAPHQL = contrib/merge-graphql-schema.sh
 
 CONNECT_GQL = $(wildcard pkg/server/api/connect/v1/graphql/*.graphql)
 CONSOLE_GQL = $(wildcard pkg/server/api/console/v1/graphql/*.graphql)
-TRUST_GQL   = $(wildcard pkg/server/api/trust/v1/graphql/*.graphql)
+COMPLIANCEPORTAL_GQL = $(wildcard pkg/server/api/complianceportal/v1/graphql/*.graphql)
 
-pkg/server/api/connect/v1/schema.graphql: pkg/server/api/connect/v1/graphql $(CONNECT_GQL)
+pkg/server/api/connect/v1/schema.graphql: pkg/server/api/connect/v1/graphql $(CONNECT_GQL) $(MERGE_GRAPHQL)
 	$(MERGE_GRAPHQL) $@ pkg/server/api/connect/v1/graphql
 
-pkg/server/api/console/v1/schema.graphql: pkg/server/api/console/v1/graphql $(CONSOLE_GQL)
+pkg/server/api/console/v1/schema.graphql: pkg/server/api/console/v1/graphql $(CONSOLE_GQL) $(MERGE_GRAPHQL)
 	$(MERGE_GRAPHQL) $@ pkg/server/api/console/v1/graphql
 
-pkg/server/api/trust/v1/schema.graphql: pkg/server/api/trust/v1/graphql $(TRUST_GQL)
-	$(MERGE_GRAPHQL) $@ pkg/server/api/trust/v1/graphql
+pkg/server/api/complianceportal/v1/schema.graphql: pkg/server/api/complianceportal/v1/graphql $(COMPLIANCEPORTAL_GQL) $(MERGE_GRAPHQL)
+	$(MERGE_GRAPHQL) $@ pkg/server/api/complianceportal/v1/graphql
 
 .PHONY: @probo/console
 @probo/console: NODE_ENV=production
@@ -327,14 +562,32 @@ pkg/server/api/trust/v1/schema.graphql: pkg/server/api/trust/v1/graphql $(TRUST_
 	$(NPM) --workspace $@ run check
 	$(NPM) --workspace $@ run build
 
-.PHONY: @probo/trust
-@probo/trust: NODE_ENV=production
-@probo/trust: relay
+.PHONY: @probo/compliance-portal
+@probo/compliance-portal: NODE_ENV=production
+@probo/compliance-portal: relay
+	$(NPM) --workspace $@ run check
+	$(NPM) --workspace $@ run build
+
+.PHONY: @probo/employee-portal
+@probo/employee-portal: NODE_ENV=production
+@probo/employee-portal: relay
 	$(NPM) --workspace $@ run check
 	$(NPM) --workspace $@ run build
 
 .PHONY: generate
 generate: $(GENERATED)
+
+.PHONY: generate-automerge-reference
+generate-automerge-reference: ## Rebuild the internal Automerge WASM test oracle
+	cd $(AUTOMERGE_REFERENCE_DIR)/wasm && \
+		CARGO_TARGET_DIR=target $(CARGO) +$(RUST_TOOLCHAIN) build --locked --release --target wasm32-wasip1
+	$(CP) $(AUTOMERGE_REFERENCE_DIR)/wasm/target/wasm32-wasip1/release/probo_automerge_reference.wasm $(AUTOMERGE_REFERENCE_WASM)
+	cd $(AUTOMERGE_REFERENCE_DIR) && $(SHA256SUM) reference.wasm > reference.wasm.sha256
+
+.PHONY: audit-automerge-reference
+audit-automerge-reference: ## Audit Automerge Rust advisories, licenses, bans, and sources
+	cd $(AUTOMERGE_REFERENCE_DIR)/wasm && \
+		$(CARGO) +$(RUST_TOOLCHAIN) deny check
 
 .PHONY: embed
 embed: $(EMBEDDED)
@@ -346,12 +599,12 @@ pkg/server/api/connect/v1/types/types.go: pkg/server/api/connect/v1/gqlgen.yaml 
 # gqlgen instances must run sequentially: parallel runs race on the Go build
 # cache and cause gqlgen's Rewriter.getSource() to panic with empty source.
 pkg/server/api/console/v1/schema/schema.go \
-pkg/server/api/console/v1/types/types.go: pkg/server/api/console/v1/gqlgen.yaml pkg/server/api/console/v1/graphql $(CONSOLE_GQL) | pkg/server/api/connect/v1/types/types.go
+pkg/server/api/console/v1/types/types.go: pkg/server/api/console/v1/gqlgen.yaml pkg/server/api/console/v1/graphql $(CONSOLE_GQL) | pkg/server/api/connect/v1/types/types.go apps/console/dist/index.html
 	$(GO_GENERATE) ./pkg/server/api/console/v1
 
-pkg/server/api/trust/v1/schema/schema.go \
-pkg/server/api/trust/v1/types/types.go: pkg/server/api/trust/v1/gqlgen.yaml pkg/server/api/trust/v1/graphql $(TRUST_GQL) | pkg/server/api/console/v1/types/types.go
-	$(GO_GENERATE) ./pkg/server/api/trust/v1
+pkg/server/api/complianceportal/v1/schema/schema.go \
+pkg/server/api/complianceportal/v1/types/types.go: pkg/server/api/complianceportal/v1/gqlgen.yaml pkg/server/api/complianceportal/v1/graphql $(COMPLIANCEPORTAL_GQL) | pkg/server/api/console/v1/types/types.go pkg/server/api/mcp/v1/types/types.go apps/compliance-portal/dist/index.html
+	$(GO_GENERATE) ./pkg/server/api/complianceportal/v1
 
 pkg/server/api/mcp/v1/server/server.go \
 pkg/server/api/mcp/v1/types/types.go: pkg/server/api/mcp/v1/specification.yaml pkg/server/api/mcp/v1/mcpgen.yaml
@@ -381,26 +634,42 @@ fmt: fmt-go ## Format Go code
 fmt-go: ## Format Go code
 	go fmt ./...
 
+.PHONY: fmt-swift
+fmt-swift: ## Format Swift enroll-ui sources
+	@command -v $(SWIFTCMD) >/dev/null 2>&1 || { echo "error: '$(SWIFTCMD)' not found; install the Swift toolchain (Xcode on macOS)"; exit 1; }
+	$(SWIFTCMD) format --configuration $(SWIFT_FORMAT_CONFIG) --in-place --parallel $(swift_sources)
+	@if command -v $(SWIFTLINTCMD) >/dev/null 2>&1; then \
+		$(SWIFTLINTCMD) lint --fix --config $(SWIFTLINT_CONFIG) --cache-path .cache/swiftlint; \
+	fi
+
+.PHONY: fmt-shell
+fmt-shell: ## Format first-party shell scripts with shfmt
+	@if [ -z "$(SHELL_SCRIPTS)" ]; then \
+		echo "error: no shell scripts found"; \
+		exit 1; \
+	fi
+	$(SHFMTCMD) -w $(SHFMTFLAGS) $(SHELL_SCRIPTS)
+
 .PHONY: clean
 clean: ## Clean the project (node_modules and build artifacts)
 	$(RM) -rf bin/*
 	$(RM) -rf node_modules
-	$(RM) -rf apps/{console,trust}/{dist,node_modules}
+	$(RM) -rf apps/{console,compliance-portal,employee-portal}/{dist,node_modules}
 	$(RM) -rf packages/emails/{dist,node_modules}
 	$(RM) -rf sbom-docker.json sbom.json
-	$(RM) -rf coverage.out coverage.html coverage-e2e.out coverage-e2e.html coverage-combined.out coverage-combined.html
+	$(RM) -rf coverage.out coverage.html coverage-e2e.out coverage-e2e.txt coverage-e2e.html coverage-e2e-core.out coverage-e2e-core.txt coverage-e2e-core.html coverage-e2e-packages.txt coverage-combined.out coverage-combined.html
 	$(RM) -rf coverage/
 	$(RM) -rf compose/keycloak/certs/cert.pem compose/keycloak/certs/private-key.pem compose/keycloak/probo-realm.json
 	$(RM) -f pkg/server/api/connect/v1/schema/schema.go pkg/server/api/connect/v1/types/types.go
 	$(RM) -f pkg/server/api/console/v1/schema/schema.go pkg/server/api/console/v1/types/types.go
-	$(RM) -f pkg/server/api/trust/v1/schema/schema.go pkg/server/api/trust/v1/types/types.go
+	$(RM) -f pkg/server/api/complianceportal/v1/schema/schema.go pkg/server/api/complianceportal/v1/types/types.go
 	$(RM) -f pkg/server/api/mcp/v1/server/server.go pkg/server/api/mcp/v1/types/types.go
 	$(RM) -f $(RELAY_SCHEMAS)
 	$(RM) -f pkg/llm/registry_gen.go
 	find apps -type d -name __generated__ -exec $(RM) -rf {} +
 
 .PHONY: stack-up
-stack-up: compose/pebble/certs/rootCA.pem compose/keycloak/probo-realm.json ## Start the docker stack as a deamon
+stack-up: compose/step-ca/certs/root_ca.crt compose/keycloak/probo-realm.json ## Start the docker stack as a deamon
 	$(DOCKER_COMPOSE) up -d
 
 .PHONY: stack-down
@@ -415,13 +684,21 @@ stack-ps: ## List the docker stack containers
 psql: ## Open a psql shell to the postgres container
 	$(DOCKER_COMPOSE) exec postgres psql -U probod -d probod
 
-compose/pebble/certs/rootCA.pem:
-	@$(MKDIR) compose/pebble/certs
-	$(MKCERT) -cert-file compose/pebble/certs/pebble.crt \
-		-key-file compose/pebble/certs/pebble.key \
-		localhost 127.0.0.1 ::1 pebble
-	$(CP) "$$($(MKCERT) -CAROOT)/rootCA.pem" compose/pebble/certs/rootCA.pem
-	$(CP) "$$($(MKCERT) -CAROOT)/rootCA-key.pem" compose/pebble/certs/rootCA-key.pem
+compose/step-ca/certs/root_ca.crt:
+	# step-ca runs as UID 1000 and creates 0700 dirs. On Linux CI the host
+	# user cannot traverse them, so `-f` never sees root_ca.crt and a host
+	# chmod cannot fix ownership. Open perms from inside the container.
+	@$(MKDIR) compose/step-ca
+	@chmod a+rwx compose/step-ca
+	$(DOCKER_COMPOSE) up -d acme-http-01-proxy step-ca
+	@i=0; \
+	while [ ! -f $@ ] && [ $$i -lt 60 ]; do \
+		$(DOCKER_COMPOSE) exec -T -u 0 step-ca chmod -R a+rX /home/step 2>/dev/null || true; \
+		sleep 1; \
+		i=$$((i + 1)); \
+	done
+	@test -f $@ || ($(DOCKER_COMPOSE) logs step-ca >&2; echo "step-ca root CA not ready" >&2; exit 1)
+	@$(DOCKER_COMPOSE) exec -T -u 0 step-ca chmod -R a+rX /home/step
 
 compose/keycloak/certs/cert.pem:
 	$(MKDIR) ./compose/keycloak/certs
@@ -433,7 +710,7 @@ compose/keycloak/probo-realm.json: compose/keycloak/probo-realm.json.tmpl compos
 	-e "s|PRIVATE_KEY_PLACEHOLDER|$$(awk 'NR==1 {printf "%s", $$0; next} {printf "\\\\n%s", $$0}' compose/keycloak/certs/private-key.pem)|g" \
 	$@.tmpl > $@
 
-apps/console/dist/index.html apps/trust/dist/index.html:
+apps/console/dist/index.html apps/compliance-portal/dist/index.html apps/employee-portal/dist/index.html:
 	$(MKDIR) $(dir $@)
 	$(ECHO) dev-server > $@
 

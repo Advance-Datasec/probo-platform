@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
@@ -58,11 +64,13 @@ var ViewerPolicy = policy.NewPolicy(
 		ActionThirdPartyRelationList,
 		ActionFrameworkGet, ActionFrameworkList,
 		ActionControlGet, ActionControlList,
-		ActionMeasureGet, ActionMeasureList,
-		ActionTaskGet, ActionTaskList,
+		ActionInternalControlGet, ActionInternalControlList,
 		ActionEvidenceList,
-		ActionDocumentGet, ActionDocumentList,
+		ActionDocumentGet, ActionDocumentList, ActionDocumentComment,
+		ActionDocumentCommentUpdate, ActionDocumentCommentDelete,
+		ActionDocumentCommentResolve, ActionDocumentSuggest,
 		ActionDocumentVersionGet, ActionDocumentVersionList,
+		ActionDocumentRevisionGet, ActionDocumentRevisionList,
 		ActionDocumentVersionSignatureGet, ActionDocumentVersionSignatureList,
 		ActionDocumentVersionApprovalList,
 		ActionElectronicSignatureGet,
@@ -73,11 +81,13 @@ var ViewerPolicy = policy.NewPolicy(
 		ActionReportGet, ActionReportGetReportUrl, ActionReportDownloadUrlGet,
 		ActionFindingGet, ActionFindingList,
 		ActionObligationGet, ActionObligationList,
+		ActionBusinessFunctionGet, ActionBusinessFunctionList,
+		ActionAiSystemGet, ActionAiSystemList,
 		ActionProcessingActivityGet, ActionProcessingActivityList,
 		ActionDataProtectionImpactAssessmentGet, ActionDataProtectionImpactAssessmentList,
 		ActionTransferImpactAssessmentGet, ActionTransferImpactAssessmentList,
 		ActionFileGet,
-		ActionSlackConnectionList, ActionConnectorList,
+		ActionSlackConnectionList, ActionConnectorList, ActionConnectorGet,
 		ActionRightsRequestGet, ActionRightsRequestList,
 		ActionStatementOfApplicabilityGet, ActionStatementOfApplicabilityList,
 		ActionApplicabilityStatementGet, ActionApplicabilityStatementList,
@@ -87,25 +97,10 @@ var ViewerPolicy = policy.NewPolicy(
 		ActionCookieCategoryGet, ActionCookieCategoryList,
 		ActionCookieGet, ActionCookieList,
 		ActionCookieConsentRecordList,
-		ActionRiskAssessmentGet, ActionRiskAssessmentList,
-		ActionRiskAssessmentScopeGet, ActionRiskAssessmentScopeList,
-		ActionRiskAssessmentNodeGet, ActionRiskAssessmentNodeList,
-		ActionRiskAssessmentBoundaryGet, ActionRiskAssessmentBoundaryList,
-		ActionRiskAssessmentProcessGet, ActionRiskAssessmentProcessList,
-		ActionRiskAssessmentThreatGet, ActionRiskAssessmentThreatList,
-		ActionRiskAssessmentScenarioGet, ActionRiskAssessmentScenarioList,
+		ActionTrackerPatternGet, ActionTrackerPatternList,
+		ActionTrackerResourceGet, ActionTrackerResourceList,
 	).WithSID("entity-read-access").When(organizationCondition),
 
-	policy.Allow(
-		ActionTrustCenterGet,
-		ActionTrustCenterAccessGet, ActionTrustCenterAccessList,
-		ActionTrustCenterDocumentAccessList,
-		ActionTrustCenterFileGet, ActionTrustCenterFileList, ActionTrustCenterFileGetFileUrl,
-		ActionTrustCenterReferenceList, ActionTrustCenterReferenceGetLogoUrl,
-		ActionComplianceFrameworkList,
-	).WithSID("trust-center-read-access").When(organizationCondition),
-
-	policy.Allow(ActionCustomDomainGet).WithSID("custom-domain-read").When(organizationCondition),
 	policy.Allow(ActionOrganizationContextGet).WithSID("organization-context-read").When(organizationCondition),
 	policy.Allow(
 		ActionDocumentVersionExportPDF, ActionDocumentVersionSign,
@@ -144,10 +139,13 @@ var AuditorPolicy = policy.NewPolicy(
 		ActionThirdPartyRelationList,
 		ActionFrameworkGet, ActionFrameworkList,
 		ActionControlGet, ActionControlList,
-		ActionMeasureGet, ActionMeasureList,
+		ActionInternalControlGet, ActionInternalControlList,
 		ActionEvidenceList,
-		ActionDocumentGet, ActionDocumentList,
+		ActionDocumentGet, ActionDocumentList, ActionDocumentComment,
+		ActionDocumentCommentUpdate, ActionDocumentCommentDelete,
+		ActionDocumentCommentResolve, ActionDocumentSuggest,
 		ActionDocumentVersionGet, ActionDocumentVersionList,
+		ActionDocumentRevisionGet, ActionDocumentRevisionList,
 		ActionDocumentVersionSignatureGet, ActionDocumentVersionSignatureList,
 		ActionDocumentVersionApprovalList,
 		ActionElectronicSignatureGet,
@@ -158,19 +156,14 @@ var AuditorPolicy = policy.NewPolicy(
 		ActionReportGet, ActionReportGetReportUrl, ActionReportDownloadUrlGet,
 		ActionFindingGet, ActionFindingList,
 		ActionObligationGet, ActionObligationList,
+		ActionBusinessFunctionGet, ActionBusinessFunctionList,
+		ActionAiSystemGet, ActionAiSystemList,
 		ActionProcessingActivityGet, ActionProcessingActivityList,
 		ActionDataProtectionImpactAssessmentGet, ActionDataProtectionImpactAssessmentList,
 		ActionTransferImpactAssessmentGet, ActionTransferImpactAssessmentList,
 		ActionFileGet,
 		ActionStatementOfApplicabilityGet, ActionStatementOfApplicabilityList,
 		ActionApplicabilityStatementGet, ActionApplicabilityStatementList,
-		ActionRiskAssessmentGet, ActionRiskAssessmentList,
-		ActionRiskAssessmentScopeGet, ActionRiskAssessmentScopeList,
-		ActionRiskAssessmentNodeGet, ActionRiskAssessmentNodeList,
-		ActionRiskAssessmentBoundaryGet, ActionRiskAssessmentBoundaryList,
-		ActionRiskAssessmentProcessGet, ActionRiskAssessmentProcessList,
-		ActionRiskAssessmentThreatGet, ActionRiskAssessmentThreatList,
-		ActionRiskAssessmentScenarioGet, ActionRiskAssessmentScenarioList,
 	).WithSID("entity-read-access").When(organizationCondition),
 
 	policy.Allow(
@@ -195,6 +188,18 @@ var CommonThirdPartyCatalogPolicy = policy.NewPolicy(
 		ActionCommonThirdPartyList,
 	).WithSID("read-common-third-party-catalog"),
 ).WithDescription("Allows every authenticated user to read the global common third-party catalog")
+
+// CommonGVLVendorCatalogPolicy grants every authenticated identity
+// read access to the global IAB GVL vendor catalog. The catalog is
+// shared across all tenants and has no organization scoping, so the
+// allow has no condition.
+var CommonGVLVendorCatalogPolicy = policy.NewPolicy(
+	"probo:common-gvl-vendor-catalog",
+	"Probo Common GVL Vendor Catalog",
+	policy.Allow(
+		ActionCommonGVLVendorList,
+	).WithSID("read-common-gvl-vendor-catalog"),
+).WithDescription("Allows every authenticated user to read the global IAB GVL vendor catalog")
 
 // EmployeePolicy defines permissions for employee role.
 var EmployeePolicy = policy.NewPolicy(
@@ -221,6 +226,78 @@ var EmployeePolicy = policy.NewPolicy(
 	).WithSID("document-version-approval").When(organizationCondition),
 ).WithDescription("Employee access - can sign documents, approve documents, and view internal content")
 
+// CompliancePortalManagerPolicy defines permissions needed to manage the
+// compliance portal and toggle portal visibility on related core entities.
+var CompliancePortalManagerPolicy = policy.NewPolicy(
+	"probo:compliance-portal-manager",
+	"Probo Compliance Portal Manager",
+	policy.Allow(
+		ActionOrganizationGet,
+		ActionOrganizationGetLogoUrl,
+		ActionOrganizationGetHorizontalLogoUrl,
+	).WithSID("org-read-access").When(organizationCondition),
+
+	policy.Allow(
+		ActionDocumentGet, ActionDocumentList, ActionDocumentUpdate,
+		ActionFileUpload,
+		ActionDocumentVersionGet, ActionDocumentVersionList,
+		ActionAuditGet, ActionAuditList, ActionAuditUpdate,
+		ActionAuditFrameworkMappingCreate, ActionAuditFrameworkMappingDelete,
+		ActionReportGet, ActionReportGetReportUrl, ActionReportDownloadUrlGet,
+		ActionFrameworkGet, ActionFrameworkList,
+		ActionThirdPartyGet, ActionThirdPartyList, ActionThirdPartyUpdate,
+		ActionFileGet,
+		ActionElectronicSignatureGet,
+		ActionSlackConnectionList, ActionConnectorList, ActionConnectorGet,
+		ActionConnectorInitiate, ActionConnectorDelete,
+	).WithSID("compliance-portal-related-access").When(organizationCondition),
+
+	policy.Allow(
+		ActionEmployeeDocumentGet, ActionEmployeeDocumentList,
+		ActionEmployeeDocumentVersionExportPDF,
+	).WithSID("employee-document-access").When(organizationCondition),
+
+	policy.Allow(
+		ActionDocumentVersionSign,
+	).WithSID("document-version-signing").When(organizationCondition),
+).WithDescription("Access required to manage the compliance portal, sign employee policies, and toggle related entity visibility")
+
+// CompliancePortalAccessManagerPolicy defines permissions needed to review and
+// approve compliance portal visitor access requests.
+//
+// Related document, audit, report, and file reads are intentionally
+// organization-scoped: access requests reference those entities by ID, and the
+// authorizer has no request-entitlement condition yet. Callers still only load
+// the IDs attached to requests they can list.
+var CompliancePortalAccessManagerPolicy = policy.NewPolicy(
+	"probo:compliance-portal-access-manager",
+	"Probo Compliance Portal Access Manager",
+	policy.Allow(
+		ActionOrganizationGet,
+		ActionOrganizationGetLogoUrl,
+		ActionOrganizationGetHorizontalLogoUrl,
+	).WithSID("org-read-access").When(organizationCondition),
+
+	policy.Allow(
+		ActionDocumentGet,
+		ActionDocumentVersionGet, ActionDocumentVersionList,
+		ActionAuditGet,
+		ActionReportGet, ActionReportGetReportUrl, ActionReportDownloadUrlGet,
+		ActionFrameworkGet,
+		ActionFileGet,
+		ActionElectronicSignatureGet,
+	).WithSID("compliance-portal-access-related").When(organizationCondition),
+
+	policy.Allow(
+		ActionEmployeeDocumentGet, ActionEmployeeDocumentList,
+		ActionEmployeeDocumentVersionExportPDF,
+	).WithSID("employee-document-access").When(organizationCondition),
+
+	policy.Allow(
+		ActionDocumentVersionSign,
+	).WithSID("document-version-signing").When(organizationCondition),
+).WithDescription("Organization-scoped read of entities that portal access requests may reference, plus employee policy signing")
+
 // ProboPolicySet returns the PolicySet for the probo service.
 func ProboPolicySet() *iam.PolicySet {
 	return iam.NewPolicySet().
@@ -229,5 +306,8 @@ func ProboPolicySet() *iam.PolicySet {
 		AddRolePolicy("VIEWER", ViewerPolicy).
 		AddRolePolicy("AUDITOR", AuditorPolicy).
 		AddRolePolicy("EMPLOYEE", EmployeePolicy).
-		AddIdentityScopedPolicy(CommonThirdPartyCatalogPolicy)
+		AddRolePolicy("COMPLIANCE_PORTAL_MANAGER", CompliancePortalManagerPolicy).
+		AddRolePolicy("COMPLIANCE_PORTAL_ACCESS_MANAGER", CompliancePortalAccessManagerPolicy).
+		AddIdentityScopedPolicy(CommonThirdPartyCatalogPolicy).
+		AddIdentityScopedPolicy(CommonGVLVendorCatalogPolicy)
 }

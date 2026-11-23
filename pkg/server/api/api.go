@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package api
 
@@ -26,58 +32,110 @@ import (
 	"go.gearno.de/kit/httpserver"
 	"go.gearno.de/kit/log"
 	"go.probo.inc/probo/pkg/accessreview"
-	"go.probo.inc/probo/pkg/agentrun"
+	"go.probo.inc/probo/pkg/agentexecution"
 	"go.probo.inc/probo/pkg/baseurl"
-	"go.probo.inc/probo/pkg/connector"
-	"go.probo.inc/probo/pkg/connector/provider"
+	"go.probo.inc/probo/pkg/certmanager"
+	cloudaws "go.probo.inc/probo/pkg/cloud/aws"
+	cloudazure "go.probo.inc/probo/pkg/cloud/azure"
+	cloudgcp "go.probo.inc/probo/pkg/cloud/gcp"
+	"go.probo.inc/probo/pkg/complianceportal/management"
+	"go.probo.inc/probo/pkg/complianceportal/visitor"
+	"go.probo.inc/probo/pkg/connectorprotocol"
+	"go.probo.inc/probo/pkg/connectorprotocol/provider"
 	"go.probo.inc/probo/pkg/cookiebanner"
+	employeeportalmgmt "go.probo.inc/probo/pkg/employeeportal/management"
 	"go.probo.inc/probo/pkg/esign"
 	"go.probo.inc/probo/pkg/filemanager"
 	"go.probo.inc/probo/pkg/geoloc"
 	"go.probo.inc/probo/pkg/iam"
+	"go.probo.inc/probo/pkg/identityfederation"
+	"go.probo.inc/probo/pkg/itam"
 	"go.probo.inc/probo/pkg/mailman"
+	"go.probo.inc/probo/pkg/notification"
 	"go.probo.inc/probo/pkg/probo"
+	"go.probo.inc/probo/pkg/probot"
+	slackchannel "go.probo.inc/probo/pkg/probot/channel/slack"
+	"go.probo.inc/probo/pkg/probot/identitybinding"
+	"go.probo.inc/probo/pkg/realtime"
 	"go.probo.inc/probo/pkg/resourcealias"
 	"go.probo.inc/probo/pkg/riskmanagement"
+	"go.probo.inc/probo/pkg/saferedirect"
 	"go.probo.inc/probo/pkg/securecookie"
+	agent_v1 "go.probo.inc/probo/pkg/server/api/agent/v1"
+	asana_v1 "go.probo.inc/probo/pkg/server/api/asana/v1"
+	collaboration_v1 "go.probo.inc/probo/pkg/server/api/collaboration/v1"
 	connect_v1 "go.probo.inc/probo/pkg/server/api/connect/v1"
 	console_v1 "go.probo.inc/probo/pkg/server/api/console/v1"
 	cookiebanner_v1 "go.probo.inc/probo/pkg/server/api/cookiebanner/v1"
 	files_v1 "go.probo.inc/probo/pkg/server/api/files/v1"
+	linear_v1 "go.probo.inc/probo/pkg/server/api/linear/v1"
 	mcp_v1 "go.probo.inc/probo/pkg/server/api/mcp/v1"
 	slack_v1 "go.probo.inc/probo/pkg/server/api/slack/v1"
-	trust_v1 "go.probo.inc/probo/pkg/server/api/trust/v1"
-	"go.probo.inc/probo/pkg/server/gqlutils"
+	"go.probo.inc/probo/pkg/server/gqlx"
+	"go.probo.inc/probo/pkg/server/gqlx/directives/ratelimit"
 	"go.probo.inc/probo/pkg/slack"
+	"go.probo.inc/probo/pkg/tag"
+	"go.probo.inc/probo/pkg/task"
 	"go.probo.inc/probo/pkg/thirdparty"
-	"go.probo.inc/probo/pkg/trust"
 )
 
 type (
+	BotDeliveryDestinations = console_v1.BotDeliveryDestinations
+	ComplianceMessages      = console_v1.ComplianceMessages
+
 	Config struct {
-		BaseURL           *baseurl.BaseURL
-		AllowedOrigins    []string
-		Probo             *probo.Service
-		ResourceAlias     *resourcealias.Service
-		File              *filemanager.Service
-		IAM               *iam.Service
-		Trust             *trust.Service
-		ESign             *esign.Service
-		AccessReview      *accessreview.Service
-		AgentRun          *agentrun.Service
-		Slack             *slack.Service
-		Mailman           *mailman.Service
-		CookieBanner      *cookiebanner.Service
-		Geoloc            *geoloc.Service
-		ThirdParty        *thirdparty.Service
-		RiskManagement    *riskmanagement.Service
-		Cookie            securecookie.Config
-		TokenSecret       string
-		ConnectorRegistry *connector.ConnectorRegistry
+		BaseURL                 *baseurl.BaseURL
+		AllowedOrigins          []string
+		Probo                   *probo.Service
+		CollaborationEvents     *realtime.Events
+		ShutdownContext         context.Context
+		ResourceAlias           *resourcealias.Service
+		Tag                     *tag.Service
+		File                    *filemanager.Service
+		IAM                     *iam.Service
+		Visitor                 *visitor.Service
+		ESign                   *esign.Service
+		Management              *management.Service
+		CertManager             *certmanager.Service
+		AccessReview            *accessreview.Service
+		AgentExecution          *agentexecution.Service
+		Slack                   *slack.Service
+		BotDeliveryDestinations BotDeliveryDestinations
+		ComplianceMessages      ComplianceMessages
+		Slackbot                *slackchannel.Service
+		SlackInteractiveInbox   *slackchannel.InteractiveCommandInbox
+		ProbotIdentityBindings  *identitybinding.Service
+		SlackbotInstallations   *slackchannel.InstallationService
+		ProbotCapabilities      *probot.CapabilityRegistry
+		Mailman                 *mailman.Service
+		CookieBanner            *cookiebanner.Service
+		EmployeePortal          *employeeportalmgmt.Service
+		Geoloc                  *geoloc.Service
+		ThirdParty              *thirdparty.Service
+		RiskManagement          *riskmanagement.Service
+		ITAM                    *itam.Service
+		Task                    *task.Service
+		Notification            *notification.Service
+		Cookie                  securecookie.Config
+		TokenSecret             string
+		// InstallStateKey signs the app-install state tokens the connector
+		// install ceremony carries across the vendor.
+		InstallStateKey   string
+		ConnectorRegistry *connectorprotocol.Registry
 		ProviderRegistry  *provider.Registry
 		CustomDomainCname string
-		GraphQLLimits     gqlutils.Limits
+		GraphQLLimits     gqlx.Limits
+		RateLimitDefault  ratelimit.Budget
+		RateLimits        map[string]ratelimit.Budget
 		Logger            *log.Logger
+
+		// IdentityFederationIssuer is nil when identity federation is disabled.
+		IdentityFederationIssuer *identityfederation.Issuer
+		AWSConnectorInstall      cloudaws.ConnectorInstallConfig
+		GCPConnectorInstall      cloudgcp.ConnectorInstallConfig
+		AzureConnectorInstall    cloudazure.ConnectorInstallConfig
+		LinearWebhookSecret      string
+		MCPFeedbackURL           string
 	}
 
 	MCPConfig struct {
@@ -87,22 +145,29 @@ type (
 	}
 
 	Server struct {
-		cfg                   Config
-		csrf                  *http.CrossOriginProtection
-		compliancePageHandler http.Handler
-		consoleHandler        http.Handler
-		cookieBannerHandler   http.Handler
-		filesHandler          http.Handler
-		mcpHandler            http.Handler
-		slackHandler          http.Handler
-		connectHandler        http.Handler
+		cfg                  Config
+		csrf                 *http.CrossOriginProtection
+		consoleHandler       http.Handler
+		collaborationHandler http.Handler
+		cookieBannerHandler  http.Handler
+		filesHandler         http.Handler
+		mcpHandler           http.Handler
+		slackHandler         http.Handler
+		linearHandler        http.Handler
+		asanaHandler         http.Handler
+		connectHandler       http.Handler
+		agentHandler         http.Handler
 	}
 )
 
 var (
-	ErrMissingProboService = errors.New("server configuration requires a valid probo.Service instance")
-	ErrMissingIAMService   = errors.New("server configuration requires a valid iam.Service instance")
-	ErrMissingSlackService = errors.New("server configuration requires a valid slack.Service instance")
+	ErrMissingProboService        = errors.New("server configuration requires a valid probo.Service instance")
+	ErrMissingIAMService          = errors.New("server configuration requires a valid iam.Service instance")
+	ErrMissingSlackService        = errors.New("server configuration requires a valid slack.Service instance")
+	ErrMissingITAMService         = errors.New("server configuration requires a valid itam.Service instance")
+	ErrMissingTaskService         = errors.New("server configuration requires a valid task.Service instance")
+	ErrMissingNotificationService = errors.New("server configuration requires a valid notification.Service instance")
+	ErrMissingMailmanService      = errors.New("server configuration requires a valid mailman.Service instance")
 )
 
 func methodNotAllowed(w http.ResponseWriter, r *http.Request) {
@@ -142,6 +207,22 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, ErrMissingSlackService
 	}
 
+	if cfg.ITAM == nil {
+		return nil, ErrMissingITAMService
+	}
+
+	if cfg.Task == nil {
+		return nil, ErrMissingTaskService
+	}
+
+	if cfg.Notification == nil {
+		return nil, ErrMissingNotificationService
+	}
+
+	if cfg.Mailman == nil {
+		return nil, ErrMissingMailmanService
+	}
+
 	csrf := http.NewCrossOriginProtection()
 	for _, origin := range cfg.AllowedOrigins {
 		if err := csrf.AddTrustedOrigin(origin); err != nil {
@@ -152,6 +233,14 @@ func NewServer(cfg Config) (*Server, error) {
 	// The SAML Assertion Consumer Service endpoint receives cross-origin
 	// POSTs from external identity providers by design.
 	csrf.AddInsecureBypassPattern("POST /connect/v1/saml/2.0/consume")
+
+	// Linear webhooks are signed POSTs from Linear's servers. Authentication
+	// is HMAC, not cookies, so CSRF does not apply.
+	csrf.AddInsecureBypassPattern("POST /linear/v1/webhooks")
+
+	// Asana webhooks are signed POSTs from Asana's servers. The handshake
+	// echoes X-Hook-Secret and later requests carry X-Hook-Signature.
+	csrf.AddInsecureBypassPattern("POST /asana/v1/webhooks/{rest...}")
 
 	// The cookie banner API is called cross-origin from customer websites
 	// by the JS SDK. CORS is handled by the cookie banner middleware.
@@ -166,7 +255,30 @@ func NewServer(cfg Config) (*Server, error) {
 	csrf.AddInsecureBypassPattern("POST /connect/v1/oauth2/revoke")
 	csrf.AddInsecureBypassPattern("POST /connect/v1/oauth2/device")
 
+	// MCP is a bearer-token API called by external clients (ChatGPT, Claude,
+	// Composio, IDEs). Authentication is the Authorization header, not
+	// cookies, so CSRF does not apply. Clients send Sec-Fetch-Site:
+	// cross-site by design.
+	csrf.AddInsecureBypassPattern("POST /mcp/v1")
+	csrf.AddInsecureBypassPattern("POST /mcp/v1/{rest...}")
+	csrf.AddInsecureBypassPattern("DELETE /mcp/v1")
+	csrf.AddInsecureBypassPattern("DELETE /mcp/v1/{rest...}")
+
 	csrf.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		logger := httpserver.LoggerFromContext(r.Context())
+		if logger == nil {
+			logger = cfg.Logger
+		}
+
+		logger.WarnCtx(
+			r.Context(),
+			"cross-origin request denied",
+			log.String("path", r.URL.Path),
+			log.String("host", r.Host),
+			log.String("origin", r.Header.Get("Origin")),
+			log.String("sec_fetch_site", r.Header.Get("Sec-Fetch-Site")),
+		)
+
 		httpserver.RenderJSON(
 			w,
 			http.StatusForbidden,
@@ -176,42 +288,66 @@ func NewServer(cfg Config) (*Server, error) {
 		)
 	}))
 
+	shutdownCtx := cfg.ShutdownContext
+	if shutdownCtx == nil {
+		shutdownCtx = context.Background()
+	}
+
+	collabHub := collaboration_v1.NewHub(
+		cfg.Probo.Collaboration,
+		cfg.CollaborationEvents,
+	)
+
+	collabHandler := &collaboration_v1.Handler{
+		Logger:         cfg.Logger.Named("collaboration.v1"),
+		Probo:          cfg.Probo,
+		IAM:            cfg.IAM,
+		BaseURL:        cfg.BaseURL,
+		AllowedOrigins: cfg.AllowedOrigins,
+		Hub:            collabHub,
+		Shutdown:       shutdownCtx,
+	}
+
 	return &Server{
 		cfg:  cfg,
 		csrf: csrf,
-		compliancePageHandler: trust_v1.NewMux(
-			cfg.Logger.Named("trust.v1"),
-			cfg.IAM,
-			cfg.Trust,
-			cfg.ResourceAlias,
-			cfg.File,
-			cfg.ESign,
-			cfg.Mailman,
-			cfg.Cookie,
-			cfg.TokenSecret,
-			cfg.BaseURL,
-			cfg.GraphQLLimits,
-		),
 		consoleHandler: console_v1.NewMux(
 			cfg.Logger.Named("console.v1"),
 			cfg.Probo,
+			collabHandler,
 			cfg.ResourceAlias,
+			cfg.Tag,
 			cfg.IAM,
 			cfg.ESign,
+			cfg.Management,
+			cfg.CertManager,
 			cfg.AccessReview,
-			cfg.AgentRun,
+			cfg.AgentExecution,
 			cfg.Mailman,
 			cfg.CookieBanner,
+			cfg.EmployeePortal,
 			cfg.Cookie,
-			cfg.TokenSecret,
+			cfg.InstallStateKey,
 			cfg.ConnectorRegistry,
 			cfg.ProviderRegistry,
 			cfg.File,
 			cfg.BaseURL,
+			cfg.AllowedOrigins,
 			cfg.CustomDomainCname,
 			cfg.ThirdParty,
 			cfg.RiskManagement,
+			cfg.ProbotIdentityBindings,
+			cfg.SlackbotInstallations,
+			cfg.BotDeliveryDestinations,
+			cfg.ComplianceMessages,
 			cfg.GraphQLLimits,
+			cfg.ITAM,
+			cfg.Task,
+			cfg.Notification,
+			cfg.IdentityFederationIssuer,
+			cfg.AWSConnectorInstall,
+			cfg.GCPConnectorInstall,
+			cfg.AzureConnectorInstall,
 		),
 		cookieBannerHandler: cookiebanner_v1.NewMux(
 			cfg.Logger.Named("cookiebanner.v1"),
@@ -224,54 +360,80 @@ func NewServer(cfg Config) (*Server, error) {
 			cfg.Probo,
 			cfg.IAM,
 			cfg.Cookie,
-			cfg.TokenSecret,
 			cfg.BaseURL,
 		),
 		mcpHandler: mcp_v1.NewMux(
 			cfg.Logger.Named("mcp.v1"),
 			cfg.Probo,
+			cfg.Management,
+			cfg.CertManager,
 			cfg.ResourceAlias,
+			cfg.Tag,
 			cfg.ThirdParty,
 			cfg.IAM,
 			cfg.AccessReview,
 			cfg.CookieBanner,
+			cfg.EmployeePortal,
 			cfg.RiskManagement,
-			cfg.TokenSecret,
+			cfg.ITAM,
+			cfg.Task,
+			cfg.Mailman,
 			cfg.File,
 			cfg.BaseURL,
+			cfg.IdentityFederationIssuer,
+			cfg.AWSConnectorInstall,
+			cfg.GCPConnectorInstall,
+			cfg.AzureConnectorInstall,
+			cfg.CustomDomainCname,
+			cfg.SlackbotInstallations,
+			cfg.BotDeliveryDestinations,
+			mcp_v1.NewFeedbackConfig(cfg.MCPFeedbackURL),
 		),
 		slackHandler: slack_v1.NewMux(
 			cfg.Logger.Named("slack.v1"),
 			cfg.Slack,
-			cfg.Trust,
+			cfg.SlackInteractiveInbox,
+			cfg.Slackbot,
+			cfg.SlackbotInstallations,
+		),
+		asanaHandler: asana_v1.NewMux(
+			cfg.Logger.Named("asana.v1"),
+			cfg.Task.Sync.Asana,
+		),
+		linearHandler: linear_v1.NewMux(
+			cfg.Logger.Named("linear.v1"),
+			cfg.Task.Sync.Linear,
+			cfg.LinearWebhookSecret,
 		),
 		connectHandler: connect_v1.NewMux(
 			cfg.Logger.Named("connect.v1"),
 			cfg.IAM,
+			cfg.Visitor,
 			cfg.Cookie,
-			cfg.TokenSecret,
 			cfg.File,
+			cfg.EmployeePortal,
+			cfg.Notification,
 			cfg.BaseURL,
-			func(ctx context.Context, host string) bool {
-				if host == cfg.BaseURL.Host() {
-					return true
-				}
-
-				_, err := cfg.Trust.GetByDomainName(ctx, host)
-
-				return err == nil
-			},
-			func(ctx context.Context, host string) bool {
-				_, err := cfg.Trust.GetByDomainName(ctx, host)
-				return err == nil
-			},
+			saferedirect.Any(
+				saferedirect.StaticHosts(cfg.BaseURL.Host()),
+				saferedirect.Origins(cfg.AllowedOrigins...),
+				cfg.Visitor.IsVerifiedRedirectHost,
+			),
 			cfg.GraphQLLimits,
+			cfg.RateLimitDefault,
+			cfg.RateLimits,
+			cfg.SlackbotInstallations != nil,
+		),
+		agentHandler: agent_v1.NewMux(
+			cfg.Logger.Named("agent.v1"),
+			cfg.ITAM,
+		),
+		collaborationHandler: collaboration_v1.NewMux(
+			collabHandler,
+			cfg.IAM,
+			cfg.Cookie,
 		),
 	}, nil
-}
-
-func (s *Server) CompliancePageHandler() http.Handler {
-	return s.compliancePageHandler
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -303,14 +465,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// list that applies to console/connect routes.
 	router.Mount("/cookie-banner/v1", http.StripPrefix("/cookie-banner/v1", s.cookieBannerHandler))
 
+	// Agent API should never be called from a browser; mount it outside
+	// to avoid CORS headers being set on it.
+	router.Mount("/agent/v1", http.StripPrefix("/agent/v1", s.agentHandler))
+
 	router.Group(func(r chi.Router) {
 		r.Use(cors.Handler(corsOpts))
 		r.Mount("/console/v1", http.StripPrefix("/console/v1", s.consoleHandler))
+		r.Mount("/collaboration/v1", http.StripPrefix("/collaboration/v1", s.collaborationHandler))
 		r.Mount("/connect/v1", http.StripPrefix("/connect/v1", s.connectHandler))
 		r.Mount("/files/v1", http.StripPrefix("/files/v1", s.filesHandler))
-		r.Mount("/trust/v1", http.StripPrefix("/trust/v1", s.compliancePageHandler))
 		r.Mount("/mcp/v1", http.StripPrefix("/mcp/v1", s.mcpHandler))
 		r.Mount("/slack/v1", http.StripPrefix("/slack/v1", s.slackHandler))
+		r.Mount("/linear/v1", http.StripPrefix("/linear/v1", s.linearHandler))
+		r.Mount("/asana/v1", http.StripPrefix("/asana/v1", s.asanaHandler))
 	})
 
 	s.csrf.Handler(router).ServeHTTP(w, r)

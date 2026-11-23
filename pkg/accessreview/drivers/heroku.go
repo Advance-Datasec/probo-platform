@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -37,7 +43,19 @@ const (
 	// herokuPersonalAccountDisplayName is the picker label and source name
 	// shown for a personal Heroku account.
 	herokuPersonalAccountDisplayName = "Personal account"
+
+	// Platform API path segments joined onto the driver's base URL.
+	herokuTeamsSegment         = "teams"
+	herokuAppsSegment          = "apps"
+	herokuMembersSegment       = "members"
+	herokuCollaboratorsSegment = "collaborators"
 )
+
+// herokuDefaultBaseURL is the Heroku Platform API root. It backs only the
+// exported ListHerokuOrganizations, and only when its caller resolves no
+// APIBase for the provider (unregistered, or registered without one). Every
+// driver path goes through the injected baseURL instead.
+const herokuDefaultBaseURL = "https://api.heroku.com"
 
 // HerokuDriver fetches members from the Heroku Platform API using a
 // pre-authenticated HTTP client (Bearer token). Pagination is via Heroku's
@@ -61,11 +79,14 @@ const (
 type HerokuDriver struct {
 	httpClient *http.Client
 	teamID     string
+	baseURL    string
 }
 
 var _ Driver = (*HerokuDriver)(nil)
 
-func NewHerokuDriver(httpClient *http.Client, teamID string) *HerokuDriver {
+// NewHerokuDriver builds a driver against baseURL, the Heroku Platform API
+// origin (e.g. https://api.heroku.com).
+func NewHerokuDriver(httpClient *http.Client, teamID, baseURL string) *HerokuDriver {
 	return &HerokuDriver{
 		httpClient: &http.Client{
 			Transport: &retryRoundTripper{
@@ -73,7 +94,8 @@ func NewHerokuDriver(httpClient *http.Client, teamID string) *HerokuDriver {
 				maxRetries: 3,
 			},
 		},
-		teamID: teamID,
+		teamID:  teamID,
+		baseURL: baseURL,
 	}
 }
 
@@ -122,7 +144,7 @@ func (d *HerokuDriver) ListAccounts(ctx context.Context) ([]AccountRecord, error
 }
 
 func (d *HerokuDriver) listTeamMembers(ctx context.Context) ([]AccountRecord, error) {
-	endpoint, err := url.JoinPath("https://api.heroku.com", "teams", url.PathEscape(d.teamID), "members")
+	endpoint, err := url.JoinPath(d.baseURL, herokuTeamsSegment, url.PathEscape(d.teamID), herokuMembersSegment)
 	if err != nil {
 		return nil, fmt.Errorf("cannot build heroku members URL: %w", err)
 	}
@@ -165,7 +187,7 @@ func (d *HerokuDriver) listTeamMembers(ctx context.Context) ([]AccountRecord, er
 			Email:       email,
 			FullName:    fullName,
 			Roles:       roles,
-			IsAdmin:     isAdmin,
+			IsAdmin:     new(isAdmin),
 			MFAStatus:   mfaStatus,
 			AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
 			AccountType: coredata.AccessReviewEntryAccountTypeUser,
@@ -196,7 +218,12 @@ func (d *HerokuDriver) listPersonalAccounts(ctx context.Context) ([]AccountRecor
 	// under review. Scoping strictly to apps the connector owns would need
 	// the account ID from GET /account, which requires the identity OAuth
 	// scope we deliberately do not request.
-	apps, err := herokuListAll[herokuApp](ctx, d.httpClient, "https://api.heroku.com/apps", "apps")
+	appsURL, err := url.JoinPath(d.baseURL, herokuAppsSegment)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build heroku apps URL: %w", err)
+	}
+
+	apps, err := herokuListAll[herokuApp](ctx, d.httpClient, appsURL, "apps")
 	if err != nil {
 		return nil, fmt.Errorf("cannot list heroku personal apps: %w", err)
 	}
@@ -219,8 +246,8 @@ func (d *HerokuDriver) listPersonalAccounts(ctx context.Context) ([]AccountRecor
 		}
 
 		if i, ok := seen[key]; ok {
-			if rec.IsAdmin {
-				records[i].IsAdmin = true
+			if rec.IsAdmin != nil && *rec.IsAdmin {
+				records[i].IsAdmin = new(true)
 			}
 
 			return
@@ -240,7 +267,7 @@ func (d *HerokuDriver) listPersonalAccounts(ctx context.Context) ([]AccountRecor
 		// the collaborators list.
 		upsert(herokuPersonalRecord(app.Owner.ID, app.Owner.Email, "owner", true))
 
-		endpoint, err := url.JoinPath("https://api.heroku.com", "apps", url.PathEscape(app.ID), "collaborators")
+		endpoint, err := url.JoinPath(d.baseURL, herokuAppsSegment, url.PathEscape(app.ID), herokuCollaboratorsSegment)
 		if err != nil {
 			return nil, fmt.Errorf("cannot build heroku collaborators URL: %w", err)
 		}
@@ -281,7 +308,7 @@ func herokuPersonalRecord(externalID, email, role string, isAdmin bool) AccountR
 		Email:       email,
 		FullName:    email,
 		Roles:       roles,
-		IsAdmin:     isAdmin,
+		IsAdmin:     new(isAdmin),
 		MFAStatus:   coredata.MFAStatusUnknown,
 		AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
 		AccountType: coredata.AccessReviewEntryAccountTypeUser,
@@ -340,4 +367,122 @@ func herokuListAll[T any](ctx context.Context, client *http.Client, endpoint, la
 	}
 
 	return nil, fmt.Errorf("cannot list all heroku %s: %w", label, ErrPaginationLimitReached)
+}
+
+// herokuNameResolver resolves the Heroku team name.
+type herokuNameResolver struct {
+	httpClient *http.Client
+	teamID     string
+	baseURL    string
+}
+
+// NewHerokuNameResolver resolves the team name against baseURL, the Heroku
+// Platform API origin (e.g. https://api.heroku.com).
+func NewHerokuNameResolver(httpClient *http.Client, teamID, baseURL string) NameResolver {
+	return &herokuNameResolver{httpClient: httpClient, teamID: teamID, baseURL: baseURL}
+}
+
+func (r *herokuNameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
+	if r.teamID == "" {
+		return "", nil
+	}
+
+	// A personal account has no Team to name; short-circuit before hitting
+	// GET /teams/@personal, which 404s and would loop the source-name worker.
+	if r.teamID == herokuPersonalAccountSlug {
+		return herokuPersonalAccountDisplayName, nil
+	}
+
+	endpoint, err := url.JoinPath(r.baseURL, herokuTeamsSegment, url.PathEscape(r.teamID))
+	if err != nil {
+		return "", fmt.Errorf("cannot build heroku team URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("cannot create heroku team request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/vnd.heroku+json; version=3")
+
+	httpResp, err := r.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("cannot execute heroku team request: %w", err)
+	}
+
+	defer func() { _ = httpResp.Body.Close() }()
+
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return "", nameStatusError("heroku team", httpResp.StatusCode)
+	}
+
+	var resp struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		return "", fmt.Errorf("cannot decode heroku team response: %w", err)
+	}
+
+	return resp.Name, nil
+}
+
+// ListHerokuOrganizations fetches the teams the authenticated Heroku
+// user belongs to, and always appends a synthetic "Personal account"
+// entry. Heroku Teams are an opt-in paid construct, so a solo account has
+// no team to discover; the personal entry lets the picker offer personal
+// mode (app owner + collaborators) instead of dead-ending at a free-text
+// slug the user cannot fill. Teams are fetched from baseURL ("" for the
+// Heroku SaaS Platform API).
+func ListHerokuOrganizations(ctx context.Context, httpClient *http.Client, baseURL string) ([]Organization, error) {
+	if baseURL == "" {
+		baseURL = herokuDefaultBaseURL
+	}
+
+	endpoint, err := url.JoinPath(baseURL, herokuTeamsSegment)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build heroku organizations URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create heroku organizations request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/vnd.heroku+json; version=3")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("cannot fetch heroku organizations: %w", err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cannot fetch heroku organizations: unexpected status %d", resp.StatusCode)
+	}
+
+	var teams []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&teams); err != nil {
+		return nil, fmt.Errorf("cannot decode heroku organizations response: %w", err)
+	}
+
+	result := make([]Organization, 0, len(teams)+1)
+	for _, t := range teams {
+		displayName := t.Name
+		if displayName == "" {
+			displayName = t.ID
+		}
+
+		result = append(result, Organization{Slug: t.ID, DisplayName: displayName})
+	}
+
+	result = append(result, Organization{
+		Slug:        herokuPersonalAccountSlug,
+		DisplayName: herokuPersonalAccountDisplayName,
+	})
+
+	return result, nil
 }

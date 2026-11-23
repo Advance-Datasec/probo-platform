@@ -1,25 +1,28 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import {
   formatDatetime,
   formatError,
-  getRightsRequestStateOptions,
-  getRightsRequestTypeOptions,
   type GraphQLError,
 } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   Breadcrumb,
   Button,
@@ -33,27 +36,18 @@ import {
   Select,
   Textarea,
   useDialogRef,
-  useToast,
 } from "@probo/ui";
+import useToast from "@probo/ui/src/v2/Toaster/useToast";
 import { type ReactNode } from "react";
 import { Controller } from "react-hook-form";
-import { z } from "zod";
+import { useTranslation } from "react-i18next";
 
 import { useFormWithSchema } from "#/hooks/useFormWithSchema";
+import { z } from "#/lib/zod";
 
 import { useCreateRightsRequest } from "../../../../hooks/graph/RightsRequestGraph";
 
-const schema = z.object({
-  requestType: z.enum(["ACCESS", "DELETION", "PORTABILITY"]),
-  requestState: z.enum(["TODO", "IN_PROGRESS", "DONE"]),
-  dataSubject: z.string().optional(),
-  contact: z.string().optional(),
-  details: z.string().optional(),
-  deadline: z.string().optional(),
-  actionTaken: z.string().optional(),
-});
-
-type FormData = z.infer<typeof schema>;
+type FormData = { requestType: "ACCESS" | "DELETION" | "RECTIFICATION" | "PORTABILITY" | "OBJECTION" | "COMPLAINT"; requestState: "TODO" | "IN_PROGRESS" | "DONE" | "REJECTED"; dataSubject?: string; contact?: string; details?: string; deadline?: string; actionTaken?: string };
 
 interface CreateRightsRequestDialogProps {
   children: ReactNode;
@@ -66,11 +60,14 @@ export function CreateRightsRequestDialog({
   organizationId,
   connectionId,
 }: CreateRightsRequestDialogProps) {
-  const { __ } = useTranslate();
-  const { toast } = useToast();
+  const { t } = useTranslation();
+  const toast = useToast();
   const dialogRef = useDialogRef();
 
   const createRequest = useCreateRightsRequest(connectionId || "");
+  const schema = z.object({
+    requestType: z.enum(["ACCESS", "DELETION", "RECTIFICATION", "PORTABILITY", "OBJECTION", "COMPLAINT"]), requestState: z.enum(["TODO", "IN_PROGRESS", "DONE", "REJECTED"]), dataSubject: z.string().optional(), contact: z.string().optional(), details: z.string().optional(), deadline: z.string().optional(), actionTaken: z.string().optional(),
+  });
 
   const { register, handleSubmit, formState, reset, control } = useFormWithSchema(schema, {
     defaultValues: {
@@ -97,31 +94,31 @@ export function CreateRightsRequestDialog({
         actionTaken: formData.actionTaken || undefined,
       });
 
-      toast({
-        title: __("Success"),
-        description: __("Rights request created successfully"),
-        variant: "success",
+      toast.add({
+        title: t("createRightsRequestDialog.messages.success"),
+        description: t("createRightsRequestDialog.messages.created"),
+        type: "success",
       });
 
       reset();
       dialogRef.current?.close();
     } catch (error) {
-      toast({
-        title: __("Error"),
-        description: formatError(__("Failed to create rights request"), error as GraphQLError),
-        variant: "error",
+      toast.add({
+        title: t("createRightsRequestDialog.messages.error"),
+        description: formatError(t("createRightsRequestDialog.errors.create"), error as GraphQLError),
+        type: "error",
       });
     }
   };
 
-  const typeOptions = getRightsRequestTypeOptions(__);
-  const stateOptions = getRightsRequestStateOptions(__);
+  const typeOptions = ["ACCESS", "DELETION", "RECTIFICATION", "PORTABILITY", "OBJECTION", "COMPLAINT"] as const;
+  const stateOptions = ["TODO", "IN_PROGRESS", "DONE", "REJECTED"] as const;
 
   return (
     <Dialog
       ref={dialogRef}
       trigger={children}
-      title={<Breadcrumb items={[__("Rights Requests"), __("Create Request")]} />}
+      title={<Breadcrumb items={[t("createRightsRequestDialog.breadcrumb.requests"), t("createRightsRequestDialog.breadcrumb.create")]} />}
       className="max-w-2xl"
     >
       <form onSubmit={e => void handleSubmit(onSubmit)(e)}>
@@ -133,7 +130,7 @@ export function CreateRightsRequestDialog({
               render={({ field }) => (
                 <div>
                   <Label>
-                    {__("Request Type")}
+                    {t("rightsRequestDetailsPage.fields.requestType")}
                     {" "}
                     *
                   </Label>
@@ -142,8 +139,8 @@ export function CreateRightsRequestDialog({
                     onValueChange={field.onChange}
                   >
                     {typeOptions.map(option => (
-                      <Option key={option.value} value={option.value}>
-                        {option.label}
+                      <Option key={option} value={option}>
+                        {t(`rightsRequestDetailsPage.types.${option.toLowerCase()}`)}
                       </Option>
                     ))}
                   </Select>
@@ -162,7 +159,7 @@ export function CreateRightsRequestDialog({
               render={({ field }) => (
                 <div>
                   <Label>
-                    {__("State")}
+                    {t("rightsRequestDetailsPage.fields.state")}
                     {" "}
                     *
                   </Label>
@@ -171,8 +168,8 @@ export function CreateRightsRequestDialog({
                     onValueChange={field.onChange}
                   >
                     {stateOptions.map(option => (
-                      <Option key={option.value} value={option.value}>
-                        {option.label}
+                      <Option key={option} value={option}>
+                        {t(`rightsRequestDetailsPage.states.${option.toLowerCase()}`)}
                       </Option>
                     ))}
                   </Select>
@@ -187,24 +184,24 @@ export function CreateRightsRequestDialog({
           </div>
 
           <Field
-            label={__("Data Subject")}
+            label={t("rightsRequestDetailsPage.fields.dataSubject")}
             {...register("dataSubject")}
-            placeholder={__("Enter data subject name")}
+            placeholder={t("createRightsRequestDialog.placeholders.dataSubject")}
             error={formState.errors.dataSubject?.message}
           />
 
           <Field
-            label={__("Contact")}
+            label={t("rightsRequestDetailsPage.fields.contact")}
             {...register("contact")}
-            placeholder={__("Enter contact information")}
+            placeholder={t("createRightsRequestDialog.placeholders.contact")}
             error={formState.errors.contact?.message}
           />
 
           <div>
-            <Label>{__("Details")}</Label>
+            <Label>{t("rightsRequestDetailsPage.fields.details")}</Label>
             <Textarea
               {...register("details")}
-              placeholder={__("Enter request details")}
+              placeholder={t("rightsRequestDetailsPage.placeholders.details")}
               rows={3}
             />
             {formState.errors.details?.message && (
@@ -216,7 +213,7 @@ export function CreateRightsRequestDialog({
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <Label>{__("Deadline")}</Label>
+              <Label>{t("rightsRequestDetailsPage.fields.deadline")}</Label>
               <Input
                 type="date"
                 {...register("deadline")}
@@ -230,10 +227,10 @@ export function CreateRightsRequestDialog({
           </div>
 
           <div>
-            <Label>{__("Action Taken")}</Label>
+            <Label>{t("rightsRequestDetailsPage.fields.actionTaken")}</Label>
             <Textarea
               {...register("actionTaken")}
-              placeholder={__("Enter action taken")}
+              placeholder={t("rightsRequestDetailsPage.placeholders.actionTaken")}
               rows={3}
             />
             {formState.errors.actionTaken?.message && (
@@ -250,7 +247,7 @@ export function CreateRightsRequestDialog({
             variant="primary"
             disabled={formState.isSubmitting}
           >
-            {formState.isSubmitting ? __("Creating...") : __("Create Request")}
+            {formState.isSubmitting ? t("createRightsRequestDialog.actions.creating") : t("createRightsRequestDialog.actions.create")}
           </Button>
         </DialogFooter>
       </form>

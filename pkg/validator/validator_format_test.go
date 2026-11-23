@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package validator
 
@@ -151,7 +157,7 @@ func TestOrigin(t *testing.T) {
 		{"invalid - has path", "https://example.com/path", true},
 		{"invalid - has query", "https://example.com?q=1", true},
 		{"invalid - has fragment", "https://example.com#section", true},
-		{"invalid - has userinfo", "https://user:pass@example.com", true},
+		{"invalid - has userinfo", "https://user:pass@example.com", true}, // trufflehog:ignore
 		{"invalid - no scheme", "example.com", true},
 		{"invalid - ftp scheme", "ftp://example.com", true},
 		{"invalid - no host", "https://", true},
@@ -213,6 +219,39 @@ func TestSlug(t *testing.T) {
 
 			if err != nil && tt.wantCode != "" && err.Code != tt.wantCode {
 				t.Errorf("Expected error code %s, got %s", tt.wantCode, err.Code)
+			}
+		})
+	}
+}
+
+func TestHexColor(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     any
+		wantError bool
+	}{
+		{"valid #RGB", "#0f0", false},
+		{"valid #RRGGBB", "#00ff00", false},
+		{"valid uppercase", "#ABC", false},
+		{"valid mixed case", "#aBcDeF", false},
+		{"empty string", "", false},
+		{"nil pointer", (*string)(nil), false},
+		{"missing hash", "00ff00", true},
+		{"too short", "#0f", true},
+		{"too long", "#00ff00a", true},
+		{"invalid chars", "#gg0000", true},
+		{"non-string", 123, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := HexColor()(tt.value)
+			if (err != nil) != tt.wantError {
+				t.Errorf("HexColor() error = %v, wantError %v", err, tt.wantError)
+			}
+
+			if err != nil && err.Code != ErrorCodeInvalidFormat {
+				t.Errorf("Expected error code %s, got %s", ErrorCodeInvalidFormat, err.Code)
 			}
 		})
 	}

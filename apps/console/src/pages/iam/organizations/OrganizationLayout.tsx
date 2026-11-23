@@ -1,0 +1,137 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import { LayoutContext } from "@probo/ui";
+import { useMemo, useState } from "react";
+import { graphql, type PreloadedQuery, usePreloadedQuery } from "react-relay";
+import { Outlet } from "react-router";
+
+import type { OrganizationLayoutQuery } from "#/__generated__/iam/OrganizationLayoutQuery.graphql";
+import { useOrganizationId } from "#/hooks/useOrganizationId";
+import { CoreRelayProvider } from "#/providers/CoreRelayProvider";
+import { CurrentUser } from "#/providers/CurrentUser";
+
+import { NavPanel } from "./_components/shell/NavPanel";
+import { NavRail } from "./_components/shell/NavRail";
+import { NavSpotlight } from "./_components/shell/NavSpotlight";
+import { organizationLayout } from "./_components/shell/variants";
+import { OrganizationLayoutSkeleton } from "./OrganizationLayoutSkeleton";
+
+export const organizationLayoutQuery = graphql`
+  query OrganizationLayoutQuery($organizationId: ID!) {
+    slackbotAvailable
+    organization: node(id: $organizationId) @required(action: THROW) {
+      __typename
+      ... on Organization {
+        ...NavRail_organization
+        ...NavPanel_organization
+        ...NavSpotlight_organization
+        viewer @required(action: THROW) {
+          id
+          fullName
+          emailAddress
+          avatar {
+            downloadUrl
+          }
+          membership @required(action: THROW) {
+            role
+          }
+        }
+      }
+    }
+    viewer @required(action: THROW) {
+      email
+    }
+  }
+`;
+
+export interface OrganizationLayoutProps {
+  queryRef: PreloadedQuery<OrganizationLayoutQuery>;
+}
+
+export function OrganizationLayout({ queryRef }: OrganizationLayoutProps) {
+  const routeOrganizationId = useOrganizationId();
+  const {
+    organization,
+    viewer,
+    slackbotAvailable,
+  } = usePreloadedQuery<OrganizationLayoutQuery>(
+    organizationLayoutQuery,
+    queryRef,
+  );
+  const [hasDrawer, setDrawer] = useState(false);
+  const [spotlightOpen, setSpotlightOpen] = useState(false);
+  const drawerContext = useMemo(() => ({ setDrawer }), []);
+
+  if (queryRef.variables.organizationId !== routeOrganizationId) {
+    return <OrganizationLayoutSkeleton />;
+  }
+
+  if (organization.__typename !== "Organization") {
+    throw new Error("invalid type for organization node");
+  }
+
+  const slots = organizationLayout({ hasDrawer });
+
+  return (
+    <LayoutContext value={drawerContext}>
+      <div className={slots.root()}>
+        <div className={slots.body()}>
+          <NavSpotlight
+            organizationKey={organization}
+            slackbotAvailable={slackbotAvailable}
+            open={spotlightOpen}
+            onOpenChange={setSpotlightOpen}
+          />
+          <NavRail
+            organizationKey={organization}
+            slackbotAvailable={slackbotAvailable}
+            onOpenSpotlight={() => setSpotlightOpen(true)}
+          />
+          <NavPanel
+            organizationKey={organization}
+            slackbotAvailable={slackbotAvailable}
+          />
+          <main className={slots.content()}>
+            <div className={slots.contentInner()}>
+              <CoreRelayProvider>
+                <CurrentUser
+                  value={{
+                    email: viewer.email,
+                    fullName: organization.viewer.fullName,
+                    role: organization.viewer.membership.role,
+                    profile: {
+                      id: organization.viewer.id,
+                      fullName: organization.viewer.fullName,
+                      emailAddress: organization.viewer.emailAddress,
+                      avatarUrl: organization.viewer.avatar?.downloadUrl ?? null,
+                    },
+                  }}
+                >
+                  <Outlet context={organization.viewer.membership.role} />
+                </CurrentUser>
+              </CoreRelayProvider>
+            </div>
+          </main>
+        </div>
+      </div>
+    </LayoutContext>
+  );
+}

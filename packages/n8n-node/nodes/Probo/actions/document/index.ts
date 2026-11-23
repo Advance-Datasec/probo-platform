@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import type { INodeProperties } from 'n8n-workflow';
 import * as createOp from './create.operation';
@@ -23,7 +29,7 @@ import * as unarchiveOp from './unarchive.operation';
 import * as getVersionOp from './getVersion.operation';
 import * as getLatestPublishedVersionIdOp from './getLatestPublishedVersionId.operation';
 import * as getAllVersionsOp from './getAllVersions.operation';
-import * as deleteDraftOp from './deleteDraft.operation';
+import * as updateVersionOp from './updateVersion.operation';
 import * as publishOp from './publish.operation';
 import * as voidApprovalOp from './voidApproval.operation';
 import * as getSignatureOp from './getSignature.operation';
@@ -34,6 +40,8 @@ import * as getApprovalQuorumOp from './getApprovalQuorum.operation';
 import * as getAllApprovalQuorumsOp from './getAllApprovalQuorums.operation';
 import * as getApprovalDecisionOp from './getApprovalDecision.operation';
 import * as getAllApprovalDecisionsOp from './getAllApprovalDecisions.operation';
+import * as getPendingApprovalsOp from './getPendingApprovals.operation';
+import * as getPendingSignaturesOp from './getPendingSignatures.operation';
 
 export const description: INodeProperties[] = [
 	{
@@ -70,12 +78,6 @@ export const description: INodeProperties[] = [
 				value: 'delete',
 				description: 'Delete a document',
 				action: 'Delete a document',
-			},
-			{
-				name: 'Delete Draft',
-				value: 'deleteDraft',
-				description: 'Delete the current draft of a document',
-				action: 'Delete a document draft',
 			},
 			{
 				name: 'Get',
@@ -132,6 +134,18 @@ export const description: INodeProperties[] = [
 				action: 'Get many document versions',
 			},
 			{
+				name: 'Get Pending Approvals',
+				value: 'getPendingApprovals',
+				description: 'Get approval decisions that are still waiting',
+				action: 'Get pending document approvals',
+			},
+			{
+				name: 'Get Pending Signatures',
+				value: 'getPendingSignatures',
+				description: 'Get signature requests that are still waiting',
+				action: 'Get pending document signatures',
+			},
+			{
 				name: 'Get Signature',
 				value: 'getSignature',
 				description: 'Get a document version signature',
@@ -164,8 +178,14 @@ export const description: INodeProperties[] = [
 			{
 				name: 'Update',
 				value: 'update',
-				description: 'Update a document (edits auto-create a draft on published documents)',
+				description: 'Update an existing document',
 				action: 'Update a document',
+			},
+			{
+				name: 'Update Version',
+				value: 'updateVersion',
+				description: 'Update a draft document version',
+				action: 'Update a document version',
 			},
 			{
 				name: 'Void Approval',
@@ -186,7 +206,7 @@ export const description: INodeProperties[] = [
 	...getVersionOp.description,
 	...getLatestPublishedVersionIdOp.description,
 	...getAllVersionsOp.description,
-	...deleteDraftOp.description,
+	...updateVersionOp.description,
 	...publishOp.description,
 	...voidApprovalOp.description,
 	...getSignatureOp.description,
@@ -197,6 +217,8 @@ export const description: INodeProperties[] = [
 	...getAllApprovalQuorumsOp.description,
 	...getApprovalDecisionOp.description,
 	...getAllApprovalDecisionsOp.description,
+	...getPendingApprovalsOp.description,
+	...getPendingSignaturesOp.description,
 ];
 
 export {
@@ -210,7 +232,7 @@ export {
 	getVersionOp as getVersion,
 	getLatestPublishedVersionIdOp as getLatestPublishedVersionId,
 	getAllVersionsOp as getAllVersions,
-	deleteDraftOp as deleteDraft,
+	updateVersionOp as updateVersion,
 	publishOp as publish,
 	voidApprovalOp as voidApproval,
 	getSignatureOp as getSignature,
@@ -221,4 +243,6 @@ export {
 	getAllApprovalQuorumsOp as getAllApprovalQuorums,
 	getApprovalDecisionOp as getApprovalDecision,
 	getAllApprovalDecisionsOp as getAllApprovalDecisions,
+	getPendingApprovalsOp as getPendingApprovals,
+	getPendingSignaturesOp as getPendingSignatures,
 };

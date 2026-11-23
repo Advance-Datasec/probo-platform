@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import type { INodeProperties } from 'n8n-workflow';
 import * as createOp from './create.operation';
@@ -23,6 +29,16 @@ import * as deactivateOp from './deactivate.operation';
 import * as publishOp from './publish.operation';
 import * as regeneratePolicyOp from './regeneratePolicy.operation';
 import * as translateOp from './translate.operation';
+import * as getGVLCatalogOp from './getGVLCatalog.operation';
+import * as listGVLCatalogOp from './listGVLCatalog.operation';
+import * as listGVLVendorsOp from './listGVLVendors.operation';
+import * as addGVLVendorOp from './addGVLVendor.operation';
+import * as removeGVLVendorOp from './removeGVLVendor.operation';
+import * as getScanOp from './getScan.operation';
+import * as getScansOp from './getScans.operation';
+import * as getScanResourcesOp from './getScanResources.operation';
+import * as getScanTrackersOp from './getScanTrackers.operation';
+import * as requestScanOp from './requestScan.operation';
 
 export const description: INodeProperties[] = [
 	{
@@ -41,6 +57,12 @@ export const description: INodeProperties[] = [
 				value: 'activate',
 				description: 'Activate a cookie banner',
 				action: 'Activate a cookie banner',
+			},
+			{
+				name: 'Add GVL Vendor',
+				value: 'addGVLVendor',
+				description: 'Add an IAB GVL vendor to a cookie banner',
+				action: 'Add a GVL vendor',
 			},
 			{
 				name: 'Create',
@@ -67,10 +89,52 @@ export const description: INodeProperties[] = [
 				action: 'Get a cookie banner',
 			},
 			{
+				name: 'Get GVL Catalog',
+				value: 'getGVLCatalog',
+				description: 'Get the current IAB GVL catalog versions',
+				action: 'Get GVL catalog versions',
+			},
+			{
 				name: 'Get Many',
 				value: 'getAll',
 				description: 'Get many cookie banners',
 				action: 'Get many cookie banners',
+			},
+			{
+				name: 'Get Scan',
+				value: 'getScan',
+				description: 'Get a cookie banner scan',
+				action: 'Get a cookie banner scan',
+			},
+			{
+				name: 'Get Scan Resources',
+				value: 'getScanResources',
+				description: 'Get resources stamped on a cookie banner scan',
+				action: 'Get cookie banner scan resources',
+			},
+			{
+				name: 'Get Scan Trackers',
+				value: 'getScanTrackers',
+				description: 'Get detections stamped on a cookie banner scan',
+				action: 'Get cookie banner scan trackers',
+			},
+			{
+				name: 'Get Scans',
+				value: 'getScans',
+				description: 'Get scans for a cookie banner',
+				action: 'Get cookie banner scans',
+			},
+			{
+				name: 'List GVL Catalog',
+				value: 'listGVLCatalog',
+				description: 'List IAB GVL vendors from the global catalog',
+				action: 'List GVL catalog vendors',
+			},
+			{
+				name: 'List GVL Vendors',
+				value: 'listGVLVendors',
+				description: 'List IAB GVL vendors selected on a cookie banner',
+				action: 'List cookie banner GVL vendors',
 			},
 			{
 				name: 'Publish',
@@ -83,6 +147,18 @@ export const description: INodeProperties[] = [
 				value: 'regeneratePolicy',
 				description: 'Re-arm tracker policy generation for a published cookie banner',
 				action: 'Regenerate a cookie banner tracker policy',
+			},
+			{
+				name: 'Remove GVL Vendor',
+				value: 'removeGVLVendor',
+				description: 'Remove an IAB GVL vendor from a cookie banner',
+				action: 'Remove a GVL vendor',
+			},
+			{
+				name: 'Request Scan',
+				value: 'requestScan',
+				description: 'Queue a scan for a cookie banner',
+				action: 'Request a cookie banner scan',
 			},
 			{
 				name: 'Translate',
@@ -109,6 +185,16 @@ export const description: INodeProperties[] = [
 	...publishOp.description,
 	...regeneratePolicyOp.description,
 	...translateOp.description,
+	...getGVLCatalogOp.description,
+	...listGVLCatalogOp.description,
+	...listGVLVendorsOp.description,
+	...addGVLVendorOp.description,
+	...removeGVLVendorOp.description,
+	...getScanOp.description,
+	...getScansOp.description,
+	...getScanResourcesOp.description,
+	...getScanTrackersOp.description,
+	...requestScanOp.description,
 ];
 
 export {
@@ -122,4 +208,14 @@ export {
 	publishOp as publish,
 	regeneratePolicyOp as regeneratePolicy,
 	translateOp as translate,
+	getGVLCatalogOp as getGVLCatalog,
+	listGVLCatalogOp as listGVLCatalog,
+	listGVLVendorsOp as listGVLVendors,
+	addGVLVendorOp as addGVLVendor,
+	removeGVLVendorOp as removeGVLVendor,
+	getScanOp as getScan,
+	getScansOp as getScans,
+	getScanResourcesOp as getScanResources,
+	getScanTrackersOp as getScanTrackers,
+	requestScanOp as requestScan,
 };

@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
@@ -22,8 +28,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"go.gearno.de/kit/log"
 	"go.gearno.de/kit/pg"
-	"go.probo.inc/probo/pkg/certmanager"
+	"go.probo.inc/probo/pkg/collaboration"
 	"go.probo.inc/probo/pkg/connector"
+	"go.probo.inc/probo/pkg/connectorprotocol"
 	"go.probo.inc/probo/pkg/coredata"
 	"go.probo.inc/probo/pkg/crypto/cipher"
 	"go.probo.inc/probo/pkg/esign"
@@ -34,7 +41,6 @@ import (
 	"go.probo.inc/probo/pkg/iam"
 	"go.probo.inc/probo/pkg/llm"
 	"go.probo.inc/probo/pkg/mail"
-	"go.probo.inc/probo/pkg/slack"
 )
 
 const (
@@ -73,20 +79,16 @@ type (
 		bucket                                string
 		encryptionKey                         cipher.EncryptionKey
 		baseURL                               string
-		tokenSecret                           string
 		llmClient                             *llm.Client
 		llmConfig                             LLMConfig
 		html2pdfConverter                     *html2pdf.Converter
-		acmeService                           *certmanager.ACMEService
 		fileManager                           *filemanager.Service
 		logger                                *log.Logger
-		slack                                 *slack.Service
 		esign                                 *esign.Service
-		connectorRegistry                     *connector.ConnectorRegistry
-		invitationTokenValidity               time.Duration
+		connectorRegistry                     *connectorprotocol.Registry
+		Collaboration                         *collaboration.Service
 		Frameworks                            *FrameworkService
-		Measures                              *MeasureService
-		Tasks                                 *TaskService
+		InternalControls                      *InternalControlService
 		Evidences                             *EvidenceService
 		Organizations                         *OrganizationService
 		ThirdParties                          *ThirdPartyService
@@ -99,19 +101,15 @@ type (
 		ThirdPartyContacts                    *ThirdPartyContactService
 		ThirdPartyDataPrivacyAgreements       *ThirdPartyDataPrivacyAgreementService
 		ThirdPartyServices                    *ThirdPartyServiceService
-		Connectors                            *ConnectorService
+		Connectors                            *connector.Service
 		Assets                                *AssetService
 		Data                                  *DatumService
 		Audits                                *AuditService
 		WebhookSubscriptions                  *WebhookSubscriptionService
-		TrustCenters                          *TrustCenterService
-		TrustCenterAccesses                   *TrustCenterAccessService
-		TrustCenterReferences                 *TrustCenterReferenceService
-		TrustCenterFiles                      *TrustCenterFileService
-		ComplianceFrameworks                  *ComplianceFrameworkService
-		ComplianceExternalURLs                *ComplianceExternalURLService
 		Findings                              *FindingService
 		Obligations                           *ObligationService
+		BusinessFunctions                     *BusinessFunctionService
+		AiSystems                             *AiSystemService
 		RightsRequests                        *RightsRequestService
 		ProcessingActivities                  *ProcessingActivityService
 		DataProtectionImpactAssessments       *DataProtectionImpactAssessmentService
@@ -119,8 +117,7 @@ type (
 		StatementsOfApplicability             *StatementOfApplicabilityService
 		GeneratedDocuments                    *GeneratedDocumentService
 		Files                                 *FileService
-		CustomDomains                         *CustomDomainService
-		SlackMessages                         *slack.Service
+		LogExports                            ExportService
 	}
 )
 
@@ -131,18 +128,16 @@ func NewService(
 	s3Client *s3.Client,
 	bucket string,
 	baseURL string,
-	tokenSecret string,
 	llmClient *llm.Client,
 	llmConfig LLMConfig,
 	html2pdfConverter *html2pdf.Converter,
-	acmeService *certmanager.ACMEService,
 	fileManagerService *filemanager.Service,
 	logger *log.Logger,
-	slackService *slack.Service,
 	iamService *iam.Service,
 	esignService *esign.Service,
-	connectorRegistry *connector.ConnectorRegistry,
-	invitationTokenValidity time.Duration,
+	collaborationService *collaboration.Service,
+	connectorsService *connector.Service,
+	connectorRegistry *connectorprotocol.Registry,
 ) (*Service, error) {
 	if bucket == "" {
 		return nil, fmt.Errorf("bucket is required")
@@ -151,30 +146,26 @@ func NewService(
 	iamService.Authorizer.RegisterPolicySet(ProboPolicySet())
 
 	svc := &Service{
-		pg:                      pgClient,
-		s3:                      s3Client,
-		bucket:                  bucket,
-		encryptionKey:           encryptionKey,
-		baseURL:                 baseURL,
-		tokenSecret:             tokenSecret,
-		llmClient:               llmClient,
-		llmConfig:               llmConfig,
-		html2pdfConverter:       html2pdfConverter,
-		acmeService:             acmeService,
-		fileManager:             fileManagerService,
-		logger:                  logger,
-		slack:                   slackService,
-		esign:                   esignService,
-		connectorRegistry:       connectorRegistry,
-		invitationTokenValidity: invitationTokenValidity,
+		pg:                pgClient,
+		s3:                s3Client,
+		bucket:            bucket,
+		encryptionKey:     encryptionKey,
+		baseURL:           baseURL,
+		llmClient:         llmClient,
+		llmConfig:         llmConfig,
+		html2pdfConverter: html2pdfConverter,
+		fileManager:       fileManagerService,
+		logger:            logger,
+		esign:             esignService,
+		connectorRegistry: connectorRegistry,
+		Collaboration:     collaborationService,
 	}
 
 	svc.Frameworks = &FrameworkService{
 		svc:               svc,
 		html2pdfConverter: html2pdfConverter,
 	}
-	svc.Measures = &MeasureService{svc: svc}
-	svc.Tasks = &TaskService{svc: svc}
+	svc.InternalControls = &InternalControlService{svc: svc}
 	svc.Evidences = &EvidenceService{
 		svc: svc,
 		fileValidator: filevalidation.NewValidator(
@@ -191,16 +182,13 @@ func NewService(
 	}
 	svc.ThirdParties = &ThirdPartyService{svc: svc}
 	svc.Documents = &DocumentService{
-		svc:                     svc,
-		html2pdfConverter:       html2pdfConverter,
-		invitationTokenValidity: invitationTokenValidity,
-		tokenSecret:             tokenSecret,
+		svc:               svc,
+		collaboration:     collaborationService,
+		html2pdfConverter: html2pdfConverter,
 	}
 	svc.DocumentApprovals = &DocumentApprovalService{
-		svc:                     svc,
-		html2pdfConverter:       html2pdfConverter,
-		invitationTokenValidity: invitationTokenValidity,
-		tokenSecret:             tokenSecret,
+		svc:               svc,
+		html2pdfConverter: html2pdfConverter,
 	}
 	svc.Organizations = &OrganizationService{
 		svc: svc,
@@ -214,38 +202,22 @@ func NewService(
 		svc: svc,
 		fileValidator: filevalidation.NewValidator(
 			filevalidation.WithCategories(filevalidation.CategoryDocument),
+			filevalidation.WithMaxFileSize(30*1024*1024), // 30MB
 		),
 	}
 	svc.ThirdPartyBusinessAssociateAgreements = &ThirdPartyBusinessAssociateAgreementService{svc: svc}
 	svc.ThirdPartyContacts = &ThirdPartyContactService{svc: svc}
 	svc.ThirdPartyDataPrivacyAgreements = &ThirdPartyDataPrivacyAgreementService{svc: svc}
 	svc.ThirdPartyServices = &ThirdPartyServiceService{svc: svc}
-	svc.Connectors = &ConnectorService{svc: svc}
+	svc.Connectors = connectorsService
 	svc.Assets = &AssetService{svc: svc}
 	svc.Data = &DatumService{svc: svc}
 	svc.Audits = &AuditService{svc: svc}
 	svc.WebhookSubscriptions = &WebhookSubscriptionService{svc: svc}
-	svc.TrustCenters = &TrustCenterService{svc: svc}
-	svc.TrustCenterAccesses = &TrustCenterAccessService{svc: svc}
-	svc.TrustCenterReferences = &TrustCenterReferenceService{svc: svc}
-	svc.ComplianceFrameworks = &ComplianceFrameworkService{svc: svc}
-	svc.ComplianceExternalURLs = &ComplianceExternalURLService{svc: svc}
-	svc.TrustCenterFiles = &TrustCenterFileService{
-		svc: svc,
-		fileValidator: filevalidation.NewValidator(
-			filevalidation.WithCategories(
-				filevalidation.CategoryData,
-				filevalidation.CategoryDocument,
-				filevalidation.CategoryImage,
-				filevalidation.CategoryPresentation,
-				filevalidation.CategorySpreadsheet,
-				filevalidation.CategoryText,
-			),
-			filevalidation.WithMaxFileSize(10*1024*1024), // 10MB
-		),
-	}
 	svc.Findings = &FindingService{svc: svc}
 	svc.Obligations = &ObligationService{svc: svc}
+	svc.BusinessFunctions = &BusinessFunctionService{svc: svc}
+	svc.AiSystems = &AiSystemService{svc: svc}
 	svc.RightsRequests = &RightsRequestService{svc: svc}
 	svc.ProcessingActivities = &ProcessingActivityService{svc: svc}
 	svc.DataProtectionImpactAssessments = &DataProtectionImpactAssessmentService{svc: svc}
@@ -253,24 +225,13 @@ func NewService(
 	svc.StatementsOfApplicability = &StatementOfApplicabilityService{svc: svc}
 	svc.GeneratedDocuments = &GeneratedDocumentService{svc: svc}
 	svc.Files = &FileService{svc: svc}
-	svc.CustomDomains = &CustomDomainService{
-		svc:           svc,
-		encryptionKey: encryptionKey,
-		acmeService:   acmeService,
-		logger:        logger.Named("custom_domains"),
-	}
-	svc.SlackMessages = slackService
+	svc.LogExports = iamService.LogExports
 
 	return svc, nil
 }
 
-func (s *Service) ExportJob(ctx context.Context) error {
-	exportJob, err := s.lockExportJob(ctx)
-	if err != nil {
-		return fmt.Errorf("cannot lock export job: %w", err)
-	}
-
-	scope := coredata.NewScope(exportJob.ID.TenantID())
+func (s *Service) processExportJob(ctx context.Context, exportJob *coredata.ExportJob) error {
+	scope := coredata.NewScope(exportJob.ID.TenantID(), gid.Nil)
 
 	var exportService ExportService
 
@@ -279,6 +240,8 @@ func (s *Service) ExportJob(ctx context.Context) error {
 		exportService = s.Frameworks
 	case coredata.ExportJobTypeDocument:
 		exportService = s.Documents
+	case coredata.ExportJobTypeAuditLog, coredata.ExportJobTypeSCIMEvent:
+		exportService = s.LogExports
 	default:
 		unknownTypeErr := fmt.Errorf("unknown export job type: %q", exportJob.Type)
 		if err := s.commitFailedExport(ctx, exportJob, unknownTypeErr); err != nil {
@@ -341,12 +304,9 @@ func (s *Service) lockExportJob(ctx context.Context) (*coredata.ExportJob, error
 				return fmt.Errorf("cannot load next pending export job: %w", err)
 			}
 
-			scope = coredata.NewScope(exportJob.ID.TenantID())
+			scope = coredata.NewScope(exportJob.ID.TenantID(), gid.Nil)
 
-			exportJob.Status = coredata.ExportJobStatusProcessing
-
-			exportJob.StartedAt = new(time.Now())
-			if err := exportJob.Update(ctx, tx, scope); err != nil {
+			if err := exportJob.MarkProcessing(ctx, tx, scope); err != nil {
 				return fmt.Errorf("cannot update %s export job: %w", exportJob.Type, err)
 			}
 
@@ -369,8 +329,8 @@ func (s *Service) commitFailedExport(ctx context.Context, exportJob *coredata.Ex
 	return s.pg.WithTx(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
-			scope := coredata.NewScope(exportJob.ID.TenantID())
-			if err := exportJob.Update(ctx, tx, scope); err != nil {
+			scope := coredata.NewScope(exportJob.ID.TenantID(), gid.Nil)
+			if err := exportJob.UpdateIfStatus(ctx, tx, scope, coredata.ExportJobStatusProcessing); err != nil {
 				return fmt.Errorf("cannot update %s export job: %w", exportJob.Type, err)
 			}
 
@@ -386,37 +346,12 @@ func (s *Service) commitSuccessfulExport(ctx context.Context, exportJob *coredat
 	return s.pg.WithTx(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
-			scope := coredata.NewScope(exportJob.ID.TenantID())
-			if err := exportJob.Update(ctx, tx, scope); err != nil {
+			scope := coredata.NewScope(exportJob.ID.TenantID(), gid.Nil)
+			if err := exportJob.UpdateIfStatus(ctx, tx, scope, coredata.ExportJobStatusProcessing); err != nil {
 				return fmt.Errorf("cannot update %s export job: %w", exportJob.Type, err)
 			}
 
 			return nil
 		},
 	)
-}
-
-func (s *Service) LoadOrganizationByDomain(ctx context.Context, domain string) (gid.GID, error) {
-	var organizationID gid.GID
-
-	err := s.pg.WithConn(
-		ctx,
-		func(ctx context.Context, conn pg.Querier) error {
-			var customDomain coredata.CustomDomain
-			if err := customDomain.LoadByDomain(ctx, conn, coredata.NewNoScope(), domain); err != nil {
-				return fmt.Errorf("cannot load custom domain: %w", err)
-			}
-
-			var org coredata.Organization
-			if err := org.LoadByCustomDomainID(ctx, conn, coredata.NewNoScope(), customDomain.ID); err != nil {
-				return fmt.Errorf("cannot load organization: %w", err)
-			}
-
-			organizationID = org.ID
-
-			return nil
-		},
-	)
-
-	return organizationID, err
 }

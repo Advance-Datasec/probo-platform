@@ -1,21 +1,28 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package probo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -146,9 +153,9 @@ func (s ControlService) ListForDocumentID(
 	return page.NewPage(controls, cursor), nil
 }
 
-func (s ControlService) CountForMeasureID(
+func (s ControlService) CountForInternalControlID(
 	ctx context.Context, scope coredata.Scoper,
-	measureID gid.GID,
+	internalControlID gid.GID,
 	filter *coredata.ControlFilter,
 ) (int, error) {
 	var count int
@@ -158,7 +165,7 @@ func (s ControlService) CountForMeasureID(
 		func(ctx context.Context, conn pg.Querier) (err error) {
 			controls := &coredata.Controls{}
 
-			count, err = controls.CountByMeasureID(ctx, conn, scope, measureID, filter)
+			count, err = controls.CountByInternalControlID(ctx, conn, scope, internalControlID, filter)
 			if err != nil {
 				return fmt.Errorf("cannot count controls: %w", err)
 			}
@@ -173,24 +180,24 @@ func (s ControlService) CountForMeasureID(
 	return count, nil
 }
 
-func (s ControlService) ListForMeasureID(
+func (s ControlService) ListForInternalControlID(
 	ctx context.Context, scope coredata.Scoper,
-	measureID gid.GID,
+	internalControlID gid.GID,
 	cursor *page.Cursor[coredata.ControlOrderField],
 	filter *coredata.ControlFilter,
 ) (*page.Page[*coredata.Control, coredata.ControlOrderField], error) {
 	var controls coredata.Controls
 
-	measure := &coredata.Measure{}
+	internalControl := &coredata.InternalControl{}
 
 	err := s.svc.pg.WithConn(
 		ctx,
 		func(ctx context.Context, conn pg.Querier) error {
-			if err := measure.LoadByID(ctx, conn, scope, measureID); err != nil {
-				return fmt.Errorf("cannot load measure: %w", err)
+			if err := internalControl.LoadByID(ctx, conn, scope, internalControlID); err != nil {
+				return fmt.Errorf("cannot load internalControl: %w", err)
 			}
 
-			return controls.LoadByMeasureID(ctx, conn, scope, measureID, cursor, filter)
+			return controls.LoadByInternalControlID(ctx, conn, scope, internalControlID, cursor, filter)
 		},
 	)
 	if err != nil {
@@ -376,13 +383,13 @@ func (s ControlService) ListForRiskID(
 	return page.NewPage(controls, cursor), nil
 }
 
-func (s ControlService) CreateMeasureMapping(
+func (s ControlService) CreateInternalControlMapping(
 	ctx context.Context, scope coredata.Scoper,
 	controlID gid.GID,
-	measureID gid.GID,
-) (*coredata.Control, *coredata.Measure, error) {
+	internalControlID gid.GID,
+) (*coredata.Control, *coredata.InternalControl, error) {
 	control := &coredata.Control{}
-	measure := &coredata.Measure{}
+	internalControl := &coredata.InternalControl{}
 
 	err := s.svc.pg.WithConn(
 		ctx,
@@ -391,35 +398,35 @@ func (s ControlService) CreateMeasureMapping(
 				return fmt.Errorf("cannot load control: %w", err)
 			}
 
-			if err := measure.LoadByID(ctx, conn, scope, measureID); err != nil {
-				return fmt.Errorf("cannot load measure: %w", err)
+			if err := internalControl.LoadByID(ctx, conn, scope, internalControlID); err != nil {
+				return fmt.Errorf("cannot load internalControl: %w", err)
 			}
 
-			controlMeasure := &coredata.ControlMeasure{
-				ControlID:      controlID,
-				MeasureID:      measureID,
-				OrganizationID: control.OrganizationID,
-				TenantID:       scope.GetTenantID(),
-				CreatedAt:      time.Now(),
+			controlInternalControl := &coredata.ControlInternalControl{
+				ControlID:         controlID,
+				InternalControlID: internalControlID,
+				OrganizationID:    control.OrganizationID,
+				TenantID:          scope.GetTenantID(),
+				CreatedAt:         time.Now(),
 			}
 
-			return controlMeasure.Upsert(ctx, conn, scope)
+			return controlInternalControl.Upsert(ctx, conn, scope)
 		},
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("cannot create control measure mapping: %w", err)
+		return nil, nil, fmt.Errorf("cannot create control internal control mapping: %w", err)
 	}
 
-	return control, measure, nil
+	return control, internalControl, nil
 }
 
-func (s ControlService) DeleteMeasureMapping(
+func (s ControlService) DeleteInternalControlMapping(
 	ctx context.Context, scope coredata.Scoper,
 	controlID gid.GID,
-	measureID gid.GID,
-) (*coredata.Control, *coredata.Measure, error) {
+	internalControlID gid.GID,
+) (*coredata.Control, *coredata.InternalControl, error) {
 	control := &coredata.Control{}
-	measure := &coredata.Measure{}
+	internalControl := &coredata.InternalControl{}
 
 	err := s.svc.pg.WithTx(
 		ctx,
@@ -428,23 +435,23 @@ func (s ControlService) DeleteMeasureMapping(
 				return fmt.Errorf("cannot load control: %w", err)
 			}
 
-			if err := measure.LoadByID(ctx, tx, scope, measureID); err != nil {
-				return fmt.Errorf("cannot load measure: %w", err)
+			if err := internalControl.LoadByID(ctx, tx, scope, internalControlID); err != nil {
+				return fmt.Errorf("cannot load internalControl: %w", err)
 			}
 
-			controlMeasure := &coredata.ControlMeasure{}
-			if err := controlMeasure.Delete(ctx, tx, scope, control.ID, measure.ID); err != nil {
-				return fmt.Errorf("cannot delete control measure mapping: %w", err)
+			controlInternalControl := &coredata.ControlInternalControl{}
+			if err := controlInternalControl.Delete(ctx, tx, scope, control.ID, internalControl.ID); err != nil {
+				return fmt.Errorf("cannot delete control internal control mapping: %w", err)
 			}
 
 			return nil
 		},
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("cannot delete control measure mapping: %w", err)
+		return nil, nil, fmt.Errorf("cannot delete control internal control mapping: %w", err)
 	}
 
-	return control, measure, nil
+	return control, internalControl, nil
 }
 
 func (s ControlService) CreateDocumentMapping(
@@ -494,7 +501,7 @@ func (s ControlService) DeleteDocumentMapping(
 	documentID gid.GID,
 ) (*coredata.Control, *coredata.Document, error) {
 	control := &coredata.Control{}
-	document := &coredata.Document{}
+	document := &coredata.Document{ID: documentID}
 
 	err := s.svc.pg.WithTx(
 		ctx,
@@ -504,11 +511,13 @@ func (s ControlService) DeleteDocumentMapping(
 			}
 
 			if err := document.LoadByID(ctx, tx, scope, documentID); err != nil {
-				return fmt.Errorf("cannot load document: %w", err)
+				if !errors.Is(err, coredata.ErrResourceNotFound) {
+					return fmt.Errorf("cannot load document: %w", err)
+				}
 			}
 
 			controlDocument := &coredata.ControlDocument{}
-			if err := controlDocument.Delete(ctx, tx, scope, control.ID, document.ID); err != nil {
+			if err := controlDocument.Delete(ctx, tx, scope, control.ID, documentID); err != nil {
 				return fmt.Errorf("cannot delete control document mapping: %w", err)
 			}
 
@@ -766,7 +775,22 @@ func (s ControlService) Create(
 			control.FrameworkID = framework.ID
 			control.OrganizationID = framework.OrganizationID
 
-			return control.Insert(ctx, conn, scope)
+			if err := control.Insert(ctx, conn, scope); err != nil {
+				return err
+			}
+
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				control.ID,
+				control.OrganizationID,
+				control.Name,
+				control.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
+			return nil
 		},
 	)
 	if err != nil {
@@ -809,7 +833,7 @@ func (s ControlService) GetByIDs(
 				conn,
 				scope,
 				controlIDs,
-			); err != nil {
+			); err != nil && !errors.Is(err, coredata.ErrResourceNotFound) {
 				return fmt.Errorf("cannot load controls by ids: %w", err)
 			}
 
@@ -869,7 +893,22 @@ func (s ControlService) Update(
 
 			control.UpdatedAt = time.Now()
 
-			return control.Update(ctx, conn, scope)
+			if err := control.Update(ctx, conn, scope); err != nil {
+				return err
+			}
+
+			if err := coredata.UpsertSearchResource(
+				ctx,
+				conn,
+				control.ID,
+				control.OrganizationID,
+				control.Name,
+				control.SearchText(),
+			); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
+			return nil
 		},
 	)
 	if err != nil {
@@ -888,6 +927,10 @@ func (s ControlService) Delete(
 	return s.svc.pg.WithTx(
 		ctx,
 		func(ctx context.Context, tx pg.Tx) error {
+			if err := coredata.DeleteSearchResource(ctx, tx, control.ID); err != nil {
+				return fmt.Errorf("cannot sync search: %w", err)
+			}
+
 			return control.Delete(ctx, tx, scope)
 		},
 	)

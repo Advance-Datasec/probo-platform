@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package mailman
 
@@ -56,12 +62,12 @@ func (s *Service) mailingListEmailConfig(
 	mailingListID gid.GID,
 ) (emails.PresenterConfig, string, string, *mail.Addr, error) {
 	var (
-		mailingList    = &coredata.MailingList{}
-		compliancePage = &coredata.TrustCenter{}
-		organization   = &coredata.Organization{}
-		customDomain   *coredata.CustomDomain
-		logoFile       = &coredata.File{}
-		defaultCfg     = emails.DefaultPresenterConfig(s.apiBaseURL.String())
+		mailingList       = &coredata.MailingList{}
+		compliancePage    = &coredata.CompliancePortal{}
+		organization      = &coredata.Organization{}
+		compliancePageURL string
+		logoFile          = &coredata.File{}
+		defaultCfg        = emails.DefaultPresenterConfig(s.apiBaseURL.String())
 	)
 
 	scope := coredata.NewScopeFromObjectID(mailingListID)
@@ -91,12 +97,17 @@ func (s *Service) mailingListEmailConfig(
 				return fmt.Errorf("cannot load organization: %w", err)
 			}
 
-			customDomain = &coredata.CustomDomain{}
-			if err := customDomain.LoadByOrganizationID(ctx, conn, scope, organization.ID); err != nil {
-				if !errors.Is(err, coredata.ErrResourceNotFound) {
-					return fmt.Errorf("cannot load custom domain: %w", err)
-				}
+			publicURL, err := s.compliancePortal.PublicURLForCompliancePortal(
+				ctx,
+				conn,
+				scope,
+				compliancePage,
+			)
+			if err != nil {
+				return fmt.Errorf("cannot resolve compliance page URL: %w", err)
 			}
+
+			compliancePageURL = publicURL
 
 			return nil
 		},
@@ -105,7 +116,7 @@ func (s *Service) mailingListEmailConfig(
 		return defaultCfg, "", "", nil, err
 	}
 
-	cfg, compliancePageURL, err := s.presenterConfigFromTrustCenter(compliancePage, organization, customDomain, logoFile)
+	cfg, err := s.presenterConfigFromCompliancePortal(compliancePage, organization, compliancePageURL, logoFile)
 	if err != nil {
 		return defaultCfg, "", "", nil, err
 	}
@@ -123,44 +134,27 @@ func (s *Service) mailingListEmailConfig(
 	return cfg, organization.Name, updatesPageURL, mailingList.ReplyTo, nil
 }
 
-func (s *Service) presenterConfigFromTrustCenter(
-	compliancePage *coredata.TrustCenter,
+func (s *Service) presenterConfigFromCompliancePortal(
+	compliancePage *coredata.CompliancePortal,
 	organization *coredata.Organization,
-	customDomain *coredata.CustomDomain,
+	compliancePageURL string,
 	logoFile *coredata.File,
-) (emails.PresenterConfig, string, error) {
+) (emails.PresenterConfig, error) {
 	cfg := emails.DefaultPresenterConfig(s.apiBaseURL.String())
-
-	compliancePageBase := s.apiBaseURL.WithPath("/trust/" + compliancePage.ID.String())
-
-	if customDomain != nil && customDomain.SSLStatus == coredata.CustomDomainSSLStatusActive {
-		customBase, err := baseurl.Parse("https://" + customDomain.Domain)
-		if err != nil {
-			return cfg, "", fmt.Errorf("cannot parse custom domain URL: %w", err)
-		}
-
-		compliancePageBase = customBase.WithPath("")
-	}
-
-	compliancePageURL, err := compliancePageBase.String()
-	if err != nil {
-		return cfg, "", fmt.Errorf("cannot build compliance page URL: %w", err)
-	}
-
 	cfg.BaseURL = compliancePageURL
 
 	if compliancePage.LogoFileID != nil && logoFile != nil && logoFile.FileKey != "" {
 		cfg.SenderCompanyLogoPath = filepath.Join("/api/files/v1/public/", logoFile.ID.String())
 
 		cfg.SenderCompanyName = organization.Name
-		if organization.WebsiteURL != nil {
-			cfg.SenderCompanyWebsiteURL = *organization.WebsiteURL
+		if compliancePage.WebsiteURL != nil {
+			cfg.SenderCompanyWebsiteURL = *compliancePage.WebsiteURL
 		}
 
-		if organization.HeadquarterAddress != nil {
-			cfg.SenderCompanyHeadquarterAddress = *organization.HeadquarterAddress
+		if compliancePage.HeadquarterAddress != nil {
+			cfg.SenderCompanyHeadquarterAddress = *compliancePage.HeadquarterAddress
 		}
 	}
 
-	return cfg, compliancePageURL, nil
+	return cfg, nil
 }

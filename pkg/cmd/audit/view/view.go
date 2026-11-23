@@ -1,22 +1,30 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package view
 
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
@@ -25,15 +33,35 @@ import (
 )
 
 const viewQuery = `
-query($id: ID!) {
+query AuditView($id: ID!, $first: Int, $after: CursorKey) {
   node(id: $id) {
     __typename
     ... on Audit {
       id
       name
+      firm
       state
-      validFrom
-      validUntil
+      frameworks(first: $first, after: $after) {
+        totalCount
+        edges {
+          node {
+            id
+            name
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+      validity {
+        start
+        end
+      }
+      auditDates {
+        start
+        end
+      }
       createdAt
       updatedAt
     }
@@ -41,18 +69,36 @@ query($id: ID!) {
 }
 `
 
-type viewResponse struct {
-	Node *struct {
-		Typename   string  `json:"__typename"`
-		ID         string  `json:"id"`
-		Name       string  `json:"name"`
-		State      string  `json:"state"`
-		ValidFrom  *string `json:"validFrom"`
-		ValidUntil *string `json:"validUntil"`
+type (
+	frameworkNode struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+
+	frameworkEdge struct {
+		Node frameworkNode `json:"node"`
+	}
+
+	period struct {
+		Start *string `json:"start"`
+		End   *string `json:"end"`
+	}
+
+	auditNode struct {
+		Typename   string `json:"__typename"`
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		Firm       string `json:"firm"`
+		State      string `json:"state"`
+		Frameworks struct {
+			Edges []frameworkEdge `json:"edges"`
+		} `json:"frameworks"`
+		Validity   *period `json:"validity"`
+		AuditDates *period `json:"auditDates"`
 		CreatedAt  string  `json:"createdAt"`
 		UpdatedAt  string  `json:"updatedAt"`
-	} `json:"node"`
-}
+	}
+)
 
 func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 	var flagOutput *string
@@ -84,32 +130,64 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 				cmdutil.TokenRefreshOption(cfg, host, hc),
 			)
 
-			data, err := client.Do(
+			var viewed *auditNode
+
+			frameworks, _, _, err := api.Paginate(
+				client,
 				viewQuery,
 				map[string]any{"id": args[0]},
+				math.MaxInt32,
+				"",
+				func(data json.RawMessage) (*api.Connection[frameworkNode], error) {
+					var resp struct {
+						Node *struct {
+							auditNode
+
+							Frameworks api.Connection[frameworkNode] `json:"frameworks"`
+						} `json:"node"`
+					}
+
+					if err := json.Unmarshal(data, &resp); err != nil {
+						return nil, err
+					}
+
+					if resp.Node == nil {
+						return nil, fmt.Errorf("audit %s not found", args[0])
+					}
+
+					if resp.Node.Typename != "Audit" {
+						return nil, fmt.Errorf("expected Audit node, got %s", resp.Node.Typename)
+					}
+
+					if viewed == nil {
+						node := resp.Node.auditNode
+						viewed = &node
+					}
+
+					return &resp.Node.Frameworks, nil
+				},
 			)
 			if err != nil {
 				return err
 			}
 
-			var resp viewResponse
-			if err := json.Unmarshal(data, &resp); err != nil {
-				return fmt.Errorf("cannot parse response: %w", err)
-			}
-
-			if resp.Node == nil {
+			if viewed == nil {
 				return fmt.Errorf("audit %s not found", args[0])
 			}
 
-			if resp.Node.Typename != "Audit" {
-				return fmt.Errorf("expected Audit node, got %s", resp.Node.Typename)
+			edges := make([]frameworkEdge, len(frameworks))
+
+			for i, framework := range frameworks {
+				edges[i] = frameworkEdge{Node: framework}
 			}
+
+			viewed.Frameworks.Edges = edges
 
 			if *flagOutput == cmdutil.OutputJSON {
-				return cmdutil.PrintJSON(f.IOStreams.Out, resp.Node)
+				return cmdutil.PrintJSON(f.IOStreams.Out, viewed)
 			}
 
-			a := resp.Node
+			a := viewed
 			out := f.IOStreams.Out
 
 			bold := lipgloss.NewStyle().Bold(true)
@@ -118,14 +196,36 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 			_, _ = fmt.Fprintf(out, "%s\n\n", bold.Render(a.Name))
 
 			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("ID:"), a.ID)
-			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("State:"), a.State)
-
-			if a.ValidFrom != nil && *a.ValidFrom != "" {
-				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Valid From:"), *a.ValidFrom)
+			if a.Firm != "" {
+				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Firm:"), a.Firm)
 			}
 
-			if a.ValidUntil != nil && *a.ValidUntil != "" {
-				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Valid Until:"), *a.ValidUntil)
+			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("State:"), a.State)
+
+			names := make([]string, 0, len(a.Frameworks.Edges))
+
+			for _, edge := range a.Frameworks.Edges {
+				if edge.Node.Name != "" {
+					names = append(names, edge.Node.Name)
+				}
+			}
+
+			_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Frameworks:"), strings.Join(names, ", "))
+
+			if a.Validity != nil && a.Validity.Start != nil && *a.Validity.Start != "" {
+				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Valid From:"), *a.Validity.Start)
+			}
+
+			if a.Validity != nil && a.Validity.End != nil && *a.Validity.End != "" {
+				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Valid Until:"), *a.Validity.End)
+			}
+
+			if a.AuditDates != nil && a.AuditDates.Start != nil && *a.AuditDates.Start != "" {
+				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Audit Start:"), *a.AuditDates.Start)
+			}
+
+			if a.AuditDates != nil && a.AuditDates.End != nil && *a.AuditDates.End != "" {
+				_, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Audit End:"), *a.AuditDates.End)
 			}
 
 			_, _ = fmt.Fprintln(out)

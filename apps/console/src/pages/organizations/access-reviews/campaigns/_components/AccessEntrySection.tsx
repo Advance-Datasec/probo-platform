@@ -1,0 +1,186 @@
+// Copyright (c) 2026 Probo Inc <hello@probo.com>.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import { Button, IconWarning, Spinner, ThirdPartyLogo } from "@probo/ui";
+import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import { graphql, useFragment } from "react-relay";
+import { useParams } from "react-router";
+
+import type { AccessEntrySection_source$key } from "#/__generated__/core/AccessEntrySection_source.graphql";
+import type { AccessEntrySectionRetryFetchMutation } from "#/__generated__/core/AccessEntrySectionRetryFetchMutation.graphql";
+import { useMutation } from "#/lib/relay/useMutation";
+
+import { campaignSourceLabel } from "../../_lib/sourceLabel";
+
+import { accessEntrySection } from "./variants";
+
+const accessEntrySectionFragment = graphql`
+  fragment AccessEntrySection_source on AccessReviewCampaignSource {
+    name
+    source {
+      id
+      name
+      connector {
+        provider
+      }
+      connectorAccount {
+        name
+      }
+    }
+    fetchAttempts(first: 1) {
+      edges {
+        node {
+          status
+          error
+        }
+      }
+    }
+  }
+`;
+
+const retryFetchMutation = graphql`
+  mutation AccessEntrySectionRetryFetchMutation(
+    $input: RetryAccessReviewCampaignSourceFetchInput!
+  ) {
+    retryAccessReviewCampaignSourceFetch(input: $input) {
+      accessReviewCampaign {
+        id
+        status
+        sources {
+          id
+          ...AccessEntrySection_source
+        }
+      }
+    }
+  }
+`;
+
+interface AccessEntrySectionProps {
+  sourceKey: AccessEntrySection_source$key;
+  canRetryFetch: boolean;
+  count: number;
+  children: ReactNode;
+  footer?: ReactNode;
+}
+
+// One connector group: header (logo + name + count) above a bordered list of entries.
+export function AccessEntrySection({
+  sourceKey,
+  canRetryFetch,
+  count,
+  children,
+  footer,
+}: AccessEntrySectionProps) {
+  const { t } = useTranslation();
+  const source = useFragment(accessEntrySectionFragment, sourceKey);
+  const { root, header, title: titleClass, count: countClass } = accessEntrySection();
+  const latestAttempt = source.fetchAttempts.edges[0]?.node;
+  const fetchStatus = latestAttempt?.status;
+  const error = fetchStatus === "FAILED" ? latestAttempt.error : null;
+  const statusMessage
+    = count === 0 && (fetchStatus === "QUEUED" || fetchStatus === "FETCHING")
+      ? t(`campaignDetailPage.fetchStatus.${fetchStatus.toLowerCase()}`)
+      : null;
+  const provider = source.source?.connector?.provider;
+  const sourceId = source.source?.id;
+  const { campaignId } = useParams<{ campaignId: string }>();
+  const [retryFetch, isRetrying] = useMutation<AccessEntrySectionRetryFetchMutation>(
+    retryFetchMutation,
+    { errorToast: t("campaignDetailPage.errors.retryFetch") },
+  );
+
+  return (
+    <section className={root()}>
+      <div className={header()}>
+        {provider
+          ? <ThirdPartyLogo thirdParty={provider} className="size-5 shrink-0" />
+          : null}
+        <h2 className={titleClass()}>
+          {campaignSourceLabel({
+            name: source.name,
+            source: source.source == null
+              ? null
+              : {
+                  name: source.source.name,
+                  accountName: source.source.connectorAccount?.name,
+                },
+          })}
+        </h2>
+        <span className={countClass()}>{`(${count})`}</span>
+      </div>
+      {error
+        ? (
+            <div className="flex items-start gap-2 rounded-[10px] border border-border-danger bg-danger px-4 py-3 text-sm text-txt-danger">
+              <IconWarning className="mt-0.5 size-4 shrink-0" />
+              <div className="flex-1">
+                <p className="font-medium">{t("campaignDetailPage.fetchFailed")}</p>
+                <p>{error}</p>
+              </div>
+              {canRetryFetch && sourceId && campaignId
+                ? (
+                    <Button
+                      variant="secondary"
+                      disabled={isRetrying}
+                      onClick={() => {
+                        void retryFetch({
+                          variables: {
+                            input: {
+                              accessReviewCampaignId: campaignId,
+                              accessReviewSourceId: sourceId,
+                            },
+                          },
+                        }).catch(() => {});
+                      }}
+                    >
+                      {t("campaignDetailPage.actions.retryFetch")}
+                    </Button>
+                  )
+                : null}
+            </div>
+          )
+        : null}
+      {statusMessage && !error
+        ? (
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex items-center justify-center gap-2 rounded-[10px] border border-border-low bg-level-1 px-4 py-8 text-sm text-txt-tertiary"
+            >
+              <Spinner size={16} />
+              <span>{statusMessage}</span>
+            </div>
+          )
+        : null}
+      {count > 0
+        ? children
+        // A footer means more pages are still coming, so "no entries" would be
+        // premature.
+        : error || statusMessage || footer
+          ? null
+          : (
+              <div className="rounded-[10px] border border-border-low bg-level-1 px-4 py-8 text-center text-sm text-txt-tertiary">
+                {t("campaignDetailPage.emptyEntries")}
+              </div>
+            )}
+      {footer}
+    </section>
+  );
+}

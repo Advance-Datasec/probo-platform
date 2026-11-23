@@ -1,4 +1,4 @@
-Govrly
+Probo
 
 Hi {{.RecipientFullName}},
 
@@ -8,4 +8,5 @@ Your framework export has been completed successfully. Click the link below to d
 
 This link will expire in 24 hours.
 
-app.govrly.sa
+{{.SenderCompanyHeadquarterAddress}}
+Powered By Probo

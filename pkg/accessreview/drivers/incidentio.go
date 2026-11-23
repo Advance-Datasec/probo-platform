@@ -1,24 +1,32 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -26,7 +34,7 @@ import (
 )
 
 const (
-	incidentIOUsersEndpoint = "https://api.incident.io/v2/users"
+	incidentIOUsersPath = "/users"
 	// incidentIOPageSize is the page size requested from GET /v2/users (the
 	// API defaults to 25 and accepts up to 10000).
 	incidentIOPageSize = 100
@@ -37,6 +45,7 @@ const (
 // every user of that organization with no tenant selector.
 type IncidentIODriver struct {
 	httpClient *http.Client
+	baseURL    string
 }
 
 var _ Driver = (*IncidentIODriver)(nil)
@@ -65,8 +74,8 @@ type incidentIOUsersResponse struct {
 	} `json:"pagination_meta"`
 }
 
-func NewIncidentIODriver(httpClient *http.Client) *IncidentIODriver {
-	return &IncidentIODriver{httpClient: httpClient}
+func NewIncidentIODriver(httpClient *http.Client, baseURL string) *IncidentIODriver {
+	return &IncidentIODriver{httpClient: httpClient, baseURL: baseURL}
 }
 
 func (d *IncidentIODriver) ListAccounts(ctx context.Context) ([]AccountRecord, error) {
@@ -88,9 +97,9 @@ func (d *IncidentIODriver) ListAccounts(ctx context.Context) ([]AccountRecord, e
 
 			records = append(records, AccountRecord{
 				Email:       email,
-				FullName:    incidentIOFullName(u, email),
+				FullName:    cmp.Or(strings.TrimSpace(u.Name), email),
 				Roles:       incidentIORoles(u),
-				IsAdmin:     incidentIOIsAdmin(u),
+				IsAdmin:     new(incidentIOIsAdmin(u)),
 				MFAStatus:   coredata.MFAStatusUnknown,
 				AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
 				AccountType: coredata.AccessReviewEntryAccountTypeUser,
@@ -114,7 +123,12 @@ func (d *IncidentIODriver) ListAccounts(ctx context.Context) ([]AccountRecord, e
 }
 
 func (d *IncidentIODriver) fetchUsersPage(ctx context.Context, after string) (*incidentIOUsersResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, incidentIOUsersEndpoint, nil)
+	endpoint, err := url.JoinPath(d.baseURL, incidentIOUsersPath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build incident.io users URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create incident.io users request: %w", err)
 	}
@@ -149,14 +163,6 @@ func (d *IncidentIODriver) fetchUsersPage(ctx context.Context, after string) (*i
 	}
 
 	return &resp, nil
-}
-
-func incidentIOFullName(u incidentIOUser, fallback string) string {
-	if name := strings.TrimSpace(u.Name); name != "" {
-		return name
-	}
-
-	return fallback
 }
 
 // incidentIORoles returns the user's roles, preferring the live RBAC roles

@@ -11,15 +11,16 @@ permissions:
 jobs:
   build-apps:
     name: "build-apps"
-    runs-on: "runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/extras=s3-cache"
+    if: github.repository == 'getprobo/probo'
+    runs-on: "runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/volume=40gb/extras=s3-cache"
     permissions:
       contents: "read"
     steps:
-      - uses: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6
+      - uses: "actions/checkout@v7.0.1"
         with:
           submodules: recursive
-      - uses: "runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60" # v2
-      - uses: "./.github/actions/setup"
+      - uses: "runs-on/action@v2.6.0"
+      - uses: "$/.github/actions/setup"
         with:
           go: "false"
       - run: "npm --workspace @probo/emails run build"
@@ -28,23 +29,29 @@ jobs:
         run: |
           npm --workspace @probo/console run check
           NODE_ENV=production npm --workspace @probo/console run build
-      - name: "Build trust"
+      - name: "Build compliance-portal"
         run: |
-          npm --workspace @probo/trust run check
-          NODE_ENV=production npm --workspace @probo/trust run build
-      - uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" # v7
+          npm --workspace @probo/compliance-portal run check
+          NODE_ENV=production npm --workspace @probo/compliance-portal run build
+      - name: "Build employee-portal"
+        run: |
+          npm --workspace @probo/employee-portal run check
+          NODE_ENV=production npm --workspace @probo/employee-portal run build
+      - uses: "actions/upload-artifact@v7.0.2"
         with:
           name: "frontend-apps"
           path: |
             apps/console/dist/
-            apps/trust/dist/
+            apps/compliance-portal/dist/
+            apps/employee-portal/dist/
             packages/emails/dist/
           retention-days: 1
 
   build-binary:
     name: "binary (${{ matrix.goos }}/${{ matrix.goarch }})"
+    if: success() && github.repository == 'getprobo/probo'
     needs: [build-apps]
-    runs-on: "runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/extras=s3-cache"
+    runs-on: "runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/volume=40gb/extras=s3-cache"
     permissions:
       contents: "read"
     strategy:
@@ -61,22 +68,23 @@ jobs:
           - { goos: openbsd, goarch: amd64 }
           - { goos: openbsd, goarch: arm64 }
     steps:
-      - uses: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6
+      - uses: "actions/checkout@v7.0.1"
         with:
           submodules: recursive
-      - uses: "runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60" # v2
-      - uses: "./.github/actions/setup"
+      - uses: "runs-on/action@v2.6.0"
+      - uses: "$/.github/actions/setup"
         with:
           node: "false"
-      - uses: "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" # v8
+          go-cache-key-prefix: "${{ github.workflow }}-${{ github.job }}-${{ matrix.goos }}-${{ matrix.goarch }}"
+      - uses: "actions/download-artifact@v8.0.2"
         with:
           name: "frontend-apps"
       - name: "Generate Go code"
         run: |
           go generate ./pkg/server/api/connect/v1
-          go generate ./pkg/server/api/console/v1
-          go generate ./pkg/server/api/trust/v1
           go generate ./pkg/server/api/mcp/v1
+          go generate ./pkg/server/api/console/v1
+          go generate ./pkg/server/api/complianceportal/v1
       - name: "Build binaries"
         env:
           CGO_ENABLED: "0"
@@ -122,12 +130,12 @@ jobs:
           else
             tar -czf "archives/${PROBOD_DIR}.tar.gz" -C staging "${PROBOD_DIR}"
           fi
-      - uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" # v7
+      - uses: "actions/upload-artifact@v7.0.2"
         with:
           name: "binary-${{ matrix.goos }}-${{ matrix.goarch }}"
           path: "dist/"
           retention-days: 1
-      - uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" # v7
+      - uses: "actions/upload-artifact@v7.0.2"
         with:
           name: "archive-${{ matrix.goos }}-${{ matrix.goarch }}"
           path: "archives/"
@@ -135,8 +143,9 @@ jobs:
 
   build-docker:
     name: "docker (${{ matrix.arch }})"
+    if: success() && github.repository == 'getprobo/probo'
     needs: [build-binary]
-    runs-on: "runs-on=${{ github.run_id }}/runner=${{ matrix.runner }}/extras=s3-cache"
+    runs-on: "runs-on=${{ github.run_id }}/runner=${{ matrix.runner }}/volume=40gb/extras=s3-cache"
     permissions:
       contents: "read"
       packages: "write"
@@ -151,15 +160,15 @@ jobs:
             platform: "linux/arm64"
             runner: "4cpu-linux-arm64"
     steps:
-      - uses: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6
-      - uses: "runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60" # v2
-      - uses: "docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5" # v4.1.0
-      - uses: "docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee" # v4.2.0
+      - uses: "actions/checkout@v7.0.1"
+      - uses: "runs-on/action@v2.6.0"
+      - uses: "docker/setup-buildx-action@v4.4.1"
+      - uses: "docker/login-action@v4.7.0"
         with:
           registry: artifact.probo.inc
           username: ${{ secrets.HARBOR_USERNAME }}
           password: ${{ secrets.HARBOR_PASSWORD }}
-      - uses: "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" # v8
+      - uses: "actions/download-artifact@v8.0.2"
         with:
           name: "binary-linux-${{ matrix.arch }}"
           path: "linux/${{ matrix.arch }}"
@@ -192,8 +201,9 @@ jobs:
 
   docker-manifest:
     name: "docker-manifest"
+    if: success() && github.repository == 'getprobo/probo'
     needs: [build-docker]
-    runs-on: "runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache"
+    runs-on: "runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/volume=40gb/extras=s3-cache"
     permissions:
       packages: "write"
       id-token: "write"
@@ -201,14 +211,14 @@ jobs:
       digest: ${{ steps.digest.outputs.digest }}
       image_tag: ${{ steps.tag.outputs.image_tag }}
     steps:
-      - uses: "runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60" # v2
-      - uses: "docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5" # v4.1.0
-      - uses: "docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee" # v4.2.0
+      - uses: "runs-on/action@v2.6.0"
+      - uses: "docker/setup-buildx-action@v4.4.1"
+      - uses: "docker/login-action@v4.7.0"
         with:
           registry: artifact.probo.inc
           username: ${{ secrets.HARBOR_USERNAME }}
           password: ${{ secrets.HARBOR_PASSWORD }}
-      - uses: "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6" # v4.1.2
+      - uses: "sigstore/cosign-installer@v4.1.2"
       - name: "Log in to Harbor with cosign"
         env:
           HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
@@ -262,21 +272,22 @@ jobs:
 
   github-release:
     name: "github-release"
+    if: success() && github.repository == 'getprobo/probo'
     needs: [build-binary, docker-manifest]
-    runs-on: "runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache"
+    runs-on: "runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/volume=40gb/extras=s3-cache"
     permissions:
       contents: "write"
       id-token: "write"
       attestations: "write"
       security-events: "write"
     steps:
-      - uses: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6
+      - uses: "actions/checkout@v7.0.1"
         with:
           fetch-depth: 0
           submodules: recursive
-      - uses: "runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60" # v2
-      - uses: "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6" # v4.1.2
-      - uses: "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" # v8
+      - uses: "runs-on/action@v2.6.0"
+      - uses: "sigstore/cosign-installer@v4.1.2"
+      - uses: "actions/download-artifact@v8.0.2"
         with:
           pattern: "archive-*"
           path: "archives"
@@ -287,44 +298,42 @@ jobs:
           sha256sum *.tar.gz *.zip > checksums.txt
           cosign sign-blob --bundle="checksums.txt.bundle" checksums.txt --yes
       - name: "Generate SBOM"
-        uses: "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610" # v0.24.0
+        uses: "anchore/sbom-action@v0.24.3"
         with:
           path: ./
           format: cyclonedx-json
           output-file: sbom.json
       - name: "Run vulnerability scan"
-        uses: "anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2" # v7.4.0
+        uses: "anchore/scan-action@v7.4.2"
         with:
           sbom: "sbom.json"
           fail-build: true
           severity-cutoff: critical
       - name: "Attest SBOM for archives"
-        uses: "actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26" # v4.1.0
+        uses: "actions/attest@v4.2.2"
         with:
           subject-path: "archives/*.tar.gz, archives/*.zip"
           sbom-path: "sbom.json"
       - name: "Attest build provenance for archives"
-        uses: "actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26" # v4.1.0
+        uses: "actions/attest@v4.2.2"
         with:
           subject-path: "archives/*.tar.gz, archives/*.zip"
       - name: "Attest Docker image SBOM"
-        uses: "actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26" # v4.1.0
+        uses: "actions/attest@v4.2.2"
         with:
           subject-name: "artifact.probo.inc/probo/probo"
           subject-digest: ${{ needs.docker-manifest.outputs.digest }}
           sbom-path: "sbom.json"
       - name: "Trivy scan Docker image"
-        uses: "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25" # 0.36.0
+        uses: "$/.github/actions/trivy"
         with:
           image-ref: "artifact.probo.inc/probo/probo:${{ needs.docker-manifest.outputs.image_tag }}"
           format: "sarif"
           output: "trivy-results.sarif"
-          exit-code: 1
-          ignore-unfixed: true
-          vuln-type: "os,library"
-          severity: "CRITICAL,HIGH"
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
       - name: "Upload Trivy scan results"
-        uses: "github/codeql-action/upload-sarif@6bc82e05fd0ea64601dd4b465378bbcf57de0314" # v4.32.1
+        uses: "github/codeql-action/upload-sarif@v4.39.1"
         if: always()
         with:
           sarif_file: "trivy-results.sarif"
@@ -346,6 +355,9 @@ jobs:
           - \`artifact.probo.inc/probo/probo:${IMAGE_TAG}\` (multi-arch: linux/amd64, linux/arm64)
           - \`artifact.probo.inc/probo/probo:latest\` (multi-arch: linux/amd64, linux/arm64)
           EOF
+          contrib/ci/release-verify-notes.sh \
+            probod_Darwin_arm64.tar.gz \
+            "artifact.probo.inc/probo/probo:${IMAGE_TAG}" >> release-notes.md
       - name: "Create GitHub release"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -362,7 +374,7 @@ jobs:
             --notes-file release-notes.md \
             $PRERELEASE_FLAG \
             archives/* sbom.json
-      - uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" # v7
+      - uses: "actions/upload-artifact@v7.0.2"
         with:
           name: "sbom"
           path: "sbom.json"

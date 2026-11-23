@@ -1,20 +1,27 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package service
 
 import (
+	_ "embed"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -22,40 +29,28 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"text/template"
+
+	"go.probo.inc/probo/pkg/deviceagent"
 )
 
-const plistPath = "/Library/LaunchDaemons/com.getprobo.agent.plist"
+const (
+	plistPath = "/Library/LaunchDaemons/com.probo.agent.plist"
 
-const launchdPlistTmpl = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>{{xml .Label}}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{{xml .ExePath}}</string>
-        <string>run</string>
-        <string>--dir</string>
-        <string>{{xml .Dir}}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>/var/log/probo-agent.log</string>
-    <key>StandardErrorPath</key>
-    <string>/var/log/probo-agent.log</string>
-    <key>UserName</key>
-    <string>root</string>
-    <key>GroupName</key>
-    <string>wheel</string>
-</dict>
-</plist>
-`
+	helperLabel      = "com.probo.agent.helper"
+	helperPlistPath  = "/Library/LaunchDaemons/" + helperLabel + ".plist"
+	helperBinaryPath = "/Library/PrivilegedHelperTools/" + helperLabel
+)
+
+var (
+	//go:embed launchd.plist.tmpl
+	launchdPlistTmpl string
+
+	launchdPlist = template.Must(
+		template.New("plist").Funcs(template.FuncMap{"xml": xmlEscape}).Parse(launchdPlistTmpl),
+	)
+)
 
 func xmlEscape(v string) (string, error) {
 	var sb strings.Builder
@@ -66,8 +61,52 @@ func xmlEscape(v string) (string, error) {
 	return sb.String(), nil
 }
 
+func removeLaunchDaemonPlist(path string) error {
+	_ = exec.Command("launchctl", "bootout", "system", path).Run()
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("cannot remove plist %s: %w", path, err)
+	}
+
+	return nil
+}
+
+func removeManagedPath(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("cannot remove %s: %w", path, err)
+	}
+
+	return nil
+}
+
+// removePrivilegedHelper boots out and deletes the PKG-installed XPC helper.
+// Missing artifacts are treated as success so uninstall stays idempotent.
+func removePrivilegedHelper() error {
+	_ = exec.Command("launchctl", "bootout", "system/"+helperLabel).Run()
+	_ = exec.Command("launchctl", "bootout", "system", helperPlistPath).Run()
+
+	if err := removeManagedPath(helperPlistPath); err != nil {
+		return fmt.Errorf("cannot remove privileged helper plist: %w", err)
+	}
+
+	if err := removeManagedPath(helperBinaryPath); err != nil {
+		return fmt.Errorf("cannot remove privileged helper binary: %w", err)
+	}
+
+	return nil
+}
+
 // Install writes and boots the launchd plist.
 func Install(cfg Config) error {
+	if err := WritePlist(cfg); err != nil {
+		return err
+	}
+
+	return reloadNow()
+}
+
+// WritePlist renders the LaunchDaemon plist without touching launchd.
+// Use this when the running daemon cannot boot itself out.
+func WritePlist(cfg Config) error {
 	if cfg.ExePath == "" {
 		return errors.New("executable path is required")
 	}
@@ -80,9 +119,8 @@ func Install(cfg Config) error {
 		cfg.Label = DefaultLabel
 	}
 
-	tmpl, err := template.New("plist").Funcs(template.FuncMap{"xml": xmlEscape}).Parse(launchdPlistTmpl)
-	if err != nil {
-		return fmt.Errorf("cannot parse plist template: %w", err)
+	if !deviceagent.IsCanonicalExecutable(cfg.ExePath) {
+		return fmt.Errorf("executable path must be %s", deviceagent.DefaultExecutablePath())
 	}
 
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
@@ -96,10 +134,29 @@ func Install(cfg Config) error {
 
 	defer func() { _ = f.Close() }()
 
-	if err := tmpl.Execute(f, cfg); err != nil {
+	if err := launchdPlist.Execute(f, cfg); err != nil {
 		return fmt.Errorf("cannot render plist: %w", err)
 	}
 
+	return nil
+}
+
+// Restart asks launchd to stop and start the agent daemon so it
+// reloads enrollments.json.
+func Restart(cfg Config) error {
+	label := cfg.Label
+	if label == "" {
+		label = DefaultLabel
+	}
+
+	if out, err := exec.Command("launchctl", "kickstart", "-k", "system/"+label).CombinedOutput(); err != nil {
+		return fmt.Errorf("cannot run launchctl kickstart: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	return nil
+}
+
+func reloadNow() error {
 	// `bootout` first keeps install idempotent.
 	_ = exec.Command("launchctl", "bootout", "system", plistPath).Run()
 	if out, err := exec.Command("launchctl", "bootstrap", "system", plistPath).CombinedOutput(); err != nil {
@@ -109,12 +166,57 @@ func Install(cfg Config) error {
 	return nil
 }
 
-// Uninstall bootouts and removes the launchd plist.
-func Uninstall(cfg Config) error {
-	_ = exec.Command("launchctl", "bootout", "system", plistPath).Run()
-	if err := os.Remove(plistPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("cannot remove plist: %w", err)
+// ScheduleReload bootouts and bootstraps the agent LaunchDaemon from a
+// detached process so a running daemon can change its own Program path.
+func ScheduleReload() error {
+	script := "sleep 1; /bin/launchctl bootout system " + plistPath +
+		"; /bin/launchctl bootstrap system " + plistPath
+	cmd := exec.Command("/bin/sh", "-c", script)
+
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("cannot schedule launchd reload: %w", err)
+	}
+
+	if err := cmd.Process.Release(); err != nil {
+		return fmt.Errorf("cannot detach launchd reload: %w", err)
 	}
 
 	return nil
+}
+
+// Uninstall bootouts and removes the agent LaunchDaemon and the privileged
+// XPC helper installed by the macOS PKG.
+func Uninstall(cfg Config) error {
+	_ = cfg
+
+	if err := removeLaunchDaemonPlist(plistPath); err != nil {
+		return err
+	}
+
+	if err := removePrivilegedHelper(); err != nil {
+		return fmt.Errorf("cannot remove privileged helper: %w", err)
+	}
+
+	if err := deviceagent.RemovePrivilegedExecutable(); err != nil {
+		return fmt.Errorf("cannot remove privileged executable: %w", err)
+	}
+
+	return nil
+}
+
+// InstalledExePath returns ProgramArguments[0] from the agent LaunchDaemon
+// plist, or "" when the plist is missing or unreadable.
+func InstalledExePath() string {
+	out, err := exec.Command(
+		"/usr/libexec/PlistBuddy",
+		"-c",
+		"Print :ProgramArguments:0",
+		plistPath,
+	).Output()
+	if err != nil {
+		return ""
+	}
+
+	return strings.TrimSpace(string(out))
 }

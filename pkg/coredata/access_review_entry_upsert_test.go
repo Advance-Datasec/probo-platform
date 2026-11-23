@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata_test
 
@@ -43,7 +49,7 @@ func seedAccessReviewEntryFixture(t *testing.T, ctx context.Context, client *pg.
 	t.Helper()
 
 	tenantID := gid.NewTenantID()
-	scope := coredata.NewScope(tenantID)
+	scope := coredata.NewScope(tenantID, gid.Nil)
 	organizationID := gid.New(tenantID, coredata.OrganizationEntityType)
 	campaignID := gid.New(tenantID, coredata.AccessReviewCampaignEntityType)
 	sourceID := gid.New(tenantID, coredata.AccessReviewSourceEntityType)
@@ -70,7 +76,7 @@ func seedAccessReviewEntryFixture(t *testing.T, ctx context.Context, client *pg.
 			CreatedAt:      now,
 			UpdatedAt:      now,
 		}
-		if err := source.Insert(ctx, tx, scope); err != nil {
+		if _, err := source.Insert(ctx, tx, scope); err != nil {
 			return err
 		}
 
@@ -168,13 +174,12 @@ func TestAccessReviewEntry_Upsert_FreezesDecidedFields(t *testing.T) {
 		FullName:                     originalFullName,
 		Roles:                        originalRoles,
 		JobTitle:                     "",
-		IsAdmin:                      false,
+		IsAdmin:                      new(false),
 		MFAStatus:                    coredata.MFAStatusUnknown,
 		AuthMethod:                   coredata.AccessReviewEntryAuthMethodUnknown,
 		AccountType:                  coredata.AccessReviewEntryAccountTypeUser,
 		ExternalID:                   "ext-1",
 		AccountKey:                   fx.accountKey,
-		IncrementalTag:               coredata.AccessReviewEntryIncrementalTagNew,
 		Flags:                        originalFlags,
 		FlagReasons:                  originalFlagReasons,
 		Decision:                     coredata.AccessReviewEntryDecisionPending,
@@ -225,13 +230,12 @@ func TestAccessReviewEntry_Upsert_FreezesDecidedFields(t *testing.T) {
 		FullName:                     secondFullName,
 		Roles:                        secondRoles,
 		JobTitle:                     "",
-		IsAdmin:                      true,
+		IsAdmin:                      new(true),
 		MFAStatus:                    coredata.MFAStatusEnabled,
 		AuthMethod:                   coredata.AccessReviewEntryAuthMethodSSO,
 		AccountType:                  coredata.AccessReviewEntryAccountTypeUser,
 		ExternalID:                   "ext-1",
 		AccountKey:                   fx.accountKey,
-		IncrementalTag:               coredata.AccessReviewEntryIncrementalTagUnchanged,
 		Flags:                        []coredata.AccessReviewEntryFlag{coredata.AccessReviewEntryFlagInactive},
 		FlagReasons:                  []string{"refreshed-flag-reason"},
 		Decision:                     coredata.AccessReviewEntryDecisionPending,
@@ -273,7 +277,8 @@ func TestAccessReviewEntry_Upsert_FreezesDecidedFields(t *testing.T) {
 	assert.Equal(t, secondEmail, loaded.Email)
 	assert.Equal(t, secondFullName, loaded.FullName)
 	assert.Equal(t, secondRoles, loaded.Roles)
-	assert.True(t, loaded.IsAdmin)
+	require.NotNil(t, loaded.IsAdmin)
+	assert.True(t, *loaded.IsAdmin)
 	assert.Equal(t, coredata.MFAStatusEnabled, loaded.MFAStatus)
 	assert.Equal(t, coredata.AccessReviewEntryAuthMethodSSO, loaded.AuthMethod)
 	assert.WithinDuration(t, t2, loaded.UpdatedAt, time.Second)
@@ -310,7 +315,6 @@ func TestAccessReviewEntry_Upsert_RefreshesSourceTrackingFields(t *testing.T) {
 		AccountType:                  coredata.AccessReviewEntryAccountTypeUser,
 		ExternalID:                   "ext-2",
 		AccountKey:                   fx.accountKey,
-		IncrementalTag:               coredata.AccessReviewEntryIncrementalTagNew,
 		Flags:                        []coredata.AccessReviewEntryFlag{},
 		FlagReasons:                  []string{},
 		Decision:                     coredata.AccessReviewEntryDecisionPending,
@@ -336,7 +340,6 @@ func TestAccessReviewEntry_Upsert_RefreshesSourceTrackingFields(t *testing.T) {
 		AccountType:                  coredata.AccessReviewEntryAccountTypeUser,
 		ExternalID:                   "ext-2",
 		AccountKey:                   fx.accountKey,
-		IncrementalTag:               coredata.AccessReviewEntryIncrementalTagUnchanged,
 		Flags:                        []coredata.AccessReviewEntryFlag{},
 		FlagReasons:                  []string{},
 		Decision:                     coredata.AccessReviewEntryDecisionPending,
@@ -400,7 +403,6 @@ func TestAccessReviewEntry_Upsert_InsertsActiveAccount(t *testing.T) {
 		AccountType:                  coredata.AccessReviewEntryAccountTypeUser,
 		ExternalID:                   "ext-active",
 		AccountKey:                   fx.accountKey,
-		IncrementalTag:               coredata.AccessReviewEntryIncrementalTagNew,
 		Flags:                        []coredata.AccessReviewEntryFlag{},
 		FlagReasons:                  []string{},
 		Decision:                     coredata.AccessReviewEntryDecisionPending,
@@ -450,7 +452,6 @@ func TestAccessReviewEntry_Upsert_NilRolesWritesEmptyArray(t *testing.T) {
 		AccountType:                  coredata.AccessReviewEntryAccountTypeUser,
 		ExternalID:                   "ext-nil-roles",
 		AccountKey:                   "nil-roles@example.com",
-		IncrementalTag:               coredata.AccessReviewEntryIncrementalTagNew,
 		Flags:                        []coredata.AccessReviewEntryFlag{},
 		FlagReasons:                  []string{},
 		Decision:                     coredata.AccessReviewEntryDecisionPending,

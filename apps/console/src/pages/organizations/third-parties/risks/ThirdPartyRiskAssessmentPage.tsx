@@ -1,19 +1,24 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import { usePageTitle } from "@probo/hooks";
-import { useTranslate } from "@probo/i18n";
 import {
   Button,
   IconPlusLarge,
@@ -25,6 +30,7 @@ import {
 } from "@probo/ui";
 import type { ComponentProps } from "react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { graphql, type PreloadedQuery, usePreloadedQuery, useRefetchableFragment } from "react-relay";
 
 import type { ThirdPartyRiskAssessmentPageFragment$key } from "#/__generated__/core/ThirdPartyRiskAssessmentPageFragment.graphql";
@@ -105,22 +111,22 @@ export default function ThirdPartyRiskAssessmentPage(
   >(riskAssessmentsFragment, queryData.node);
 
   const assessments = data.riskAssessments.edges.map(edge => edge.node);
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  usePageTitle(data.name + " - " + __("Risk Assessments"));
+  usePageTitle(t("thirdPartyRiskAssessmentPage.pageTitle", { name: data.name }));
 
   if (assessments.length === 0) {
     return (
       <div className="text-center text-sm py-6 text-txt-secondary flex flex-col items-center gap-2">
-        {__("No risk assessments found")}
+        {t("thirdPartyRiskAssessmentPage.empty")}
         {data.canCreateRiskAssessment && (
           <CreateRiskAssessmentDialog
             thirdPartyId={data.id}
             connection={data.riskAssessments.__id}
           >
             <Button icon={IconPlusLarge} variant="secondary">
-              {__("Add Risk Assessment")}
+              {t("thirdPartyRiskAssessmentPage.actions.add")}
             </Button>
           </CreateRiskAssessmentDialog>
         )}
@@ -136,10 +142,10 @@ export default function ThirdPartyRiskAssessmentPage(
         >
           <Thead>
             <Tr>
-              <SortableTh field="CREATED_AT">{__("Created At")}</SortableTh>
-              <SortableTh field="EXPIRES_AT">{__("Expires")}</SortableTh>
-              <Th>{__("Data sensitivity")}</Th>
-              <Th>{__("Business impact")}</Th>
+              <SortableTh field="CREATED_AT">{t("thirdPartyRiskAssessmentPage.columns.createdAt")}</SortableTh>
+              <SortableTh field="EXPIRES_AT">{t("thirdPartyRiskAssessmentPage.columns.expires")}</SortableTh>
+              <Th>{t("thirdPartyRiskAssessmentPage.columns.dataSensitivity")}</Th>
+              <Th>{t("thirdPartyRiskAssessmentPage.columns.businessImpact")}</Th>
             </Tr>
           </Thead>
           <Tbody>
@@ -149,7 +155,7 @@ export default function ThirdPartyRiskAssessmentPage(
                 connection={data.riskAssessments.__id}
               >
                 <TrButton colspan={4} onClick={() => {}}>
-                  {__("Add Risk Assessment")}
+                  {t("thirdPartyRiskAssessmentPage.actions.add")}
                 </TrButton>
               </CreateRiskAssessmentDialog>
             )}

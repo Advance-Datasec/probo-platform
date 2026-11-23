@@ -1,16 +1,22 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package coredata
 
@@ -38,11 +44,17 @@ type (
 		HashedPassword       []byte    `db:"hashed_password"`
 		EmailAddressVerified bool      `db:"email_address_verified"`
 		SAMLSubject          *string   `db:"saml_subject"`
+		Locale               *string   `db:"locale"`
+		AvatarFileID         *gid.GID  `db:"avatar_file_id"`
 		CreatedAt            time.Time `db:"created_at"`
 		UpdatedAt            time.Time `db:"updated_at"`
 	}
 
 	Identities []*Identity
+)
+
+var (
+	ErrSAMLSubjectAlreadyExists = errors.New("saml subject already exists")
 )
 
 func (i Identity) CursorKey(orderBy IdentityOrderField) page.CursorKey {
@@ -68,6 +80,8 @@ SELECT
     hashed_password,
     email_address_verified,
     saml_subject,
+    locale,
+    avatar_file_id,
     created_at,
     updated_at
 FROM
@@ -112,6 +126,8 @@ SELECT
     hashed_password,
     email_address_verified,
     saml_subject,
+    locale,
+    avatar_file_id,
     created_at,
     updated_at
 FROM
@@ -119,6 +135,54 @@ FROM
 WHERE
     id = @identity_id
 LIMIT 1;
+`
+
+	args := pgx.StrictNamedArgs{"identity_id": identityID}
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query identity: %w", err)
+	}
+
+	identity, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Identity])
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrResourceNotFound
+		}
+
+		return fmt.Errorf("cannot collect identity: %w", err)
+	}
+
+	*i = identity
+
+	return nil
+}
+
+// LoadByIDForUpdate is LoadByID under FOR UPDATE so concurrent
+// VerifyEmail calls serialize the verified-flag transition.
+func (i *Identity) LoadByIDForUpdate(
+	ctx context.Context,
+	conn pg.Tx,
+	identityID gid.GID,
+) error {
+	q := `
+SELECT
+    id,
+    email_address,
+    full_name,
+    hashed_password,
+    email_address_verified,
+    saml_subject,
+    locale,
+    avatar_file_id,
+    created_at,
+    updated_at
+FROM
+    identities
+WHERE
+    id = @identity_id
+LIMIT 1
+FOR UPDATE;
 `
 
 	args := pgx.StrictNamedArgs{"identity_id": identityID}
@@ -200,7 +264,18 @@ func (i *Identity) Insert(
 ) error {
 	q := `
 INSERT INTO
-    identities (id, email_address, full_name, hashed_password, email_address_verified, saml_subject, created_at, updated_at)
+    identities (
+        id,
+        email_address,
+        full_name,
+        hashed_password,
+        email_address_verified,
+        saml_subject,
+        locale,
+        avatar_file_id,
+        created_at,
+        updated_at
+    )
 VALUES (
     @identity_id,
     @email_address,
@@ -208,6 +283,8 @@ VALUES (
     @hashed_password,
     @email_address_verified,
     @saml_subject,
+    @locale,
+    @avatar_file_id,
     @created_at,
     @updated_at
 )
@@ -219,6 +296,8 @@ VALUES (
 		"full_name":              i.FullName,
 		"hashed_password":        i.HashedPassword,
 		"saml_subject":           i.SAMLSubject,
+		"locale":                 i.Locale,
+		"avatar_file_id":         i.AvatarFileID,
 		"created_at":             i.CreatedAt,
 		"updated_at":             i.UpdatedAt,
 		"email_address_verified": i.EmailAddressVerified,
@@ -226,8 +305,11 @@ VALUES (
 
 	_, err := conn.Exec(ctx, q, args)
 	if err != nil {
-		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
-			if pgErr.Code == "23505" && strings.Contains(pgErr.ConstraintName, "email_address") {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+			switch pgErr.ConstraintName {
+			case "idx_users_saml_subject":
+				return ErrSAMLSubjectAlreadyExists
+			case "usrmgr_users_email_address_key":
 				return ErrResourceAlreadyExists
 			}
 		}
@@ -248,6 +330,8 @@ SET
     email_address_verified = @email_address_verified,
     saml_subject = @saml_subject,
     hashed_password = @hashed_password,
+    locale = @locale,
+    avatar_file_id = @avatar_file_id,
     updated_at = @updated_at
 WHERE
     id = @identity_id
@@ -259,17 +343,47 @@ WHERE
 		"full_name":              i.FullName,
 		"email_address_verified": i.EmailAddressVerified,
 		"saml_subject":           i.SAMLSubject,
-		"updated_at":             i.UpdatedAt,
 		"hashed_password":        i.HashedPassword,
+		"locale":                 i.Locale,
+		"avatar_file_id":         i.AvatarFileID,
+		"updated_at":             i.UpdatedAt,
 	}
 
 	result, err := conn.Exec(ctx, q, args)
 	if err != nil {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+			switch pgErr.ConstraintName {
+			case "idx_users_saml_subject":
+				return ErrSAMLSubjectAlreadyExists
+			case "usrmgr_users_email_address_key":
+				return ErrResourceAlreadyExists
+			}
+		}
+
 		return fmt.Errorf("cannot update identity: %w", err)
 	}
 
 	if result.RowsAffected() == 0 {
 		return ErrResourceNotFound
+	}
+
+	return nil
+}
+
+func (i *Identity) Delete(ctx context.Context, conn pg.Querier) error {
+	q := `
+DELETE FROM identities
+WHERE
+    id = @identity_id
+`
+
+	args := pgx.StrictNamedArgs{
+		"identity_id": i.ID,
+	}
+
+	_, err := conn.Exec(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot delete identity: %w", err)
 	}
 
 	return nil
@@ -281,6 +395,10 @@ func (i *Identity) LoadBySAMLSubject(
 	conn pg.Querier,
 	samlSubject string,
 ) error {
+	if strings.TrimSpace(samlSubject) == "" {
+		return ErrResourceNotFound
+	}
+
 	q := `
 SELECT
     id,
@@ -289,6 +407,8 @@ SELECT
     hashed_password,
     email_address_verified,
     saml_subject,
+    locale,
+    avatar_file_id,
     created_at,
     updated_at
 FROM
@@ -342,4 +462,44 @@ WHERE
 	}
 
 	return count, nil
+}
+
+func (i *Identities) LoadByIDs(
+	ctx context.Context,
+	conn pg.Querier,
+	identityIDs []gid.GID,
+) error {
+	q := `
+SELECT
+    id,
+    email_address,
+    full_name,
+    hashed_password,
+    email_address_verified,
+    saml_subject,
+    locale,
+    avatar_file_id,
+    created_at,
+    updated_at
+FROM
+    identities
+WHERE
+    id = ANY(@identity_ids)
+`
+
+	args := pgx.StrictNamedArgs{"identity_ids": identityIDs}
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query identities: %w", err)
+	}
+
+	identities, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[Identity])
+	if err != nil {
+		return fmt.Errorf("cannot collect identities: %w", err)
+	}
+
+	*i = identities
+
+	return nil
 }

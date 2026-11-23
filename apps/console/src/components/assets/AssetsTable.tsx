@@ -1,23 +1,27 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 import {
   getAssetTypeVariant,
   promisifyMutation,
-  sprintf,
 } from "@probo/helpers";
-import { useTranslate } from "@probo/i18n";
 import {
   ActionDropdown,
   Badge,
@@ -28,11 +32,11 @@ import {
   TextCell,
   useConfirm,
 } from "@probo/ui";
+import { useTranslation } from "react-i18next";
 import { useMutation } from "react-relay";
 import type { usePaginationFragmentHookType } from "react-relay/relay-hooks/usePaginationFragment";
 import { Link } from "react-router";
 import type { OperationType } from "relay-runtime";
-import { z } from "zod";
 
 import type { AssetGraphDeleteMutation } from "#/__generated__/core/AssetGraphDeleteMutation.graphql";
 import type {
@@ -45,6 +49,7 @@ import {
   updateAssetMutation,
 } from "#/hooks/graph/AssetGraph";
 import { useOrganizationId } from "#/hooks/useOrganizationId";
+import { z } from "#/lib/zod";
 
 import { EditableTable } from "../table/EditableTable";
 import { PeopleCell } from "../table/PeopleCell";
@@ -84,7 +89,7 @@ export function AssetsTable(props: Props) {
   const { connectionId, pagination, assets } = props;
 
   const organizationId = useOrganizationId();
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const deleteAsset = useDeleteAsset(connectionId);
 
   return (
@@ -94,17 +99,17 @@ export function AssetsTable(props: Props) {
       pagination={pagination}
       items={assets}
       columns={[
-        __("Name"),
-        __("Type"),
-        __("Data Types stored"),
-        __("Amount"),
-        __("Owner"),
-        __("Third parties"),
+        t("assetsTable.columns.name"),
+        t("assetsTable.columns.type"),
+        t("assetsTable.columns.dataTypesStored"),
+        t("assetsTable.columns.amount"),
+        t("assetsTable.columns.owner"),
+        t("assetsTable.columns.thirdParties"),
       ]}
       schema={schema}
       updateMutation={updateAssetMutation}
       createMutation={createAssetMutation}
-      addLabel={__("Add a new asset")}
+      addLabel={t("assetsTable.actions.add")}
       defaultValue={{
         ...defaultValue,
         organizationId,
@@ -112,9 +117,9 @@ export function AssetsTable(props: Props) {
       action={({ item }) => (
         <ActionDropdown>
           <DropdownItem asChild>
-            <Link to={`/organizations/${organizationId}/assets/${item.id}`}>
+            <Link to={`/organizations/${organizationId}/registries/assets/${item.id}`}>
               <IconPencil size={16} />
-              {__("Edit")}
+              {t("assetsTable.actions.edit")}
             </Link>
           </DropdownItem>
           <DropdownItem
@@ -122,7 +127,7 @@ export function AssetsTable(props: Props) {
             variant="danger"
             icon={IconTrashCan}
           >
-            {__("Delete")}
+            {t("assetsTable.actions.delete")}
           </DropdownItem>
         </ActionDropdown>
       )}
@@ -134,7 +139,9 @@ export function AssetsTable(props: Props) {
             items={["VIRTUAL", "PHYSICAL"]}
             itemRenderer={({ item }) => (
               <Badge variant={getAssetTypeVariant(item ?? "VIRTUAL")}>
-                {item === "PHYSICAL" ? __("Physical") : __("Virtual")}
+                {item === "PHYSICAL"
+                  ? t("assetsTable.assetTypes.physical")
+                  : t("assetsTable.assetTypes.virtual")}
               </Badge>
             )}
             defaultValue={item?.assetType ?? defaultValue.assetType}
@@ -168,11 +175,11 @@ export function AssetsTable(props: Props) {
 const useDeleteAsset = (connectionId: string) => {
   const [mutate] = useMutation<AssetGraphDeleteMutation>(deleteAssetMutation);
   const confirm = useConfirm();
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (asset: { id: string; name: string }) => {
     if (!asset.id || !asset.name) {
-      return alert(__("Failed to delete asset: missing id or name"));
+      return alert(t("assetsTable.delete.missingIdOrName"));
     }
     confirm(
       () =>
@@ -185,12 +192,7 @@ const useDeleteAsset = (connectionId: string) => {
           },
         }),
       {
-        message: sprintf(
-          __(
-            "This will permanently delete \"%s\". This action cannot be undone.",
-          ),
-          asset.name,
-        ),
+        message: t("assetsTable.delete.confirmation", { name: asset.name }),
       },
     );
   };

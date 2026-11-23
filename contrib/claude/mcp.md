@@ -25,16 +25,58 @@ go generate ./pkg/server/api/mcp/v1
 ```yaml
 tools:
   - name: listThirdParties
+    title: List Third Parties
     description: List all thirdParties for the organization
     hints:
       readonly: true
-      idempotent: true
       destructive: false
+      idempotent: true
+      openWorld: false
     inputSchema:
       $ref: "#/components/schemas/ListThirdPartiesInput"
     outputSchema:
       $ref: "#/components/schemas/ListThirdPartiesOutput"
+  - name: addThirdParty
+    title: Add Third Party
+    description: Add a new thirdParty to the organization
+    hints:
+      readonly: false
+      destructive: false
+      idempotent: false
+      openWorld: false
+    inputSchema:
+      $ref: "#/components/schemas/AddThirdPartyInput"
+    outputSchema:
+      $ref: "#/components/schemas/AddThirdPartyOutput"
+  - name: deleteThirdParty
+    title: Delete Third Party
+    description: Delete a thirdParty
+    hints:
+      readonly: false
+      destructive: true
+      idempotent: true
+      openWorld: false
+    inputSchema:
+      $ref: "#/components/schemas/DeleteThirdPartyInput"
+    outputSchema:
+      $ref: "#/components/schemas/DeleteThirdPartyOutput"
 ```
+
+`title` is the human-readable display name (MCP `title` / `annotations.title`).
+
+`hints` map to MCP tool annotations. Set all of them explicitly — several
+defaults are surprising (`destructiveHint` defaults to **true**,
+`openWorldHint` defaults to **true**):
+
+| Hint | Reads | Additive writes | Deletes / regenerates |
+|---|---|---|---|
+| `readonly` | `true` | `false` | `false` |
+| `destructive` | `false` | `false` | `true` |
+| `idempotent` | `true` | `false` for creates, `true` for updates | `true` (regenerates: `false`) |
+| `openWorld` | `false` | `false` (unless the tool calls out, e.g. `vetThirdParty`) | `false` |
+
+Always set all four hints. Do not omit `destructive` or `openWorld` —
+both default to **true** in the MCP spec when absent.
 
 Input/output schemas reference `components/schemas`. Map custom Go types with the `go.probo.inc/mcpgen/type` extension:
 
@@ -70,6 +112,8 @@ if err != nil {
 	return nil, types.ListThirdPartiesOutput{}, err
 }
 ```
+
+MCP clients authenticate with OAuth2 access tokens. Every action passed to `Authorize` must also appear in the owning package's OAuth2 scope mapping (`OAuth2ScopeMappings`, or `IAMOAuth2ScopeMappings` in `pkg/iam`; see [OAuth2 API scopes](authorization.md#oauth2-api-scopes)). Role policies alone are not enough — unmapped actions fail closed with insufficient scope.
 
 ## Common resolver patterns
 

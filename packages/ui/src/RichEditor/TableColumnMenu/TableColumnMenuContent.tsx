@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
-// Use of this source code is governed by the ISC license
+// Use of this source code is governed by the MIT license
 // that can be found in the LICENSE file.
 
 import {
@@ -13,8 +13,11 @@ import { TextSelection } from "@tiptap/pm/state";
 import { CellSelection, TableMap } from "@tiptap/pm/tables";
 import { type Editor } from "@tiptap/react";
 
+import { EditorFloatingPortal } from "../_lib/EditorFloatingPortal";
 import type { DropdownMenu } from "../_lib/useTableDropdownMenu";
 import { MenuButton } from "../MenuButton";
+import { applySuggestingStructure, isSuggesting } from "../SuggestionExtension";
+import { suggestDeleteColumn, suggestInsertColumn } from "../suggestionStructure";
 
 import { type HoveredColumn } from "./TableColumnMenu";
 import { tableColumnMenuVariants } from "./variants";
@@ -44,6 +47,12 @@ export function TableColumnMenuContent({
 }: TableColumnMenuContentProps) {
   const currentCol = hoveredCol;
   const isFirstColumn = currentCol.colIndex === 0;
+  // Only insert and delete can be tracked as a suggestion.
+  const suggesting = isSuggesting(editor);
+  const columnTarget = {
+    tableStart: currentCol.tableStart,
+    columnIndex: currentCol.colIndex,
+  };
 
   const isHeaderColumn = (): boolean => {
     if (currentCol.colIndex !== 0) return false;
@@ -91,6 +100,13 @@ export function TableColumnMenuContent({
 
   const handleDeleteColumn = () => {
     const { colIndex, tableStart } = currentCol;
+    if (applySuggestingStructure(editor, (state, id) =>
+      suggestDeleteColumn(state, id, columnTarget),
+    )) {
+      setMenuOpen(false);
+      setHoveredCol(null);
+      return;
+    }
 
     try {
       const table = editor.state.doc.nodeAt(tableStart - 1);
@@ -153,6 +169,12 @@ export function TableColumnMenuContent({
 
   const handleInsertLeft = () => {
     const { colIndex, tableStart } = currentCol;
+    if (applySuggestingStructure(editor, (state, id) =>
+      suggestInsertColumn(state, id, columnTarget, true),
+    )) {
+      setMenuOpen(false);
+      return;
+    }
 
     try {
       const table = editor.state.doc.nodeAt(tableStart - 1);
@@ -179,6 +201,12 @@ export function TableColumnMenuContent({
 
   const handleInsertRight = () => {
     const { colIndex, tableStart } = currentCol;
+    if (applySuggestingStructure(editor, (state, id) =>
+      suggestInsertColumn(state, id, columnTarget, false),
+    )) {
+      setMenuOpen(false);
+      return;
+    }
 
     try {
       const table = editor.state.doc.nodeAt(tableStart - 1);
@@ -234,43 +262,50 @@ export function TableColumnMenuContent({
   };
 
   return (
-    <div
-      ref={(node) => {
-        setDropdownEl(node);
-        menuRefs.setFloating(node);
-      }}
-      data-column-menu
-      style={menuStyles}
-      {...getFloatingProps()}
-      onMouseDown={e => e.preventDefault()}
-      className={menu()}
-    >
-      {isFirstColumn && (
-        <MenuButton active={isHeaderColumn()} onClick={handleToggleHeaderColumn}>
-          <CrownSimpleIcon size={16} weight="bold" />
-          Header column
+    <EditorFloatingPortal>
+      <div
+        ref={(node) => {
+          setDropdownEl(node);
+          menuRefs.setFloating(node);
+        }}
+        data-column-menu
+        data-rich-editor-floating=""
+        style={menuStyles}
+        {...getFloatingProps()}
+        onMouseDown={e => e.preventDefault()}
+        className={menu()}
+      >
+        {isFirstColumn && !suggesting && (
+          <MenuButton active={isHeaderColumn()} onClick={handleToggleHeaderColumn}>
+            <CrownSimpleIcon size={16} weight="bold" />
+            Header column
+          </MenuButton>
+        )}
+        <MenuButton onClick={handleInsertLeft}>
+          <PlusIcon size={16} weight="bold" />
+          Insert column left
         </MenuButton>
-      )}
-      <MenuButton onClick={handleInsertLeft}>
-        <PlusIcon size={16} weight="bold" />
-        Insert column left
-      </MenuButton>
-      <MenuButton onClick={handleInsertRight}>
-        <PlusIcon size={16} weight="bold" />
-        Insert column right
-      </MenuButton>
-      <MenuButton onClick={handleDuplicateColumn}>
-        <CopyIcon size={16} weight="bold" />
-        Duplicate column
-      </MenuButton>
-      <MenuButton onClick={handleClearContents}>
-        <BroomIcon size={16} weight="bold" />
-        Clear contents
-      </MenuButton>
-      <MenuButton onClick={handleDeleteColumn}>
-        <TrashIcon size={16} weight="bold" />
-        Delete column
-      </MenuButton>
-    </div>
+        <MenuButton onClick={handleInsertRight}>
+          <PlusIcon size={16} weight="bold" />
+          Insert column right
+        </MenuButton>
+        {!suggesting && (
+          <>
+            <MenuButton onClick={handleDuplicateColumn}>
+              <CopyIcon size={16} weight="bold" />
+              Duplicate column
+            </MenuButton>
+            <MenuButton onClick={handleClearContents}>
+              <BroomIcon size={16} weight="bold" />
+              Clear contents
+            </MenuButton>
+          </>
+        )}
+        <MenuButton onClick={handleDeleteColumn}>
+          <TrashIcon size={16} weight="bold" />
+          Delete column
+        </MenuButton>
+      </div>
+    </EditorFloatingPortal>
   );
 }

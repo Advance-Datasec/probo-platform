@@ -21,22 +21,35 @@ pkg/cli/config/                           # Config file management (hosts, token
 
 Register group commands in `pkg/cmd/root/root.go` with `cmd.AddCommand()`.
 
+## Agent skills
+
+How to call `prb` lives in `@probo/skills`, under `packages/skills/skills/using-prb`. That one skill covers sign-in, organization choice, and record changes. Install it from the repository pinned to the `@probo/skills` tag matching the installed `prb` (see `packages/skills/CHANGELOG.md` for the version):
+
+```bash
+gh skill install getprobo/probo using-prb --pin @probo/skills/vX.Y.Z
+npx skills add "getprobo/probo#@probo/skills/vX.Y.Z" --skill using-prb
+```
+
+The MCP workflows in the same package are separate skills. `prb` does not embed a copy.
+
 ## Leaf command pattern
 
-Every leaf command follows this structure:
+Every leaf command follows this structure. Name the operation. `prb` sends that name as `operationName`, which is what server logs record.
 
 ```go
 package list
 
-const listQuery = `query($id: ID!, $first: Int, $after: CursorKey) { ... }`
+const listQuery = `query AssetList($id: ID!, $first: Int, $after: CursorKey) { ... }`
 
 type listResponse struct { ... } // unexported, shaped to match GraphQL response
 
 func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	var (
-		flagOrg    string
-		flagLimit  int
-		flagOutput *string
+		flagOrg      string
+		flagLimit    int
+		flagAfter    string
+		flagOrderDir string
+		flagOutput   *string
 	)
 
 	cmd := &cobra.Command{
@@ -45,17 +58,18 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 		Aliases: []string{"ls"},
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// 1. Validate output flag
-			// 2. Load config, get host + token
-			// 3. Create api.Client
-			// 4. Resolve --org (flag or config default)
-			// 5. Call API
-			// 6. Output results
+			// 1. Validate output and --limit. --order-direction is checked by AddOrderDirectionFlag.
+			// 2. f.GraphQLClient (config, host, token, refresh)
+			// 3. Resolve --org (flag or config default)
+			// 4. Call API
+			// 5. cmdutil.PrintList
 		},
 	}
 
-	cmd.Flags().StringVar(&flagOrg, "org", "", "Organization ID")
+	cmdutil.AddOrganizationFlag(cmd, &flagOrg, "Organization ID")
 	cmd.Flags().IntVarP(&flagLimit, "limit", "L", 30, "Maximum number of items")
+	cmdutil.AddAfterFlag(cmd, &flagAfter)
+	cmdutil.AddOrderDirectionFlag(cmd, &flagOrderDir, "DESC")
 	flagOutput = cmdutil.AddOutputFlag(cmd)
 
 	return cmd
@@ -64,47 +78,66 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 
 ## Pagination with `api.Paginate[T]`
 
+List commands share the client, the node extract, and the printer. `Factory.GraphQLClient` loads the active host. Pass `cmdutil.ConsoleEndpoint` for organization records and `cmdutil.ConnectEndpoint` for the signed-in user (`org list`, SCIM events).
+
 ```go
-resources, totalCount, err := api.Paginate(
+client, hc, err := f.GraphQLClient(cmdutil.ConsoleEndpoint)
+if err != nil {
+	return err
+}
+
+resources, totalCount, nextCursor, err := api.Paginate(
 	client,
 	listQuery,
 	variables,
 	flagLimit,
-	func(data json.RawMessage) (*api.Connection[resource], error) {
-		var resp struct {
-			Node *struct {
-				Typename  string                   `json:"__typename"`
-				Resources api.Connection[resource]  `json:"resources"`
-			} `json:"node"`
-		}
-		if err := json.Unmarshal(data, &resp); err != nil {
-			return nil, err
-		}
-		if resp.Node == nil {
-			return nil, fmt.Errorf("organization %s not found", flagOrg)
-		}
-		return &resp.Node.Resources, nil
-	},
+	flagAfter,
+	api.NodeConnection[resource](
+		"resources",
+		"Organization",
+		fmt.Sprintf("organization %s not found", flagOrg),
+	),
 )
 ```
 
+`flagAfter` is `--after`. An empty value starts at the first page. `api.Paginate` walks server pages until `flagLimit` items are collected or the connection ends, then returns the cursor for the following window. Pass that cursor back as `--after` with the same filters. The cursor is empty at the end of the connection. A server that returns more edges than `first` does not yield a cursor, because `endCursor` would skip the edges that were left off the page.
+
+Call `cmdutil.ValidateLimit` before creating the client. A non-positive `--limit` is an error. Register `--order-direction` with `cmdutil.AddOrderDirectionFlag`. It accepts `ASC` and `DESC` even when `--order-by` is omitted, so a bad direction is not silently dropped.
+
+`api.NodeConnection` reads `data.node.<field>`. A null node returns the not-found string. A different `__typename` returns `expected <type> node, got <actual>`. `api.Paginate` wraps that error as `cannot parse response`.
+
+Use the variant that matches the response:
+
+- `NodeConnectionOrMissing` when a wrong `__typename` is also not-found (risk and treatment-plan lists choose the parent at runtime).
+- `NodeConnectionRequired` when a null connection means the list is unavailable (`employee-portal list`).
+- `NodeNestedConnection` when the connection sits under a child object (`node.trustCenter.commitmentGroups`).
+- `ViewerConnection` for `data.viewer.<field>` (`org list`).
+- `RootConnection` for a top-level field (GVL catalog).
+
+`NodeSlice` is a direct call, not an `api.Paginate` extract. It reads a JSON array from `data.node.<field>` for a non-Relay list (`connector list`). Pass `len(items)` as the total to `PrintList` so the truncation line stays absent.
+
 ## Output formatting
 
-**JSON output:**
-```go
-if *flagOutput == cmdutil.OutputJSON {
-	return cmdutil.PrintJSON(f.IOStreams.Out, resources)
-}
-```
+**JSON output:** `--json` is shorthand for `--output json` / `-o json`. Do not combine `--json` with a different `--output` value.
 
-**Table output:**
+**List output:** `PrintList` writes JSON (a null slice becomes `[]`), the empty sentence, or the table. Stdout stays that payload. When the server total is larger than the page, stderr adds `Showing n of m <noun>`. When `NextCursor` is set, stderr adds `Next cursor: <cursor>`. Both lines are written for JSON and table output, including an empty page, so an agent can continue with `--after`. `Empty` and `Noun` can differ (`No access review campaigns found.` vs `campaigns`). Lists that print their own rows, such as the Linear TSV commands, call `WritePageFooter` with the same noun.
+
 ```go
-rows := make([][]string, 0, len(resources))
-for _, r := range resources {
-	rows = append(rows, []string{r.ID, r.Name})
-}
-t := cmdutil.NewTable("ID", "NAME").Rows(rows...)
-_, _ = fmt.Fprintln(f.IOStreams.Out, t)
+return cmdutil.PrintList(
+	f.IOStreams,
+	*flagOutput,
+	resources,
+	totalCount,
+	cmdutil.ListView[resource]{
+		Empty:      "No resources found.",
+		Noun:       "resources",
+		NextCursor: nextCursor,
+		Headers:    []string{"ID", "NAME"},
+		Row: func(r resource) ([]string, error) {
+			return []string{r.ID, r.Name}, nil
+		},
+	},
+)
 ```
 
 **View detail output with lipgloss:**
@@ -115,13 +148,6 @@ label := lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Width(22)
 _, _ = fmt.Fprintf(out, "%s\n\n", bold.Render(r.Name))
 _, _ = fmt.Fprintf(out, "%s%s\n", label.Render("ID:"), r.ID)
 _, _ = fmt.Fprintf(out, "%s%s\n", label.Render("Created:"), cmdutil.FormatTime(r.CreatedAt))
-```
-
-**Truncation message** (stderr, not stdout):
-```go
-if totalCount > len(resources) {
-	_, _ = fmt.Fprintf(f.IOStreams.ErrOut, "\nShowing %d of %d resources\n", len(resources), totalCount)
-}
 ```
 
 ## Interactive prompts with `charmbracelet/huh`
@@ -200,18 +226,16 @@ if !flagYes {
 ## Organization resolution
 
 ```go
-if flagOrg == "" {
-	flagOrg = hc.Organization
-}
-if flagOrg == "" {
-	return fmt.Errorf("organization is required; pass --org or set a default with 'prb auth login'")
+flagOrg, err = cmdutil.ResolveOrganization(flagOrg, hc.Organization)
+if err != nil {
+	return err
 }
 ```
 
 ## Flag conventions
 
-- Use kebab-case: `--order-by`, `--inherent-likelihood`
-- Short flags for common options: `-L` (limit), `-o` (output), `-q` (query), `-y` (yes)
+- Use kebab-case for command names and flags: `third-party`, `--order-by`, `--inherent-likelihood`. Organization-scoped commands use `--org`. `--organization` is the same flag. Register it with `cmdutil.AddOrganizationFlag`. `connector connect --organization` is a boolean and is the exception.
+- Common options: `-L` (limit), `-o` (output), `--json` (JSON output), `-q` (query), `-y` (yes)
 - `StringVar`/`IntVar`/`BoolVar` for flags, positional args only for IDs in view/update/delete
 - Use `cmd.MarkFlagRequired()` for mandatory flags
 
@@ -226,6 +250,8 @@ f.IOStreams.IsInteractive()  // true if TTY and not forced non-interactive
 Environment variables: `PROBO_NO_INTERACTIVE=1`, `CI=true`, `TERM=dumb` (non-interactive), `NO_COLOR` (disable color).
 
 ## OAuth device login (`prb auth login`)
+
+Interactive login lists US (`us.probo.com`), then EU (`eu.probo.com`), then a custom host. Non-interactive login requires `--hostname` and does not use `eu.probo.com`.
 
 The well-known CLI OAuth client (`config.CLIClientID`) requests `config.CLIClientScopes` at device authorization. Keep three places in sync when adding `v1:*` scopes:
 
@@ -253,12 +279,12 @@ bin/probod -cfg-file cfg/dev.yaml   # API + OAuth at http://localhost:8080
 bin/prb auth login --hostname http://localhost:8080
 ```
 
-Use `http://` explicitly — hosts without a scheme default to HTTPS. Config is stored under the OS user config dir (`prb/config.yaml`). Override with `PROBO_HOST` and `PROBO_TOKEN` for scripting; see `contrib/seed.sh` for a personal API key bootstrap.
+Use `http://` explicitly — hosts without a scheme default to HTTPS. Config is stored under the OS user config dir (`prb/config.yaml`). Override with `PROBO_HOST` and `PROBO_TOKEN` for scripting; see `contrib/seed.sh` for an OAuth access token bootstrap.
 
 ## New resource command checklist
 
 1. **Group command** — `pkg/cmd/<resource>/<resource>.go` with `NewCmd<Resource>(f)`, wiring all verb subcommands
 2. **Leaf commands** — one file per verb in `pkg/cmd/<resource>/<verb>/<verb>.go`
-3. **Each leaf file** — ISC license header, GraphQL const, unexported response struct, `NewCmd<Verb>(f)` function
+3. **Each leaf file** — MIT license header, named GraphQL operation, unexported response struct, `NewCmd<Verb>(f)` function
 4. **Register in root** — import and `cmd.AddCommand()` in `pkg/cmd/root/root.go`
 5. **API surface** — update GraphQL schema, MCP tools, and e2e tests

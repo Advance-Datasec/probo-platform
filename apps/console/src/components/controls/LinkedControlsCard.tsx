@@ -1,18 +1,23 @@
 // Copyright (c) 2025-2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-import { useTranslate } from "@probo/i18n";
 import {
   Badge,
   Button,
@@ -25,6 +30,7 @@ import {
   TrButton,
 } from "@probo/ui";
 import type { ComponentProps } from "react";
+import { useTranslation } from "react-i18next";
 import { useFragment } from "react-relay";
 import { graphql } from "relay-runtime";
 
@@ -78,7 +84,7 @@ type Props<Params> = {
  * Reusable component that displays a list of linked controls
  */
 export function LinkedControlsCard<Params>(props: Props<Params>) {
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
   const controls = props.controls;
 
   const onDetach = (controlId: string) => {
@@ -112,8 +118,8 @@ export function LinkedControlsCard<Params>(props: Props<Params>) {
     <SortableTable refetch={props.refetch}>
       <Thead>
         <Tr>
-          <SortableTh field="SECTION_TITLE">{__("Reference")}</SortableTh>
-          <Th>{__("Name")}</Th>
+          <SortableTh field="SECTION_TITLE">{t("linkedControlsCard.columns.reference")}</SortableTh>
+          <Th>{t("linkedControlsCard.columns.name")}</Th>
           {!props.readOnly && <Th></Th>}
         </Tr>
       </Thead>
@@ -124,7 +130,7 @@ export function LinkedControlsCard<Params>(props: Props<Params>) {
               colSpan={props.readOnly ? 2 : 3}
               className="text-center text-txt-secondary"
             >
-              {__("No controls linked")}
+              {t("linkedControlsCard.empty")}
             </Td>
           </Tr>
         )}
@@ -145,7 +151,7 @@ export function LinkedControlsCard<Params>(props: Props<Params>) {
             onLink={onAttach}
             onUnlink={onDetach}
           >
-            <TrButton colspan={3}>{__("Link control")}</TrButton>
+            <TrButton colspan={3}>{t("linkedControlsCard.actions.link")}</TrButton>
           </LinkedControlsDialog>
         )}
       </Tbody>
@@ -161,11 +167,11 @@ function ControlRow(props: {
 }) {
   const control = useFragment(linkedControlFragment, props.control);
   const organizationId = useOrganizationId();
-  const { __ } = useTranslate();
+  const { t } = useTranslation();
 
   return (
     <Tr
-      to={`/organizations/${organizationId}/frameworks/${control.framework.id}/controls/${control.id}`}
+      to={`/organizations/${organizationId}/governance/frameworks/${control.framework.id}/controls/${control.id}`}
     >
       <Td>
         <span className="inline-flex gap-2 items-center">
@@ -182,7 +188,7 @@ function ControlRow(props: {
             onClick={() => props.onClick(control.id)}
             icon={IconTrashCan}
           >
-            {__("Unlink")}
+            {t("linkedControlsCard.actions.unlink")}
           </Button>
         </Td>
       )}

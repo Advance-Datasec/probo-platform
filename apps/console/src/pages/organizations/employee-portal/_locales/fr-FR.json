@@ -1,0 +1,83 @@
+{
+  "employeePortalPage": {
+    "title": "Portail employé",
+    "description": "Identité visuelle et capacités du portail employé de cette organisation."
+  },
+  "missing": {
+    "title": "Portail employé indisponible",
+    "description": "Cette organisation n’a pas encore de portail employé."
+  },
+  "branding": {
+    "title": "Identité visuelle",
+    "description": "Logos affichés dans le portail employé.",
+    "fields": {
+      "logo": "Logo",
+      "darkLogo": "Logo sombre",
+      "placeholder": "Déposer ou cliquer",
+      "acceptedFiles": "JPEG, PNG, SVG ou WebP. 5 Mo maximum."
+    },
+    "actions": {
+      "removeLogo": "Supprimer le logo",
+      "removeDarkLogo": "Supprimer le logo sombre"
+    },
+    "messages": {
+      "updated": "Identité visuelle mise à jour"
+    },
+    "errors": {
+      "update": "Échec de la mise à jour de l’identité visuelle",
+      "invalidFileType": {
+        "title": "Type de fichier non pris en charge",
+        "description": "Téléversez une image JPEG, PNG, SVG ou WebP."
+      },
+      "fileTooLarge": {
+        "title": "Fichier trop volumineux",
+        "description": "Téléversez une image de moins de 5 Mo."
+      },
+      "tooManyFiles": {
+        "title": "Trop de fichiers",
+        "description": "Téléversez une image à la fois."
+      }
+    }
+  },
+  "capabilities": {
+    "title": "Paramètres",
+    "deviceAgent": {
+      "title": "Agent d’appareil",
+      "description": "Autoriser les employés à enregistrer des appareils depuis le portail employé."
+    },
+    "messages": {
+      "updated": "Paramètres mis à jour"
+    },
+    "errors": {
+      "update": "Échec de la mise à jour des paramètres"
+    }
+  },
+  "documentsPage": {
+    "title": "Documents",
+    "description": "Choisissez les documents publiés que les employés peuvent lire.",
+    "empty": "Aucun document publié pour le moment.",
+    "search": {
+      "placeholder": "Rechercher par titre",
+      "label": "Rechercher des documents",
+      "empty": "Aucun document ne correspond à votre recherche."
+    },
+    "actions": {
+      "previous": "Préc.",
+      "next": "Suiv.",
+      "share": "Partager {{title}}"
+    },
+    "confirm": {
+      "title": "Arrêter le partage de ce document ?",
+      "description": "Les employés ne le verront plus dans le portail employé.",
+      "confirm": "Arrêter le partage"
+    },
+    "messages": {
+      "shared": "Document partagé",
+      "removed": "Document retiré"
+    },
+    "errors": {
+      "share": "Échec du partage du document",
+      "remove": "Échec du retrait du document"
+    }
+  }
+}

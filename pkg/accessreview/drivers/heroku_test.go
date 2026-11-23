@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -37,7 +43,7 @@ func TestHerokuDriver(t *testing.T) {
 		teamID = "acme"
 	}
 
-	driver := NewHerokuDriver(client, teamID)
+	driver := NewHerokuDriver(client, teamID, "https://api.heroku.com")
 	records, err := driver.ListAccounts(context.Background())
 	require.NoError(t, err)
 	require.NotEmpty(t, records)
@@ -48,7 +54,7 @@ func TestHerokuDriver(t *testing.T) {
 	assert.NotEmpty(t, r.FullName)
 	assert.NotEmpty(t, r.Roles)
 	assert.Equal(t, coredata.MFAStatusEnabled, r.MFAStatus)
-	assert.True(t, r.IsAdmin)
+	assert.Equal(t, new(true), r.IsAdmin)
 	require.NotNil(t, r.CreatedAt)
 }
 
@@ -92,7 +98,7 @@ func TestHerokuDriverPersonalAccount(t *testing.T) {
 
 	client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
 
-	records, err := NewHerokuDriver(client, "").ListAccounts(context.Background())
+	records, err := NewHerokuDriver(client, "", "https://api.heroku.com").ListAccounts(context.Background())
 	require.NoError(t, err)
 
 	byEmail := make(map[string]AccountRecord, len(records))
@@ -105,9 +111,9 @@ func TestHerokuDriverPersonalAccount(t *testing.T) {
 	assert.Contains(t, byEmail, "bob@example.com")
 	assert.Contains(t, byEmail, "carol@example.com")
 
-	assert.True(t, byEmail["alice@example.com"].IsAdmin)
+	assert.Equal(t, new(true), byEmail["alice@example.com"].IsAdmin)
 	assert.Equal(t, []string{"owner"}, byEmail["alice@example.com"].Roles)
-	assert.False(t, byEmail["bob@example.com"].IsAdmin)
+	assert.Equal(t, new(false), byEmail["bob@example.com"].IsAdmin)
 }
 
 // TestHerokuDriverPersonalAccountSlug verifies the reserved personal-account
@@ -134,7 +140,7 @@ func TestHerokuDriverPersonalAccountSlug(t *testing.T) {
 
 	client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
 
-	records, err := NewHerokuDriver(client, herokuPersonalAccountSlug).ListAccounts(context.Background())
+	records, err := NewHerokuDriver(client, herokuPersonalAccountSlug, "https://api.heroku.com").ListAccounts(context.Background())
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 	assert.Equal(t, "alice@example.com", records[0].Email)
@@ -177,7 +183,7 @@ func TestHerokuDriverPersonalAccountErrors(t *testing.T) {
 
 			client := &http.Client{Transport: &hostRewriter{target: srv.URL}}
 
-			_, err := NewHerokuDriver(client, "").ListAccounts(context.Background())
+			_, err := NewHerokuDriver(client, "", "https://api.heroku.com").ListAccounts(context.Background())
 			require.Error(t, err)
 		})
 	}

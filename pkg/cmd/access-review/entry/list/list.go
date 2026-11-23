@@ -1,21 +1,26 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package list
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -25,7 +30,7 @@ import (
 )
 
 const listQuery = `
-query(
+query AccessReviewEntryList(
   $id: ID!,
   $first: Int,
   $after: CursorKey,
@@ -56,7 +61,6 @@ query(
             accountType
             lastLogin
             externalId
-            incrementalTag
             flags
             flagReasons
             decision
@@ -78,7 +82,7 @@ query(
 `
 
 const listBySourceQuery = `
-query(
+query AccessReviewEntryListBySource(
   $id: ID!,
   $first: Int,
   $after: CursorKey,
@@ -109,7 +113,6 @@ query(
             accountType
             lastLogin
             externalId
-            incrementalTag
             flags
             flagReasons
             decision
@@ -136,14 +139,13 @@ type entryNode struct {
 	FullName       string   `json:"fullName"`
 	Role           string   `json:"role"`
 	JobTitle       string   `json:"jobTitle"`
-	IsAdmin        bool     `json:"isAdmin"`
+	IsAdmin        *bool    `json:"isAdmin"`
 	Active         *bool    `json:"active"`
 	MfaStatus      string   `json:"mfaStatus"`
 	AuthMethod     string   `json:"authMethod"`
 	AccountType    string   `json:"accountType"`
 	LastLogin      *string  `json:"lastLogin"`
 	ExternalID     string   `json:"externalId"`
-	IncrementalTag string   `json:"incrementalTag"`
 	Flags          []string `json:"flags"`
 	FlagReasons    []string `json:"flagReasons"`
 	Decision       string   `json:"decision"`
@@ -157,12 +159,12 @@ type entryNode struct {
 func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	var (
 		flagLimit            int
+		flagAfter            string
 		flagOrderBy          string
 		flagOrderDir         string
 		flagCampaignSourceID string
 		flagDecision         string
 		flagFlag             string
-		flagIncTag           string
 		flagIsAdmin          *bool
 		flagActive           *bool
 		flagAuthMethod       string
@@ -171,9 +173,10 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "list [<campaign-id>]",
-		Short: "List access entries for a campaign or campaign source",
-		Args:  cobra.MaximumNArgs(1),
+		Use:     "list [<campaign-id>]",
+		Short:   "List access entries for a campaign or campaign source",
+		Aliases: []string{"ls"},
+		Args:    cobra.MaximumNArgs(1),
 		Example: `  # List all entries for a campaign
   prb access-review entry list <campaign-id>
 
@@ -190,27 +193,18 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
+			if err := cmdutil.ValidateLimit(flagLimit); err != nil {
+				return err
+			}
+
 			if flagCampaignSourceID == "" && len(args) == 0 {
 				return fmt.Errorf("campaign ID is required when --source-id is not set")
 			}
 
-			cfg, err := f.Config()
+			client, _, err := f.GraphQLClient(cmdutil.ConsoleEndpoint)
 			if err != nil {
 				return err
 			}
-
-			host, hc, err := cfg.DefaultHost()
-			if err != nil {
-				return err
-			}
-
-			client := api.NewClient(
-				host,
-				hc.Token,
-				"/api/console/v1/graphql",
-				cfg.HTTPTimeoutDuration(),
-				cmdutil.TokenRefreshOption(cfg, host, hc),
-			)
 
 			variables := map[string]any{}
 
@@ -220,10 +214,6 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 
 			if flagCampaignSourceID != "" {
 				variables["id"] = flagCampaignSourceID
-			}
-
-			if err := cmdutil.ValidateEnum("order-direction", flagOrderDir, []string{"ASC", "DESC"}); err != nil {
-				return err
 			}
 
 			if flagOrderBy != "" {
@@ -268,18 +258,6 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				filter["flag"] = flagFlag
 			}
 
-			if flagIncTag != "" {
-				if err := cmdutil.ValidateEnum(
-					"incremental-tag",
-					flagIncTag,
-					[]string{"NEW", "REMOVED", "UNCHANGED"},
-				); err != nil {
-					return err
-				}
-
-				filter["incrementalTag"] = flagIncTag
-			}
-
 			if cmd.Flags().Changed("is-admin") {
 				filter["isAdmin"] = *flagIsAdmin
 			}
@@ -292,7 +270,7 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				if err := cmdutil.ValidateEnum(
 					"auth-method",
 					flagAuthMethod,
-					[]string{"SSO", "PASSWORD", "API_KEY", "SERVICE_ACCOUNT", "UNKNOWN"},
+					[]string{"SSO", "PASSWORD", "API_KEY", "OAUTH2", "SSH", "SERVICE_ACCOUNT", "UNKNOWN"},
 				); err != nil {
 					return err
 				}
@@ -326,106 +304,79 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				notFoundLabel = "campaign source"
 			}
 
-			entries, totalCount, err := api.Paginate(
+			entries, totalCount, nextCursor, err := api.Paginate(
 				client,
 				query,
 				variables,
 				flagLimit,
-				func(data json.RawMessage) (*api.Connection[entryNode], error) {
-					var resp struct {
-						Node *struct {
-							Typename string                    `json:"__typename"`
-							Entries  api.Connection[entryNode] `json:"entries"`
-						} `json:"node"`
-					}
-					if err := json.Unmarshal(data, &resp); err != nil {
-						return nil, err
-					}
-
-					if resp.Node == nil {
-						return nil, fmt.Errorf("%s %s not found", notFoundLabel, variables["id"])
-					}
-
-					if resp.Node.Typename != expectedTypename {
-						return nil, fmt.Errorf("expected %s node, got %s", expectedTypename, resp.Node.Typename)
-					}
-
-					return &resp.Node.Entries, nil
-				},
+				flagAfter,
+				api.NodeConnection[entryNode](
+					"entries",
+					expectedTypename,
+					fmt.Sprintf("%s %s not found", notFoundLabel, variables["id"]),
+				),
 			)
 			if err != nil {
 				return err
 			}
 
-			if *flagOutput == cmdutil.OutputJSON {
-				if entries == nil {
-					entries = []entryNode{}
-				}
+			return cmdutil.PrintList(
+				f.IOStreams,
+				*flagOutput,
+				entries,
+				totalCount,
+				cmdutil.ListView[entryNode]{
+					Empty:      "No access entries found.",
+					Noun:       "entries",
+					NextCursor: nextCursor,
+					Headers:    []string{"ID", "EMAIL", "NAME", "SOURCE", "DECISION", "FLAGS", "ADMIN", "ACTIVE"},
+					Row: func(e entryNode) ([]string, error) {
+						admin := "unknown"
 
-				return cmdutil.PrintJSON(f.IOStreams.Out, entries)
-			}
+						if e.IsAdmin != nil {
+							if *e.IsAdmin {
+								admin = "yes"
+							} else {
+								admin = "no"
+							}
+						}
 
-			if len(entries) == 0 {
-				_, _ = fmt.Fprintln(f.IOStreams.Out, "No access entries found.")
-				return nil
-			}
+						active := "unknown"
 
-			rows := make([][]string, 0, len(entries))
-			for _, e := range entries {
-				admin := ""
-				if e.IsAdmin {
-					admin = "yes"
-				}
+						if e.Active != nil {
+							if *e.Active {
+								active = "active"
+							} else {
+								active = "disabled"
+							}
+						}
 
-				active := "unknown"
-
-				if e.Active != nil {
-					if *e.Active {
-						active = "active"
-					} else {
-						active = "disabled"
-					}
-				}
-
-				rows = append(rows, []string{
-					e.ID,
-					e.Email,
-					e.FullName,
-					e.CampaignSource.Name,
-					e.Decision,
-					strings.Join(e.Flags, ","),
-					admin,
-					active,
-				})
-			}
-
-			t := cmdutil.NewTable("ID", "EMAIL", "NAME", "SOURCE", "DECISION", "FLAGS", "ADMIN", "ACTIVE").Rows(rows...)
-
-			_, _ = fmt.Fprintln(f.IOStreams.Out, t)
-
-			if totalCount > len(entries) {
-				_, _ = fmt.Fprintf(
-					f.IOStreams.ErrOut,
-					"\nShowing %d of %d entries\n",
-					len(entries),
-					totalCount,
-				)
-			}
-
-			return nil
+						return []string{
+							e.ID,
+							e.Email,
+							e.FullName,
+							e.CampaignSource.Name,
+							e.Decision,
+							strings.Join(e.Flags, ","),
+							admin,
+							active,
+						}, nil
+					},
+				},
+			)
 		},
 	}
 
 	cmd.Flags().IntVarP(&flagLimit, "limit", "L", 30, "Maximum number of entries to list")
+	cmdutil.AddAfterFlag(cmd, &flagAfter)
 	cmd.Flags().StringVar(&flagOrderBy, "order-by", "", "Order by field (CREATED_AT)")
-	cmd.Flags().StringVar(&flagOrderDir, "order-direction", "DESC", "Sort direction (ASC, DESC)")
+	cmdutil.AddOrderDirectionFlag(cmd, &flagOrderDir, "DESC")
 	cmd.Flags().StringVar(&flagCampaignSourceID, "source-id", "", "Campaign source ID to list entries for")
 	cmd.Flags().StringVar(&flagDecision, "decision", "", "Filter by decision (PENDING, APPROVED, REVOKE, DEFER, ESCALATE)")
 	cmd.Flags().StringVar(&flagFlag, "flag", "", "Filter by flag (NONE, ORPHANED, INACTIVE, EXCESSIVE, ROLE_MISMATCH, NEW)")
-	cmd.Flags().StringVar(&flagIncTag, "incremental-tag", "", "Filter by incremental tag (NEW, REMOVED, UNCHANGED)")
 	flagIsAdmin = cmd.Flags().Bool("is-admin", false, "Filter by admin status")
 	flagActive = cmd.Flags().Bool("active", false, "Filter by active status at the source")
-	cmd.Flags().StringVar(&flagAuthMethod, "auth-method", "", "Filter by auth method (SSO, PASSWORD, API_KEY, SERVICE_ACCOUNT, UNKNOWN)")
+	cmd.Flags().StringVar(&flagAuthMethod, "auth-method", "", "Filter by auth method (SSO, PASSWORD, API_KEY, OAUTH2, SSH, SERVICE_ACCOUNT, UNKNOWN)")
 	cmd.Flags().StringVar(&flagAccountType, "account-type", "", "Filter by account type (USER, SERVICE_ACCOUNT)")
 	flagOutput = cmdutil.AddOutputFlag(cmd)
 

@@ -7,6 +7,13 @@ services:
       PROBOD_AUTH_COOKIE_SECRET: ${PROBOD_AUTH_COOKIE_SECRET}
       PROBOD_AUTH_PASSWORD_PEPPER: ${PROBOD_AUTH_PASSWORD_PEPPER}
       PROBOD_TRUST_AUTH_TOKEN_SECRET: ${PROBOD_TRUST_AUTH_TOKEN_SECRET}
+      # RSA private key (PEM) that signs OAuth2 tokens. Generate one with:
+      #   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 > oauth2_signing_key.pem
+      # Then either export it before `docker compose up`:
+      #   export PROBOD_OAUTH2_SERVER_SIGNING_KEY="$(cat oauth2_signing_key.pem)"
+      # or set it in Compose's .env file as one double-quoted line with \n escapes:
+      #   PROBOD_OAUTH2_SERVER_SIGNING_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+      PROBOD_OAUTH2_SERVER_SIGNING_KEY: ${PROBOD_OAUTH2_SERVER_SIGNING_KEY}
 
       # Application settings
       PROBOD_BASE_URL: ${PROBOD_BASE_URL}
@@ -33,10 +40,10 @@ services:
       PROBOD_TRACING_ADDR: ""
 
       # Email notifications
-      SMTP_ADDR: "your.smtp.server:587"
-      SMTP_TLS_REQUIRED: "false"
-      MAILER_SENDER_NAME: "Govrly"
-      MAILER_SENDER_EMAIL: "no-reply@notification.getprobo.com"
+      PROBOD_SMTP_ADDR: "your.smtp.server:587"
+      PROBOD_SMTP_TLS_REQUIRED: "false"
+      PROBOD_MAILER_SENDER_NAME: "Probo"
+      PROBOD_MAILER_SENDER_EMAIL: "no-reply@notification.getprobo.com"
 
       # Chrome for PDF generation
       PROBOD_CHROME_DP_ADDR: "chrome:9222"
@@ -56,7 +63,8 @@ services:
 
 
   postgres:
-    image: "postgres@sha256:7ad98329d513dd497293b951c195ca354274a77f12ddbbbbf85e68a811823d72"
+    # postgres:18.6
+    image: "postgres@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6"
     shm_size: "1g"
     command: >
       postgres -c "shared_buffers=4GB"
@@ -66,7 +74,10 @@ services:
       - "5432:5432"
     volumes:
       - "./compose/postgres:/docker-entrypoint-initdb.d:ro"
-      - "postgres-data:/var/lib/postgresql/data:rw"
+      # A Postgres 17 volume has its cluster at this root. Postgres 18
+      # stores data in 18/docker and refuses to start until pg_upgrade.
+      # Procedure: compose/postgres-17-to-18.md
+      - "postgres-data:/var/lib/postgresql:rw"
     environment:
       POSTGRES_USER: "postgres"
       POSTGRES_PASSWORD: "postgres"

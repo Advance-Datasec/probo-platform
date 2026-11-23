@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package drivers
 
@@ -34,8 +40,9 @@ import (
 // eSignature Users API. The account is the one the user picked after OAuth
 // (a DocuSign user may have access to several).
 type DocuSignDriver struct {
-	httpClient *http.Client
-	accountID  string
+	httpClient  *http.Client
+	accountID   string
+	userInfoURL string
 }
 
 var _ Driver = (*DocuSignDriver)(nil)
@@ -55,11 +62,15 @@ type docusignAccount struct {
 }
 
 // fetchDocuSignAccounts returns the DocuSign accounts the access token can
-// reach, from the OAuth2 userinfo endpoint. A non-2xx response yields
-// errDocuSignUserInfoStatus; request and decode failures surface as ordinary
-// errors so transient conditions stay distinguishable from a dead token.
-func fetchDocuSignAccounts(ctx context.Context, httpClient *http.Client) ([]docusignAccount, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, docusignUserInfoEndpoint, nil)
+// reach, from the OAuth2 userinfo endpoint at userInfoURL. userInfoURL is the
+// registration's Endpoints.Identity, threaded in by every caller (the driver,
+// the name resolver, and the org picker) rather than hardcoded, so a
+// deployment-supplied override reaches every one of them instead of only the
+// health probe. A non-2xx response yields errDocuSignUserInfoStatus; request
+// and decode failures surface as ordinary errors so transient conditions stay
+// distinguishable from a dead token.
+func fetchDocuSignAccounts(ctx context.Context, httpClient *http.Client, userInfoURL string) ([]docusignAccount, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, userInfoURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create docusign userinfo request: %w", err)
 	}
@@ -107,15 +118,13 @@ type docusignUsersResponse struct {
 	EndPosition   string `json:"endPosition"`
 }
 
-const (
-	docusignUserInfoEndpoint = "https://account.docusign.com/oauth/userinfo"
-	docusignUsersPageSize    = 100
-)
+const docusignUsersPageSize = 100
 
-func NewDocuSignDriver(httpClient *http.Client, accountID string) *DocuSignDriver {
+func NewDocuSignDriver(httpClient *http.Client, accountID string, userInfoURL string) *DocuSignDriver {
 	return &DocuSignDriver{
-		httpClient: httpClient,
-		accountID:  accountID,
+		httpClient:  httpClient,
+		accountID:   accountID,
+		userInfoURL: userInfoURL,
 	}
 }
 
@@ -149,7 +158,7 @@ func (d *DocuSignDriver) ListAccounts(ctx context.Context) ([]AccountRecord, err
 				Roles:       roles,
 				JobTitle:    u.JobTitle,
 				Active:      new(strings.EqualFold(u.UserStatus, "active")),
-				IsAdmin:     strings.EqualFold(u.IsAdmin, "True"),
+				IsAdmin:     new(strings.EqualFold(u.IsAdmin, "True")),
 				ExternalID:  u.UserID,
 				MFAStatus:   coredata.MFAStatusUnknown,
 				AuthMethod:  coredata.AccessReviewEntryAuthMethodUnknown,
@@ -198,7 +207,7 @@ func (d *DocuSignDriver) ListAccounts(ctx context.Context) ([]AccountRecord, err
 // userinfo endpoint. DocuSign issues account-specific base URIs, so the
 // eSignature REST host cannot be hardcoded.
 func (d *DocuSignDriver) discoverBaseURI(ctx context.Context) (string, error) {
-	accounts, err := fetchDocuSignAccounts(ctx, d.httpClient)
+	accounts, err := fetchDocuSignAccounts(ctx, d.httpClient, d.userInfoURL)
 	if err != nil {
 		return "", err
 	}
@@ -255,4 +264,65 @@ func (d *DocuSignDriver) queryUsers(ctx context.Context, baseURI string, account
 	}
 
 	return &resp, nil
+}
+
+// docusignNameResolver resolves the configured DocuSign account's name from
+// the OAuth2 userinfo endpoint, for the AccessReviewSource title.
+type docusignNameResolver struct {
+	httpClient  *http.Client
+	accountID   string
+	userInfoURL string
+}
+
+func NewDocuSignNameResolver(httpClient *http.Client, accountID string, userInfoURL string) NameResolver {
+	return &docusignNameResolver{httpClient: httpClient, accountID: accountID, userInfoURL: userInfoURL}
+}
+
+func (r *docusignNameResolver) ResolveInstanceName(ctx context.Context) (string, error) {
+	accounts, err := fetchDocuSignAccounts(ctx, r.httpClient, r.userInfoURL)
+	if err != nil {
+		// A dead token (non-2xx) is terminal: the source-name worker marks
+		// the source synced on ("", nil), so it stops retrying. Transient and
+		// decode failures stay errors so the worker retries.
+		if errors.Is(err, errDocuSignUserInfoStatus) {
+			return "", nil
+		}
+
+		return "", err
+	}
+
+	for _, account := range accounts {
+		if account.AccountID == r.accountID {
+			return account.AccountName, nil
+		}
+	}
+
+	return "", nil
+}
+
+// ListDocuSignOrganizations fetches the DocuSign accounts the authenticated
+// user can access, from the OAuth2 userinfo endpoint. A user may belong to
+// several accounts; the picker scopes the access source to one. The account
+// UUID is surfaced as the Organization slug (it is what the driver and name
+// resolver key off). userInfoURL is the registration's Endpoints.Identity
+// (falling back to Endpoints.APIBase upstream — see
+// accessreview.providerListBaseURL), so the picker follows a deployment
+// override the same way the driver and name resolver do.
+func ListDocuSignOrganizations(ctx context.Context, httpClient *http.Client, userInfoURL string) ([]Organization, error) {
+	accounts, err := fetchDocuSignAccounts(ctx, httpClient, userInfoURL)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]Organization, len(accounts))
+	for i, a := range accounts {
+		displayName := a.AccountName
+		if displayName == "" {
+			displayName = a.AccountID
+		}
+
+		result[i] = Organization{Slug: a.AccountID, DisplayName: displayName}
+	}
+
+	return result, nil
 }

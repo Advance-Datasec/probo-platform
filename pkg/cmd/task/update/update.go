@@ -1,16 +1,22 @@
 // Copyright (c) 2026 Probo Inc <hello@probo.com>.
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package update
 
@@ -24,7 +30,7 @@ import (
 )
 
 const updateMutation = `
-mutation($input: UpdateTaskInput!) {
+mutation TaskUpdate($input: UpdateTaskInput!) {
   updateTask(input: $input) {
     task {
       id
@@ -49,14 +55,15 @@ type updateResponse struct {
 
 func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 	var (
-		flagName         string
-		flagDescription  string
-		flagState        string
-		flagPriority     string
-		flagTimeEstimate string
-		flagDeadline     string
-		flagAssignedTo   string
-		flagMeasure      string
+		flagName               string
+		flagContent            string
+		flagState              string
+		flagPriority           string
+		flagTimeEstimate       string
+		flagDeadline           string
+		flagAssignedTo         string
+		flagInternalControls   []string
+		flagRecurrenceInterval string
 	)
 
 	cmd := &cobra.Command{
@@ -90,11 +97,24 @@ func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 				input["name"] = flagName
 			}
 
-			if cmd.Flags().Changed("description") {
-				input["description"] = flagDescription
+			if cmd.Flags().Changed("content") {
+				if flagContent == "" {
+					input["content"] = nil
+				} else {
+					content, err := cmdutil.CLIContent(flagContent)
+					if err != nil {
+						return fmt.Errorf("cannot read content: %w", err)
+					}
+
+					input["content"] = content
+				}
 			}
 
 			if cmd.Flags().Changed("state") {
+				if err := cmdutil.ValidateEnum("state", flagState, cmdutil.TaskStates()); err != nil {
+					return err
+				}
+
 				input["state"] = flagState
 			}
 
@@ -118,11 +138,22 @@ func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 				}
 			}
 
-			if cmd.Flags().Changed("measure") {
-				if flagMeasure == "" {
-					input["measureId"] = nil
+			if cmd.Flags().Changed("internal-control") {
+				internalControlIDs := make([]string, 0, len(flagInternalControls))
+				for _, internalControlID := range flagInternalControls {
+					if internalControlID != "" {
+						internalControlIDs = append(internalControlIDs, internalControlID)
+					}
+				}
+
+				input["internalControlIds"] = internalControlIDs
+			}
+
+			if cmd.Flags().Changed("recurrence-interval") {
+				if flagRecurrenceInterval == "" {
+					input["recurrenceInterval"] = nil
 				} else {
-					input["measureId"] = flagMeasure
+					input["recurrenceInterval"] = flagRecurrenceInterval
 				}
 			}
 
@@ -144,6 +175,7 @@ func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 			}
 
 			t := resp.UpdateTask.Task
+
 			_, _ = fmt.Fprintf(
 				f.IOStreams.Out,
 				"Updated task %s (%s)\n",
@@ -156,13 +188,14 @@ func NewCmdUpdate(f *cmdutil.Factory) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&flagName, "name", "", "Task name")
-	cmd.Flags().StringVar(&flagDescription, "description", "", "Task description")
-	cmd.Flags().StringVar(&flagState, "state", "", "Task state: TODO, IN_PROGRESS, DONE")
+	cmd.Flags().StringVar(&flagContent, "content", "", "Task content as markdown or ProseMirror JSON. Images and links to /api/files/v1/{id} are kept")
+	cmd.Flags().StringVar(&flagState, "state", "", cmdutil.TaskStateFlagUsage())
 	cmd.Flags().StringVar(&flagPriority, "priority", "", "Task priority: URGENT, HIGH, MEDIUM, LOW")
 	cmd.Flags().StringVar(&flagTimeEstimate, "time-estimate", "", "Time estimate")
 	cmd.Flags().StringVar(&flagDeadline, "deadline", "", "Deadline")
 	cmd.Flags().StringVar(&flagAssignedTo, "assigned-to", "", "Assigned profile ID")
-	cmd.Flags().StringVar(&flagMeasure, "measure", "", "Measure ID")
+	cmd.Flags().StringArrayVar(&flagInternalControls, "internal-control", nil, "Internal control ID (repeatable, empty value clears all)")
+	cmd.Flags().StringVar(&flagRecurrenceInterval, "recurrence-interval", "", "Recurrence interval as an ISO-8601 duration, e.g. P7D, P1M or P1Y (empty clears recurrence). The next task is created when the deadline passes")
 
 	return cmd
 }

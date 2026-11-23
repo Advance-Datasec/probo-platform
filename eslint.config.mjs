@@ -4,9 +4,24 @@ import { defineConfig, globalIgnores } from "eslint/config";
 // Workspaces that are linted by this root config. Each gets the shared rule
 // sets below; everything else is ignored so a bare `eslint .` keeps the same
 // scope as the previous per-workspace configs.
-const appDirs = ["apps/console/**", "apps/trust/**", "apps/compliance-portal/**"];
-const reactDirs = [...appDirs, "packages/ui/**", "packages/relay/**", "packages/routes/**"];
-const lintedDirs = [...reactDirs, "packages/eslint-config/**"];
+const appDirs = ["apps/console/**", "apps/compliance-portal/**", "apps/employee-portal/**"];
+const reactDirs = [
+  ...appDirs,
+  "packages/ui/**",
+  "packages/hotkeys/**",
+  "packages/relay/**",
+  "packages/routes/**",
+  "packages/tasks/**",
+];
+const browserDirs = [
+  ...reactDirs,
+  "packages/collaboration/**",
+  "packages/faro/**",
+];
+// Node-side Vite helpers shared by the apps. Not a workspace package, so they
+// are not covered by the app globs above.
+const viteDirs = ["apps/vite/**"];
+const lintedDirs = [...browserDirs, "packages/eslint-config/**", ...viteDirs];
 
 export default defineConfig([
   // Keep `configs.base` global so its `globalIgnores` (dist, __generated__,
@@ -15,8 +30,12 @@ export default defineConfig([
   globalIgnores([
     "examples/**",
     "pkg/**",
+    // Vite public/ assets are copied as-is; not part of any tsconfig project.
+    "apps/*/public/**",
     "packages/coredata/**",
     "packages/cookie-banner/**",
+    "packages/cookie-banner-tcf/**",
+    "packages/skills/**",
     "packages/emails/**",
     "packages/eslint-relay-plugin-types/**",
     "packages/helpers/**",
@@ -47,11 +66,11 @@ export default defineConfig([
     extends: [configs.relay],
   },
   {
-    // compliance-portal mutates through the awaitable useMutation bound in
-    // #/lib/relay/useMutation (over @probo/relay's createUseMutation), never
-    // react-relay's useMutation directly. Scoped to this app only: console and
-    // trust still use react-relay's useMutation.
-    files: ["apps/compliance-portal/**"],
+    // compliance-portal and employee-portal mutate through the awaitable
+    // useMutation bound in #/lib/relay/useMutation (over @probo/relay's
+    // createUseMutation), never react-relay's useMutation directly. Scoped
+    // to these apps: console still uses react-relay's useMutation.
+    files: ["apps/compliance-portal/**", "apps/employee-portal/**"],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -68,6 +87,26 @@ export default defineConfig([
               importNames: ["default"],
               message:
                 "Don't import i18next's default (global singleton). Build a dedicated instance via `import { createInstance } from \"i18next\"`.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // Zod JIT uses eval/new Function; console CSP forbids unsafe-eval. All
+    // zod usage must go through #/lib/zod which sets jitless: true.
+    files: ["apps/console/**"],
+    ignores: ["apps/console/src/lib/zod.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "zod",
+              message:
+                "Import from #/lib/zod (jitless config for CSP), not zod directly.",
             },
           ],
         },
@@ -103,16 +142,20 @@ export default defineConfig([
     },
   },
   {
-    files: reactDirs,
+    files: browserDirs,
     ignores: ["packages/ui/tailwind.config.js"],
     extends: [configs.languageOptions.browser],
   },
   {
-    files: ["packages/eslint-config/**"],
+    files: ["packages/eslint-config/**", ...viteDirs],
     extends: [configs.languageOptions.node],
   },
   {
-    files: ["packages/ui/tailwind.config.js"],
+    // CommonJS Node. configs.base still lints these files.
+    files: [
+      "packages/ui/tailwind.config.js",
+      ".github/actions/**/*.js",
+    ],
     extends: [configs.languageOptions.node],
     languageOptions: {
       sourceType: "commonjs",
